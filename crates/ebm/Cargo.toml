@@ -1,0 +1,9 @@
+[package]
+name = "ebm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+burn = { workspace = true }
+burn-contrib = { path = "../burn-contrib" }
+tracing = { workspace = true }

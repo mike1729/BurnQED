@@ -1,0 +1,3 @@
+[submodule "vendor/Pantograph"]
+	path = vendor/Pantograph
+	url = https://github.com/lenianiva/Pantograph.git

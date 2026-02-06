@@ -1,0 +1,13 @@
+[package]
+name = "search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+lean-repl = { path = "../lean-repl" }
+policy = { path = "../policy" }
+ebm = { path = "../ebm" }
+trajectory = { path = "../trajectory" }
+ordered-float = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

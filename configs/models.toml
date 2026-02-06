@@ -1,0 +1,23 @@
+[encoder]
+# "shared" = use the policy model's backbone (7B, candle)
+# "dedicated" = load a separate encoder (TorchScript)
+mode = "shared"
+
+# Only used if mode = "shared"
+shared_hidden_dim = 4096      # DeepSeek-Prover-V2-7B
+
+# Only used if mode = "dedicated"
+# dedicated_model_path = "models/encoder/encoder.pt"
+# dedicated_hidden_dim = 2048   # 1.3B
+
+[energy_head]
+d_hidden1 = 512
+d_hidden2 = 256
+dropout = 0.1
+n_power_iterations = 5        # Option C: random reinit needs more iterations
+
+[llm]
+model_name = "deepseek-ai/DeepSeek-Prover-V2-7B"
+max_seq_len = 2048
+num_candidates = 32           # Tactics generated per expansion
+temperature = 0.8
