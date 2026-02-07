@@ -36,3 +36,5 @@ parquet = { version = "53", features = ["async"] }
 rand = "0.8"
 clap = { version = "4", features = ["derive"] }
 ordered-float = "4"
+async-trait = "0.1"
+indicatif = "0.17"
