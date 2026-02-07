@@ -63,6 +63,27 @@ pub struct TrajectoryRecord {
     pub timestamp_ms: u64,
 }
 
+/// Detailed statistics from a single proof search.
+#[derive(Debug, Clone, Default)]
+pub struct SearchStats {
+    /// Number of nodes removed from the frontier and expanded.
+    pub nodes_expanded: u32,
+    /// Number of child nodes skipped because they exceeded max depth.
+    pub nodes_pruned: u32,
+    /// Number of proof-complete nodes found during search.
+    pub nodes_terminal: u32,
+    /// Maximum size of the frontier priority queue during search.
+    pub peak_frontier_size: usize,
+    /// Total number of tactics sent to the Lean REPL.
+    pub total_tactic_attempts: u32,
+    /// Number of tactics that Lean rejected (TacticResult::Failed).
+    pub total_tactic_failures: u32,
+    /// Cumulative wall time in ms for `apply_tactic` calls.
+    pub total_lean_time_ms: u64,
+    /// Cumulative wall time in ms for `generate_candidates` calls.
+    pub total_generate_time_ms: u64,
+}
+
 /// Result of searching for a proof of a single theorem.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -82,6 +103,8 @@ pub struct SearchResult {
     pub wall_time_ms: u64,
     /// All trajectory records from the search.
     pub all_records: Vec<TrajectoryRecord>,
+    /// Detailed search statistics (timing, pruning, frontier size).
+    pub stats: SearchStats,
 }
 
 /// A theorem to attempt to prove.

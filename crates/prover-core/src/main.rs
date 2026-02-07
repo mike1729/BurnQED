@@ -35,6 +35,9 @@ enum Command {
         /// Override the number of Lean workers.
         #[arg(long)]
         num_workers: Option<usize>,
+        /// Load model and pool but don't search. Verifies environment setup.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Print statistics from a trajectory Parquet file.
     Eval {
@@ -63,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
             theorems,
             output,
             num_workers,
+            dry_run,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -70,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
                 theorems,
                 output,
                 num_workers,
+                dry_run,
             })
             .await
         }

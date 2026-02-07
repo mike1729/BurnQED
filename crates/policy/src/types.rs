@@ -5,21 +5,16 @@ use serde::Deserialize;
 use std::path::PathBuf;
 
 /// Device selection for model inference.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum DeviceConfig {
     /// CPU inference.
     #[serde(rename = "cpu")]
+    #[default]
     Cpu,
     /// CUDA GPU inference with the given ordinal.
     #[serde(rename = "cuda")]
     Cuda { ordinal: usize },
-}
-
-impl Default for DeviceConfig {
-    fn default() -> Self {
-        Self::Cpu
-    }
 }
 
 impl DeviceConfig {

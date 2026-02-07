@@ -1,4 +1,4 @@
-/// Proof search pipeline and evaluation utilities.
+//! Proof search pipeline and evaluation utilities.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +26,8 @@ pub struct SearchArgs {
     pub output: PathBuf,
     /// Optional CLI override for number of Lean workers.
     pub num_workers: Option<usize>,
+    /// Load model and pool but don't search. Verifies environment setup.
+    pub dry_run: bool,
 }
 
 /// Arguments for the `eval` subcommand.
@@ -52,7 +54,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
     // 3. Load LLM policy
     tracing::info!(model = %args.model_path.display(), "Loading policy model");
-    let policy_config = PolicyConfig::new(args.model_path);
+    let policy_config = PolicyConfig::new(args.model_path.clone());
     let generator = TacticGenerator::load(&policy_config)?;
     let policy = MutexPolicyProvider::new(generator);
 
@@ -60,11 +62,29 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let index = TheoremIndex::from_json(&args.theorems)?;
     tracing::info!(count = index.len(), "Loaded theorems");
 
+    // 4b. Dry-run: verify setup and exit early
+    if args.dry_run {
+        println!("Dry run — setup verified successfully");
+        println!("  Model: {}", args.model_path.display());
+        println!("  Theorems: {} loaded", index.len());
+        println!("  Workers: {}", pool.num_workers());
+        pool.shutdown().await;
+        return Ok(());
+    }
+
     // 5. Run search with progress bar
     let engine = SearchEngine::new(toml.search);
     let mut writer = TrajectoryWriter::new(args.output.clone());
     let mut proved_count: u32 = 0;
+    let mut failed_count: u32 = 0;
     let total = index.len() as u32;
+
+    // Aggregate stats
+    let mut total_nodes: u64 = 0;
+    let mut total_lean_ms: u64 = 0;
+    let mut total_gen_ms: u64 = 0;
+    let mut searched_count: u32 = 0;
+    let mut interrupted = false;
 
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
@@ -75,28 +95,47 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     );
 
     for task in &index.theorems {
+        if interrupted {
+            break;
+        }
+
         pb.set_message(task.name.clone());
 
-        match engine
-            .search_one(&pool, &policy, None, &task.name, &task.statement)
-            .await
-        {
-            Ok(result) => {
-                if result.proved {
-                    proved_count += 1;
-                    tracing::info!(
-                        theorem = task.name,
-                        tactics = ?result.proof_tactics,
-                        nodes = result.nodes_expanded,
-                        time_ms = result.wall_time_ms,
-                        "Proved"
-                    );
+        let search_fut = engine.search_one(&pool, &policy, None, &task.name, &task.statement);
+
+        tokio::select! {
+            result = search_fut => {
+                match result {
+                    Ok(result) => {
+                        searched_count += 1;
+                        total_nodes += result.nodes_expanded as u64;
+                        total_lean_ms += result.stats.total_lean_time_ms;
+                        total_gen_ms += result.stats.total_generate_time_ms;
+
+                        if result.proved {
+                            proved_count += 1;
+                            tracing::info!(
+                                theorem = task.name,
+                                tactics = ?result.proof_tactics,
+                                nodes = result.nodes_expanded,
+                                time_ms = result.wall_time_ms,
+                                "Proved"
+                            );
+                        } else {
+                            failed_count += 1;
+                        }
+                        let labeled = TrajectoryWriter::from_search_result(&result);
+                        writer.record_all(labeled);
+                    }
+                    Err(e) => {
+                        failed_count += 1;
+                        tracing::warn!(theorem = task.name, error = %e, "Search failed, skipping");
+                    }
                 }
-                let labeled = TrajectoryWriter::from_search_result(&result);
-                writer.record_all(labeled);
             }
-            Err(e) => {
-                tracing::warn!(theorem = task.name, error = %e, "Search failed, skipping");
+            _ = tokio::signal::ctrl_c(), if !interrupted => {
+                tracing::warn!("Interrupted by CTRL-C, finishing with partial results");
+                interrupted = true;
             }
         }
 
@@ -112,13 +151,53 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     // 7. Shutdown pool
     pool.shutdown().await;
 
-    // 8. Print summary
+    // 8. Print enhanced summary
     let elapsed = start.elapsed();
-    println!("\n--- Search Summary ---");
-    println!("Proved: {proved_count}/{total}");
-    println!("Records: {record_count}");
-    println!("Output: {}", args.output.display());
-    println!("Elapsed: {:.1}s", elapsed.as_secs_f64());
+    let elapsed_secs = elapsed.as_secs_f64();
+
+    let partial_note = if interrupted {
+        " (Partial — interrupted by CTRL-C)"
+    } else {
+        ""
+    };
+
+    let prove_pct = if searched_count > 0 {
+        proved_count as f64 / searched_count as f64 * 100.0
+    } else {
+        0.0
+    };
+    let fail_pct = if searched_count > 0 {
+        failed_count as f64 / searched_count as f64 * 100.0
+    } else {
+        0.0
+    };
+    let avg_nodes = if searched_count > 0 {
+        total_nodes as f64 / searched_count as f64
+    } else {
+        0.0
+    };
+    let avg_time = if searched_count > 0 {
+        elapsed_secs / searched_count as f64
+    } else {
+        0.0
+    };
+
+    println!();
+    println!("══════════════════════════════════════════");
+    println!(" burn-qed Search Results{partial_note}");
+    println!("──────────────────────────────────────────");
+    println!(" Theorems searched:  {searched_count}");
+    println!(" Proved:             {proved_count} ({prove_pct:.1}%)");
+    println!(" Failed:             {failed_count} ({fail_pct:.1}%)");
+    println!(" Total nodes:        {total_nodes}");
+    println!(" Avg nodes/theorem:  {avg_nodes:.1}");
+    println!(" Avg time/theorem:   {avg_time:.1}s");
+    println!(" Total Lean time:    {:.1}s", total_lean_ms as f64 / 1000.0);
+    println!(" Total gen time:     {:.1}s", total_gen_ms as f64 / 1000.0);
+    println!(" Total wall time:    {elapsed_secs:.1}s");
+    println!(" Trajectory file:    {}", args.output.display());
+    println!("   Records:          {record_count}");
+    println!("══════════════════════════════════════════");
 
     Ok(())
 }

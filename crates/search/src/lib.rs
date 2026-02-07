@@ -24,4 +24,5 @@ pub use config::SearchConfig;
 pub use engine::{
     PolicyProvider, ProofEnvironment, SearchEngine, SearchError, TacticRunner, ValueScorer,
 };
+pub use trajectory::SearchStats;
 pub use node::{extract_proof_path, extract_tactic_sequence, ScoredNode, SearchNode};

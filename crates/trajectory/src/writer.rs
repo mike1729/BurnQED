@@ -206,7 +206,7 @@ fn build_record_batch(records: &[TrajectoryRecord]) -> anyhow::Result<RecordBatc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::TrajectoryLabel;
+    use crate::types::{SearchStats, TrajectoryLabel};
     use tempfile::TempDir;
 
     fn make_test_record(state_id: u64, label: TrajectoryLabel) -> TrajectoryRecord {
@@ -301,6 +301,7 @@ mod tests {
             max_depth_reached: 3,
             wall_time_ms: 1000,
             all_records: vec![root, n1, n2, n3, n4],
+            stats: SearchStats::default(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -343,6 +344,7 @@ mod tests {
             max_depth_reached: 0,
             wall_time_ms: 10,
             all_records: vec![root],
+            stats: SearchStats::default(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -369,6 +371,7 @@ mod tests {
             max_depth_reached: 2,
             wall_time_ms: 500,
             all_records: records,
+            stats: SearchStats::default(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -410,6 +413,7 @@ mod tests {
             max_depth_reached: 2,
             wall_time_ms: 1000,
             all_records: vec![root, n1, n2, n3, n4],
+            stats: SearchStats::default(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -448,6 +452,7 @@ mod tests {
             max_depth_reached: 4,
             wall_time_ms: 5000,
             all_records: records,
+            stats: SearchStats::default(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);

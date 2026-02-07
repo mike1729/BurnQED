@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 
 use lean_repl::{Goal, ProofState, TacticResult};
 use policy::GeneratedTactic;
-use trajectory::{SearchResult, TrajectoryLabel, TrajectoryRecord};
+use trajectory::{SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord};
 
 use crate::config::SearchConfig;
 use crate::node::{extract_tactic_sequence, ScoredNode, SearchNode};
@@ -111,6 +111,7 @@ impl SearchEngine {
         statement: &str,
     ) -> Result<SearchResult, SearchError> {
         let start_time = std::time::Instant::now();
+        let mut stats = SearchStats::default();
 
         let mut runner = env.start_proof(statement).await?;
         let initial_state = runner.initial_state().clone();
@@ -149,6 +150,7 @@ impl SearchEngine {
                 max_depth_reached: 0,
                 wall_time_ms,
                 all_records: records,
+                stats,
             });
         }
 
@@ -198,17 +200,23 @@ impl SearchEngine {
             );
 
             // Generate tactic candidates
+            let gen_start = std::time::Instant::now();
             let candidates = policy.generate_candidates(&goals_text, self.config.num_candidates)?;
+            stats.total_generate_time_ms += gen_start.elapsed().as_millis() as u64;
 
             for candidate in candidates {
+                stats.total_tactic_attempts += 1;
+                let tactic_start = std::time::Instant::now();
                 let result = runner
                     .apply_tactic(node_state_id, None, &candidate.text)
                     .await?;
+                stats.total_lean_time_ms += tactic_start.elapsed().as_millis() as u64;
 
                 match result {
                     TacticResult::Success { state_id, goals } => {
                         let child_depth = node_depth + 1;
                         if child_depth > self.config.max_depth {
+                            stats.nodes_pruned += 1;
                             tracing::debug!(
                                 tactic = candidate.text,
                                 depth = child_depth,
@@ -253,10 +261,13 @@ impl SearchEngine {
                             node_index: child_idx,
                             score: OrderedFloat(child_score),
                         });
+                        stats.peak_frontier_size =
+                            stats.peak_frontier_size.max(frontier.len());
                     }
                     TacticResult::ProofComplete { state_id } => {
                         let child_depth = node_depth + 1;
                         if child_depth > self.config.max_depth {
+                            stats.nodes_pruned += 1;
                             tracing::debug!(
                                 tactic = candidate.text,
                                 depth = child_depth,
@@ -264,6 +275,7 @@ impl SearchEngine {
                             );
                             continue;
                         }
+                        stats.nodes_terminal += 1;
                         let terminal = SearchNode {
                             state_id,
                             state_pp: String::new(),
@@ -288,6 +300,8 @@ impl SearchEngine {
                         let total_states = arena.len() as u32;
                         let records = build_trajectory_records(&arena, theorem_name);
 
+                        stats.nodes_expanded = nodes_expanded;
+
                         tracing::info!(
                             theorem = theorem_name,
                             steps = proof_tactics.len(),
@@ -306,9 +320,11 @@ impl SearchEngine {
                             max_depth_reached,
                             wall_time_ms,
                             all_records: records,
+                            stats,
                         });
                     }
                     TacticResult::Failed { message } => {
+                        stats.total_tactic_failures += 1;
                         tracing::debug!(
                             tactic = candidate.text,
                             error = message,
@@ -325,6 +341,8 @@ impl SearchEngine {
         let wall_time_ms = start_time.elapsed().as_millis() as u64;
         let total_states = arena.len() as u32;
         let records = build_trajectory_records(&arena, theorem_name);
+
+        stats.nodes_expanded = nodes_expanded;
 
         tracing::info!(
             theorem = theorem_name,
@@ -343,6 +361,7 @@ impl SearchEngine {
             max_depth_reached,
             wall_time_ms,
             all_records: records,
+            stats,
         })
     }
 }

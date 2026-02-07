@@ -29,6 +29,12 @@ pub struct MockPolicy {
     default_responses: Vec<GeneratedTactic>,
 }
 
+impl Default for MockPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockPolicy {
     /// Create an empty mock policy with no responses.
     pub fn new() -> Self {
@@ -98,6 +104,12 @@ impl PolicyProvider for MockPolicy {
 pub struct MockEnvironment {
     tactic_responses: Arc<HashMap<(u64, String), TacticResult>>,
     initial_state_id: u64,
+}
+
+impl Default for MockEnvironment {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockEnvironment {

@@ -310,7 +310,7 @@ mod tests {
         let mut config = test_config();
         config.max_requests_per_worker = 5;
         assert!(5 >= config.max_requests_per_worker);
-        assert!(!(4 >= config.max_requests_per_worker));
+        assert!(4 < config.max_requests_per_worker);
     }
 
     #[test]

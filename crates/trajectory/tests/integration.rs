@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use tempfile::TempDir;
 use trajectory::{
-    SearchResult, TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
+    SearchResult, SearchStats, TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
     TrajectoryWriter,
 };
 
@@ -65,6 +65,7 @@ fn test_label_roundtrip_through_parquet() {
         max_depth_reached: 2,
         wall_time_ms: 500,
         all_records: records,
+        stats: SearchStats::default(),
     };
 
     // Label → write → read
@@ -211,6 +212,7 @@ fn test_multi_theorem_pipeline() {
             make_record("proved_thm", 2, Some(1), 2, true),
             make_record("proved_thm", 3, Some(0), 1, false),
         ],
+        stats: SearchStats::default(),
     };
 
     // Theorem 2: not proved (5 dead-end nodes)
@@ -229,6 +231,7 @@ fn test_multi_theorem_pipeline() {
             make_record("failed_thm", 13, Some(11), 2, false),
             make_record("failed_thm", 14, Some(12), 3, false),
         ],
+        stats: SearchStats::default(),
     };
 
     // Theorem 3: proved (trivial — root → 1 QED)
@@ -244,6 +247,7 @@ fn test_multi_theorem_pipeline() {
             make_record("trivial_thm", 20, None, 0, false),
             make_record("trivial_thm", 21, Some(20), 1, true),
         ],
+        stats: SearchStats::default(),
     };
 
     // Label and write all

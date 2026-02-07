@@ -1,7 +1,7 @@
-/// TOML config loading for the prover CLI.
-///
-/// Deserializes `configs/search.toml` which has `[search]` and `[lean_pool]` sections,
-/// then merges with CLI overrides.
+//! TOML config loading for the prover CLI.
+//!
+//! Deserializes `configs/search.toml` which has `[search]` and `[lean_pool]` sections,
+//! then merges with CLI overrides.
 
 use std::path::Path;
 
