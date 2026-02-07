@@ -288,3 +288,58 @@ async fn test_search_concurrent_two_proofs() {
     assert_eq!(result1.theorem_name, "true_test");
     assert_eq!(result2.theorem_name, "nat_refl");
 }
+
+/// Set a short timeout with a high node budget and wrong tactics.
+/// The search should exit within the timeout window, not run for minutes.
+#[tokio::test]
+#[ignore]
+async fn test_search_timeout_exits_early() {
+    let config = get_lean_config(1);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    // 8 wrong tactics per state — each forces Lean to process and fail,
+    // consuming wall-clock time.
+    let policy = MockPolicy::with_default(vec![
+        make_tactic("simp", -1.0),
+        make_tactic("ring", -1.1),
+        make_tactic("omega", -1.2),
+        make_tactic("linarith", -1.3),
+        make_tactic("norm_num", -1.4),
+        make_tactic("decide", -1.5),
+        make_tactic("assumption", -1.6),
+        make_tactic("contradiction", -1.7),
+    ]);
+
+    let search_config = SearchConfig {
+        timeout_per_theorem: 3,
+        max_nodes: 1000, // high budget so timeout is the binding constraint
+        ..SearchConfig::default()
+    };
+    let engine = SearchEngine::new(search_config);
+    let result = engine
+        .search_one(
+            &pool,
+            &policy,
+            None,
+            "timeout_test",
+            "∀ (a b c : Nat), a + b + c = c + b + a",
+        )
+        .await
+        .expect("search_one failed");
+
+    expect_not_proved(&result);
+    assert!(
+        result.wall_time_ms >= 2000,
+        "Search should have run for at least 2s, got {}ms",
+        result.wall_time_ms
+    );
+    assert!(
+        result.wall_time_ms < 15000,
+        "Timeout should have kicked in before 15s, got {}ms",
+        result.wall_time_ms
+    );
+    assert!(
+        !result.all_records.is_empty(),
+        "Should have at least the root record"
+    );
+}

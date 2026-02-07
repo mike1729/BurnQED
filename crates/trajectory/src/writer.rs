@@ -327,6 +327,113 @@ mod tests {
     }
 
     #[test]
+    fn test_from_search_result_single_node_proof() {
+        // Root node IS the terminal (state_id=0, is_proof_complete=true, parent=None).
+        // Exercises the path-tracing loop with a single-element path.
+        let mut root = make_test_record(0, TrajectoryLabel::Unknown);
+        root.parent_state_id = None;
+        root.is_proof_complete = true;
+
+        let result = SearchResult {
+            theorem_name: "test_theorem".to_string(),
+            proved: true,
+            proof_tactics: vec![],
+            nodes_expanded: 0,
+            total_states: 1,
+            max_depth_reached: 0,
+            wall_time_ms: 10,
+            all_records: vec![root],
+        };
+
+        let labeled = TrajectoryWriter::from_search_result(&result);
+        assert_eq!(labeled.len(), 1);
+        assert_eq!(labeled[0].label, TrajectoryLabel::Positive);
+        assert_eq!(labeled[0].remaining_depth, 0);
+    }
+
+    #[test]
+    fn test_from_search_result_proved_but_no_terminal() {
+        // proved=true but no record has is_proof_complete=true.
+        // Hits the defensive fallback (else branch at writer.rs:143-149)
+        // which labels everything Negative.
+        let records: Vec<TrajectoryRecord> = (0..3)
+            .map(|i| make_test_record(i, TrajectoryLabel::Unknown))
+            .collect();
+
+        let result = SearchResult {
+            theorem_name: "test_theorem".to_string(),
+            proved: true,
+            proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
+            nodes_expanded: 3,
+            total_states: 3,
+            max_depth_reached: 2,
+            wall_time_ms: 500,
+            all_records: records,
+        };
+
+        let labeled = TrajectoryWriter::from_search_result(&result);
+        assert_eq!(labeled.len(), 3);
+        for record in &labeled {
+            assert_eq!(record.label, TrajectoryLabel::Negative);
+            assert_eq!(record.remaining_depth, -1);
+        }
+    }
+
+    #[test]
+    fn test_from_search_result_multiple_terminals() {
+        // Two proof paths: root(0) → 1 → 2(QED) and root(0) → 3 → 4(QED).
+        // from_search_result() uses .find() which returns the first terminal (2).
+        // Path 0→1→2 should be Positive; records 3 and 4 should be Negative.
+        let mut root = make_test_record(0, TrajectoryLabel::Unknown);
+        root.parent_state_id = None;
+
+        let mut n1 = make_test_record(1, TrajectoryLabel::Unknown);
+        n1.parent_state_id = Some(0);
+
+        let mut n2 = make_test_record(2, TrajectoryLabel::Unknown);
+        n2.parent_state_id = Some(1);
+        n2.is_proof_complete = true;
+
+        let mut n3 = make_test_record(3, TrajectoryLabel::Unknown);
+        n3.parent_state_id = Some(0);
+
+        let mut n4 = make_test_record(4, TrajectoryLabel::Unknown);
+        n4.parent_state_id = Some(3);
+        n4.is_proof_complete = true;
+
+        let result = SearchResult {
+            theorem_name: "test_theorem".to_string(),
+            proved: true,
+            proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
+            nodes_expanded: 5,
+            total_states: 5,
+            max_depth_reached: 2,
+            wall_time_ms: 1000,
+            all_records: vec![root, n1, n2, n3, n4],
+        };
+
+        let labeled = TrajectoryWriter::from_search_result(&result);
+        assert_eq!(labeled.len(), 5);
+
+        let by_id: std::collections::HashMap<u64, &TrajectoryRecord> =
+            labeled.iter().map(|r| (r.state_id, r)).collect();
+
+        // Path 0→1→2 is Positive
+        assert_eq!(by_id[&0].label, TrajectoryLabel::Positive);
+        assert_eq!(by_id[&0].remaining_depth, 2);
+        assert_eq!(by_id[&1].label, TrajectoryLabel::Positive);
+        assert_eq!(by_id[&1].remaining_depth, 1);
+        assert_eq!(by_id[&2].label, TrajectoryLabel::Positive);
+        assert_eq!(by_id[&2].remaining_depth, 0);
+
+        // Records 3 and 4 are off-path → Negative
+        assert_eq!(by_id[&3].label, TrajectoryLabel::Negative);
+        assert_eq!(by_id[&3].remaining_depth, -1);
+        assert_eq!(by_id[&4].label, TrajectoryLabel::Negative);
+        assert_eq!(by_id[&4].remaining_depth, -1);
+    }
+
+    #[test]
     fn test_from_search_result_unproved() {
         let records: Vec<TrajectoryRecord> = (0..5)
             .map(|i| make_test_record(i, TrajectoryLabel::Unknown))

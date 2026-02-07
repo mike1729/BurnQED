@@ -567,6 +567,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_search_timeout_zero_means_no_timeout() {
+        // timeout_per_theorem=0 disables the timeout check (the `if timeout_secs > 0` guard).
+        // Verify search still works normally.
+        let mut env = MockEnvironment::new();
+        env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+
+        let mut policy = MockPolicy::new();
+        policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+
+        let config = SearchConfig {
+            timeout_per_theorem: 0,
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "no_timeout", "True")
+            .await
+            .unwrap();
+
+        assert!(result.proved);
+        assert_eq!(result.proof_tactics, vec!["trivial"]);
+    }
+
+    #[tokio::test]
+    async fn test_search_policy_returns_no_candidates() {
+        // Policy returns Ok(vec![]) for all states. The search loop should skip
+        // expansion gracefully, increment nodes_expanded, and eventually exhaust
+        // the frontier (root has no children, so frontier empties after 1 expansion).
+        let env = MockEnvironment::new();
+        let policy = MockPolicy::new(); // returns empty vec for all states
+
+        let config = SearchConfig {
+            max_nodes: 3,
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "empty_candidates", "∀ x, x = x")
+            .await
+            .unwrap();
+
+        assert!(!result.proved);
+        assert!(result.nodes_expanded <= 3, "Budget should be respected");
+    }
+
+    #[tokio::test]
     async fn test_search_result_proof_tactics() {
         let mut env = MockEnvironment::new();
         env.add_response(

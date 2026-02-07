@@ -29,7 +29,13 @@ burn-qed/
 ├── vendor/
 │   └── Pantograph/                     # Git submodule (pinned commit d047b1d)
 ├── docs/
-│   └── spindle_final_plan.md           # Full architecture plan with all code samples
+│   ├── burn-qed_plan.md               # Full architecture plan with all code samples
+│   ├── phase1_instructions.md          # Phase 1 step-by-step prompts
+│   ├── phase2_instructions.md          # Phase 2 step-by-step prompts
+│   ├── phase3_instructions.md          # Phase 3 step-by-step prompts
+│   ├── phase4_instructions.md          # Phase 4 step-by-step prompts
+│   ├── phase5_instructions.md          # Phase 5 step-by-step prompts
+│   └── week2_summary.md               # Week 2 progress summary
 ├── crates/
 │   ├── lean-repl/                      # Phase 1: Lean 4 REPL async client
 │   │   ├── Cargo.toml
@@ -100,10 +106,15 @@ burn-qed/
 │   │
 │   └── prover-core/                    # CLI binary
 │       ├── Cargo.toml
-│       └── src/
-│           ├── main.rs                 # clap: search, train-ebm, eval subcommands
-│           ├── config.rs               # TOML config loading
-│           └── pipeline.rs             # Expert iteration orchestrator
+│       ├── src/
+│       │   ├── main.rs                 # clap: search, eval, train-ebm subcommands
+│       │   ├── config.rs               # SearchToml, LeanPoolOverrides, TOML loading
+│       │   └── pipeline.rs             # run_search() (async), run_eval() (sync)
+│       └── tests/
+│           └── integration.rs          # 5 mock tests + 1 #[ignore] Lean test
+│
+├── data/
+│   └── test_theorems.json              # 12 Init-only theorems for testing
 │
 ├── python/
 │   ├── training/
@@ -286,7 +297,7 @@ The `⊢` symbol separates hypotheses from the goal. This is the string you'll t
 - [x] **Phase 0: Setup** — Cargo workspace, all crate stubs compile
 - [x] **Phase 1: Lean REPL** — Pantograph client with worker pool, ProofHandle pattern, and recycling
 - [x] **Phase 2: LLM in candle** — TacticGenerator with generate, encode_only, forked Llama
-- [x] Phase 3: Search engine + trajectory
+- [x] **Phase 3: Search + trajectory + CLI** — Search engine, trajectory Parquet I/O, prover-core CLI
 - [ ] Phase 4: EBM in burn-rs
 - [ ] Phase 5: Expert iteration
 - [ ] Phase 6: burn-rs PRs
@@ -478,12 +489,43 @@ writer.finish()?;
 - **Adapters**: `Arc<LeanPool>` implements `ProofEnvironment`, `ProofHandleOwned` implements `TacticRunner`, `MutexPolicyProvider` wraps `TacticGenerator` with `Mutex` for `Send + Sync`.
 - **No standalone `pool.run_tactic()`**: Search uses `ProofEnvironment::start_proof()` returning a `TacticRunner` that holds the worker for the proof's lifetime (ProofHandle pattern).
 
+### Phase 3 Part 4+5: prover-core CLI + test data (DONE)
+
+**prover-core CLI:**
+- `config.rs`: `SearchToml`, `LeanPoolOverrides`, `load_search_toml()`, `build_lean_pool_config()`
+- `pipeline.rs`: `run_search()` (async, with progress bar + per-theorem error recovery), `run_eval()` (sync summary)
+- `main.rs`: clap CLI with `search`, `eval`, `train-ebm` subcommands
+- Priority chain for config: `with_bundled_pantograph()` defaults < TOML values < `--num-workers` CLI flag
+- EBM scorer stubbed as `None` — Phase 4 adds `--ebm-path` flag and passes `Some(&ebm)`
+
+**Test data:**
+- `data/test_theorems.json`: 12 Init-only theorems (True, False→False, nat_refl, and_comm, etc.)
+
+### prover-core API Summary
+
+```bash
+# Run proof search:
+cargo run -p prover-core -- search \
+  --model-path models/deepseek-prover-v2-7b \
+  --theorems data/test_theorems.json \
+  --output output/trajectory.parquet \
+  --num-workers 4
+
+# Print trajectory statistics:
+cargo run -p prover-core -- eval --input output/trajectory.parquet
+
+# Train EBM (Phase 4 stub):
+cargo run -p prover-core -- train-ebm
+```
+
 ### Phase 3 Test Coverage
 
 ```
 cargo test -p trajectory         # 11 unit tests
 cargo test -p search             # 29 unit tests (config: 4, node: 8, engine: 8, mocks: 8, + 1 doc)
 cargo test -p search -- --ignored --test-threads=1  # 6 integration tests (need Pantograph)
+cargo test -p prover-core        # 3 unit tests (config) + 5 integration tests (mocks + JSON + TOML)
+cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration test (~15s)
 
 # Search unit tests (all use mocks, no Lean/LLM):
 # - config: defaults, partial/full TOML, alpha+beta sum
@@ -500,6 +542,19 @@ cargo test -p search -- --ignored --test-threads=1  # 6 integration tests (need 
 # - Unproved with bad tactics (budget exhaustion)
 # - Trajectory record field-level validation (3 records, depths, labels)
 # - Concurrent two proofs (2 workers, tokio::join!, no cross-contamination)
+
+# Prover-core unit tests:
+# - config: full TOML deserialize, optional lean_pool, CLI override priority
+
+# Prover-core integration tests (mocks, no Lean/LLM):
+# - Mock pipeline: search 2 theorems + write/read Parquet + verify summary
+# - Mock unproved: all tactics fail, verify negative labels
+# - Load test_theorems.json: verify >= 10 theorems
+# - Eval reads Parquet: manually write + read_summary
+# - Real search.toml is valid TOML
+
+# Prover-core Lean integration test (#[ignore], requires Pantograph):
+# - Real LeanPool + MockPolicy: search 3 theorems, verify >= 2 proved, Parquet output
 ```
 
 ## Testing Policy
@@ -508,6 +563,7 @@ cargo test -p search -- --ignored --test-threads=1  # 6 integration tests (need 
 
 - `cargo test -p lean-repl -- --ignored --test-threads=1` — ~60-90s (10 tests, spawns Pantograph)
 - `cargo test -p search -- --ignored --test-threads=1` — ~15s (6 tests, spawns Pantograph)
+- `cargo test -p prover-core -- --ignored --test-threads=1` — ~15s (1 test, spawns Pantograph)
 - `cargo test -p policy -- --ignored --test-threads=1` — requires MODEL_PATH env var, ~30-60s
 
 All integration tests that use Pantograph **must** run with `--test-threads=1` to avoid resource contention.
