@@ -44,10 +44,14 @@ burn-qed/
 │   │
 │   ├── policy/                         # Phase 2: LLM tactic generator (candle)
 │   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── model.rs                # Load 7B, generate(), encode_only()
-│   │       └── tokenizer.rs            # HuggingFace tokenizer wrapper
+│   │   ├── src/
+│   │   │   ├── lib.rs                  # Public API: TacticGenerator, LeanTokenizer, PolicyConfig
+│   │   │   ├── llama.rs                # Forked Llama with forward_hidden_states(), DeepSeekConfig
+│   │   │   ├── model.rs                # TacticGenerator: load, generate, encode_only
+│   │   │   ├── tokenizer.rs            # LeanTokenizer: HuggingFace tokenizer wrapper
+│   │   │   └── types.rs                # PolicyConfig, DeviceConfig, GeneratedTactic, Embedding
+│   │   └── tests/
+│   │       └── integration.rs          # 10 #[ignore] tests (need MODEL_PATH)
 │   │
 │   ├── ebm/                            # Phase 4: Energy-Based Model (burn-rs)
 │   │   ├── Cargo.toml
@@ -279,13 +283,13 @@ The `⊢` symbol separates hypotheses from the goal. This is the string you'll t
 
 - [x] **Phase 0: Setup** — Cargo workspace, all crate stubs compile
 - [x] **Phase 1: Lean REPL** — Pantograph client with worker pool, ProofHandle pattern, and recycling
-- [ ] Phase 2: LLM in candle
+- [x] **Phase 2: LLM in candle** — TacticGenerator with generate, encode_only, forked Llama
 - [ ] Phase 3: Search engine + trajectory
 - [ ] Phase 4: EBM in burn-rs
 - [ ] Phase 5: Expert iteration
 - [ ] Phase 6: burn-rs PRs
 
-## Current Phase: 2 (LLM in candle)
+## Current Phase: 3 (Search engine + trajectory)
 
 ### Phase 0 Deliverable (DONE)
 All crates exist as stubs. `cargo check --workspace` passes.
@@ -346,6 +350,78 @@ cargo test -p lean-repl -- --ignored --test-threads=1  # 10 integration tests
 # - Worker recycling after N requests
 # - Timeout recovery
 # - Proof search simulation (branching, goalId, 20 theorems, error recovery)
+```
+
+### Phase 2 Deliverable (DONE)
+A working LLM inference crate that can:
+1. Load DeepSeek-Prover-V2-7B (Llama architecture) from HuggingFace safetensors
+2. Deserialize the model's config.json (including YaRN rope_scaling fields)
+3. Run autoregressive tactic generation with temperature + top-p sampling
+4. Extract mean-pooled hidden states via `encode_only()` for the EBM
+5. Manage KV cache for efficient generation, fresh cache for deterministic encoding
+6. Handle multi-shard safetensors loading
+7. Pass 21 unit tests (types, tokenizer, llama config, sampling, prompt formatting)
+8. 10 integration tests ready (require MODEL_PATH env var)
+
+### Phase 2 API Summary
+
+```rust
+// Load model from HuggingFace directory:
+let config = PolicyConfig::new(PathBuf::from("./models/deepseek-prover-v2-7b"));
+let mut gen = TacticGenerator::load(&config)?;
+
+// Generate candidate tactics for a proof state:
+let candidates = gen.generate_candidates("n : Nat\n⊢ n + 0 = n", 32)?;
+for c in &candidates {
+    println!("{}: log_prob={:.4}", c.text, c.log_prob);
+}
+
+// Extract mean-pooled embeddings for EBM scoring:
+let embedding = gen.encode_only("n : Nat\n⊢ n + 0 = n")?;
+assert_eq!(embedding.dim, 4096);
+
+// Batch encoding:
+let embeddings = gen.encode_batch(&["⊢ True", "⊢ False → False"])?;
+```
+
+### Phase 2 Architecture Notes
+
+- **Forked llama.rs**: Copied from candle-transformers 0.8.4 with modifications:
+  - Private `Llama` fields (accessed only through methods)
+  - Added `forward_hidden_states()` returning `(batch, seq_len, hidden_size)` before lm_head
+  - `DeepSeekConfig` deserializes model's config.json with YaRN fields, converts to runtime `Config` with `rope_scaling: None`
+  - Inlined `with_tracing` wrappers (Linear, RmsNorm) to avoid depending on candle-transformers internals
+  - Removed flash-attn support (Windows/CPU only)
+- **YaRN RoPE ignored**: Standard RoPE used. YaRN is backwards-compatible within original 4096 context, and our sequences are ≤2048 tokens.
+- **Prompt format**: `[GOAL]{proof_state}[PROOFSTEP]` — simple structured format for DeepSeek-Prover-V2.
+- **f32 on CPU, bf16 on CUDA**: CPU doesn't support bf16 well in candle.
+
+### Phase 2 Test Coverage
+
+```
+cargo test -p policy                    # 21 unit tests
+cargo test -p policy -- --ignored --nocapture --test-threads=1  # 10 integration tests
+
+# Unit tests (no model needed):
+# - types: DeviceConfig, PolicyConfig deserialization (8 tests)
+# - tokenizer: truncate operations (4 tests)
+# - llama: DeepSeekConfig deserialization, EosToks (4 tests)
+# - model: prompt formatting, top-p sampling (5 tests)
+
+# Integration tests (default: TinyLlama-1.1B at models/tinyllama-1.1b):
+# - Model loading + hidden_size verification
+# - Tokenizer roundtrip + special tokens
+# - Forward logits shape verification
+# - Single tactic generation
+# - Candidate generation (sorted by log_prob)
+# - Embedding shape (dim == hidden_size, dynamic)
+# - Embedding distinctness (different states → different embeddings)
+# - Embedding determinism (same state → same embedding)
+# - Batch encoding
+#
+# TinyLlama-1.1B is the default test model — same Llama architecture as DeepSeek-7B
+# but loads in seconds on CPU. All assertions use gen.hidden_size() dynamically.
+# Override: MODEL_PATH=models/deepseek-prover-v2-7b cargo test -p policy -- --ignored
 ```
 
 ## Documentation Maintenance

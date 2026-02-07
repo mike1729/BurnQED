@@ -3939,6 +3939,9 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
  "tokenizers",
  "tracing",
 ]
