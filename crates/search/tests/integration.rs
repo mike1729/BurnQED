@@ -297,13 +297,14 @@ async fn test_search_timeout_exits_early() {
     let config = get_lean_config(1);
     let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
 
-    // 8 wrong tactics per state — each forces Lean to process and fail,
-    // consuming wall-clock time.
+    // Tactics that grow the tree (intro strips binders) but never close the proof.
+    // `omega` was removed — it accidentally proves Nat arithmetic goals.
+    // Named intros create branching: each strips the same binder with a different name.
     let policy = MockPolicy::with_default(vec![
-        make_tactic("simp", -1.0),
-        make_tactic("ring", -1.1),
-        make_tactic("omega", -1.2),
-        make_tactic("linarith", -1.3),
+        make_tactic("intro a", -1.0),
+        make_tactic("intro b", -1.1),
+        make_tactic("intro c", -1.2),
+        make_tactic("rfl", -1.3),
         make_tactic("norm_num", -1.4),
         make_tactic("decide", -1.5),
         make_tactic("assumption", -1.6),
@@ -322,15 +323,17 @@ async fn test_search_timeout_exits_early() {
             &policy,
             None,
             "timeout_test",
-            "∀ (a b c : Nat), a + b + c = c + b + a",
+            // 8 binders: 3 intro variants × 8 levels = huge tree that timeout must cut short.
+            // After all intros, `a + b = b + a` is NOT closed by rfl/decide/assumption.
+            "∀ (a b c d e f g h : Nat), a + b = b + a",
         )
         .await
         .expect("search_one failed");
 
     expect_not_proved(&result);
     assert!(
-        result.wall_time_ms >= 2000,
-        "Search should have run for at least 2s, got {}ms",
+        result.wall_time_ms >= 1000,
+        "Search should have run for at least 1s, got {}ms",
         result.wall_time_ms
     );
     assert!(
