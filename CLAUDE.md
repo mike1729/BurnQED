@@ -73,10 +73,12 @@ burn-qed/
 │   ├── search/                         # Phase 3: Best-first search
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── engine.rs               # Priority queue, node expansion, scoring
-│   │       ├── node.rs                 # SearchNode, ScoredNode (OrderedFloat)
-│   │       └── config.rs
+│   │       ├── lib.rs                  # Public API: SearchEngine, traits, nodes
+│   │       ├── config.rs               # SearchConfig (from TOML, with defaults)
+│   │       ├── node.rs                 # SearchNode, ScoredNode, path extraction
+│   │       ├── engine.rs               # Traits + SearchEngine::search_one
+│   │       ├── mocks.rs               # MockPolicy, MockEnvironment for testing
+│   │       └── adapters.rs            # Real impls: LeanPool, ProofHandleOwned, TacticGenerator
 │   │
 │   ├── trajectory/                     # Phase 3: Parquet I/O
 │   │   ├── Cargo.toml
@@ -284,12 +286,12 @@ The `⊢` symbol separates hypotheses from the goal. This is the string you'll t
 - [x] **Phase 0: Setup** — Cargo workspace, all crate stubs compile
 - [x] **Phase 1: Lean REPL** — Pantograph client with worker pool, ProofHandle pattern, and recycling
 - [x] **Phase 2: LLM in candle** — TacticGenerator with generate, encode_only, forked Llama
-- [ ] Phase 3: Search engine + trajectory
+- [x] Phase 3: Search engine + trajectory
 - [ ] Phase 4: EBM in burn-rs
 - [ ] Phase 5: Expert iteration
 - [ ] Phase 6: burn-rs PRs
 
-## Current Phase: 3 (Search engine + trajectory)
+## Current Phase: 4 (EBM in burn-rs)
 
 ### Phase 0 Deliverable (DONE)
 All crates exist as stubs. `cargo check --workspace` passes.
@@ -423,6 +425,92 @@ cargo test -p policy -- --ignored --nocapture --test-threads=1  # 10 integration
 # but loads in seconds on CPU. All assertions use gen.hidden_size() dynamically.
 # Override: MODEL_PATH=models/deepseek-prover-v2-7b cargo test -p policy -- --ignored
 ```
+
+### Phase 3 Deliverable (DONE)
+
+**Trajectory crate (Part 1):**
+- `TrajectoryRecord`, `SearchResult`, `TheoremTask`, `TheoremIndex`, `TrajectoryLabel`
+- `TrajectoryWriter`: buffer records, write Parquet, label from search results
+- `TrajectoryReader`: read Parquet back, compute `TrajectorySummary`
+- Arrow schema (12 columns), roundtrip Parquet I/O
+
+**Search crate (Parts 2 & 3):**
+A trait-based best-first search engine that can:
+1. Search for proofs using priority queue (combined LLM + EBM score)
+2. Generate tactic candidates via `PolicyProvider` trait (sync, matches candle)
+3. Score states via `ValueScorer` trait (sync, optional — EBM comes in Phase 4)
+4. Verify tactics via `ProofEnvironment` / `TacticRunner` traits (async, matches Lean)
+5. Synthesize root node goals from theorem statement (`"⊢ {statement}"`)
+6. Respect node budget, depth limit, and wall-clock timeout
+7. Build `SearchResult` with trajectory records for EBM training
+8. Bridge to real types via adapters (`Arc<LeanPool>`, `ProofHandleOwned`, `MutexPolicyProvider`)
+9. Pass 27 unit tests using mocks (no Lean, no LLM)
+
+### Phase 3 API Summary
+
+```rust
+// Configure search:
+let config = SearchConfig::default(); // max_nodes=600, max_depth=50, alpha=0.5, beta=0.5
+
+// Search with mocks (testing):
+let engine = SearchEngine::new(config);
+let result = engine.search_one(&env, &policy, scorer.as_deref(), "thm_name", "True").await?;
+assert!(result.proved);
+assert_eq!(result.proof_tactics, vec!["trivial"]);
+
+// Search with real Lean + LLM:
+let pool = Arc::new(LeanPool::new(lean_config).await?);
+let policy = MutexPolicyProvider::new(TacticGenerator::load(&policy_config)?);
+let result = engine.search_one(&pool, &policy, None, "nat_refl", "∀ (n : Nat), n = n").await?;
+
+// Write trajectory to Parquet:
+let labeled = TrajectoryWriter::from_search_result(&result);
+let mut writer = TrajectoryWriter::new("output.parquet".into());
+writer.record_all(labeled);
+writer.finish()?;
+```
+
+### Phase 3 Architecture Notes
+
+- **Trait-based abstraction**: `ProofEnvironment`, `TacticRunner` (async) and `PolicyProvider`, `ValueScorer` (sync) allow testing with mocks.
+- **Root node synthesis**: `goal.start` returns empty goals, so search builds `"⊢ {statement}"` and uses `Goal::parse(0, &root_pp)`.
+- **Arena indexing**: Nodes stored in `Vec<SearchNode>`, parent references by index. `ScoredNode` wraps `OrderedFloat<f64>` for `BinaryHeap`.
+- **Adapters**: `Arc<LeanPool>` implements `ProofEnvironment`, `ProofHandleOwned` implements `TacticRunner`, `MutexPolicyProvider` wraps `TacticGenerator` with `Mutex` for `Send + Sync`.
+- **No standalone `pool.run_tactic()`**: Search uses `ProofEnvironment::start_proof()` returning a `TacticRunner` that holds the worker for the proof's lifetime (ProofHandle pattern).
+
+### Phase 3 Test Coverage
+
+```
+cargo test -p trajectory         # 11 unit tests
+cargo test -p search             # 29 unit tests (config: 4, node: 8, engine: 8, mocks: 8, + 1 doc)
+cargo test -p search -- --ignored --test-threads=1  # 6 integration tests (need Pantograph)
+
+# Search unit tests (all use mocks, no Lean/LLM):
+# - config: defaults, partial/full TOML, alpha+beta sum
+# - node: combined_score, ScoredNode ordering, goals_as_text, path extraction, branching
+# - engine: 1-step proof, 2-step proof, node budget, depth limit, tactic failure,
+#           empty frontier, trajectory records, proof_tactics verification
+# - mocks: make_tactic, MockPolicy exact/default/empty/contains/exact-before-contains,
+#           MockEnvironment canned/unknown
+
+# Search integration tests (require Pantograph, use MockPolicy + real LeanPool):
+# - One-step proof (True via trivial) with trajectory verification
+# - Two-step proof (∀ n, n = n via intro n + rfl) with parent chain
+# - Survives tactic failures (bad tactic + good tactic)
+# - Unproved with bad tactics (budget exhaustion)
+# - Trajectory record field-level validation (3 records, depths, labels)
+# - Concurrent two proofs (2 workers, tokio::join!, no cross-contamination)
+```
+
+## Testing Policy
+
+**Always run integration tests after implementing or editing them.** Integration tests (`#[ignore]`) exercise real Lean/Pantograph and catch issues that unit tests with mocks cannot. Before running, confirm with the user if runtime is expected to be long (e.g., >30 seconds). Typical runtimes:
+
+- `cargo test -p lean-repl -- --ignored --test-threads=1` — ~60-90s (10 tests, spawns Pantograph)
+- `cargo test -p search -- --ignored --test-threads=1` — ~15s (6 tests, spawns Pantograph)
+- `cargo test -p policy -- --ignored --test-threads=1` — requires MODEL_PATH env var, ~30-60s
+
+All integration tests that use Pantograph **must** run with `--test-threads=1` to avoid resource contention.
 
 ## Documentation Maintenance
 

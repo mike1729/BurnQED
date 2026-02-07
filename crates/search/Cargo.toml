@@ -11,3 +11,10 @@ trajectory = { path = "../trajectory" }
 ordered-float = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+toml = { workspace = true }
