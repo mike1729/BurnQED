@@ -79,10 +79,10 @@ burn-qed/
 │   ├── search/                         # Phase 3: Best-first search
 │   │   ├── Cargo.toml
 │   │   └── src/
-│   │       ├── lib.rs                  # Public API: SearchEngine, traits, nodes
+│   │       ├── lib.rs                  # Public API: SearchEngine, SearchStats, traits, nodes
 │   │       ├── config.rs               # SearchConfig (from TOML, with defaults)
 │   │       ├── node.rs                 # SearchNode, ScoredNode, path extraction
-│   │       ├── engine.rs               # Traits + SearchEngine::search_one
+│   │       ├── engine.rs               # Traits + SearchEngine::search_one + SearchStats instrumentation
 │   │       ├── mocks.rs               # MockPolicy, MockEnvironment for testing
 │   │       └── adapters.rs            # Real impls: LeanPool, ProofHandleOwned, TacticGenerator
 │   │
@@ -455,7 +455,8 @@ A trait-based best-first search engine that can:
 6. Respect node budget, depth limit, and wall-clock timeout
 7. Build `SearchResult` with trajectory records for EBM training
 8. Bridge to real types via adapters (`Arc<LeanPool>`, `ProofHandleOwned`, `MutexPolicyProvider`)
-9. Pass 27 unit tests using mocks (no Lean, no LLM)
+9. Instrument `SearchStats` (timing, pruning, frontier size) per search
+10. Pass 31 unit tests using mocks (no Lean, no LLM)
 
 ### Phase 3 API Summary
 
@@ -493,8 +494,8 @@ writer.finish()?;
 
 **prover-core CLI:**
 - `config.rs`: `SearchToml`, `LeanPoolOverrides`, `load_search_toml()`, `build_lean_pool_config()`
-- `pipeline.rs`: `run_search()` (async, with progress bar + per-theorem error recovery), `run_eval()` (sync summary)
-- `main.rs`: clap CLI with `search`, `eval`, `train-ebm` subcommands
+- `pipeline.rs`: `run_search()` (async, CTRL-C handling, enhanced summary, `--dry-run`), `run_eval()` (sync summary)
+- `main.rs`: clap CLI with `search` (incl. `--dry-run`), `eval`, `train-ebm` subcommands
 - Priority chain for config: `with_bundled_pantograph()` defaults < TOML values < `--num-workers` CLI flag
 - EBM scorer stubbed as `None` — Phase 4 adds `--ebm-path` flag and passes `Some(&ebm)`
 
@@ -511,6 +512,12 @@ cargo run -p prover-core -- search \
   --output output/trajectory.parquet \
   --num-workers 4
 
+# Verify environment setup without searching:
+cargo run -p prover-core -- search --dry-run \
+  --model-path models/deepseek-prover-v2-7b \
+  --theorems data/test_theorems.json \
+  --output output/trajectory.parquet
+
 # Print trajectory statistics:
 cargo run -p prover-core -- eval --input output/trajectory.parquet
 
@@ -521,17 +528,29 @@ cargo run -p prover-core -- train-ebm
 ### Phase 3 Test Coverage
 
 ```
-cargo test -p trajectory         # 11 unit tests
-cargo test -p search             # 29 unit tests (config: 4, node: 8, engine: 8, mocks: 8, + 1 doc)
-cargo test -p search -- --ignored --test-threads=1  # 6 integration tests (need Pantograph)
+cargo test -p trajectory         # 18 unit tests + 6 integration tests
+cargo test -p search             # 31 unit tests (config: 4, node: 8, engine: 10, mocks: 8, + 1 doc)
+cargo test -p search -- --ignored --test-threads=1  # 11 integration tests (need Pantograph, ~60s)
 cargo test -p prover-core        # 3 unit tests (config) + 5 integration tests (mocks + JSON + TOML)
 cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration test (~15s)
+
+# Trajectory unit tests:
+# - types: label display/serde, TheoremTask/Index deserialize, record defaults
+# - writer: schema, empty file, write+verify, from_search_result (proved/unproved/
+#           single-node/no-terminal/multiple-terminals)
+# - reader: roundtrip, nullable parent, summary, read_for_theorem
+
+# Trajectory integration tests (no Lean, no model):
+# - Label roundtrip through Parquet (proved tree with dead ends)
+# - TheoremIndex from JSON file / invalid JSON / missing file
+# - Read multiple Parquet files
+# - Multi-theorem pipeline (proved + unproved + trivial, summary verification)
 
 # Search unit tests (all use mocks, no Lean/LLM):
 # - config: defaults, partial/full TOML, alpha+beta sum
 # - node: combined_score, ScoredNode ordering, goals_as_text, path extraction, branching
 # - engine: 1-step proof, 2-step proof, node budget, depth limit, tactic failure,
-#           empty frontier, trajectory records, proof_tactics verification
+#           empty frontier, trajectory records, proof_tactics, timeout=0, empty candidates
 # - mocks: make_tactic, MockPolicy exact/default/empty/contains/exact-before-contains,
 #           MockEnvironment canned/unknown
 
@@ -542,6 +561,11 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 # - Unproved with bad tactics (budget exhaustion)
 # - Trajectory record field-level validation (3 records, depths, labels)
 # - Concurrent two proofs (2 workers, tokio::join!, no cross-contamination)
+# - Timeout exits early (3s timeout with high node budget)
+# - Medium arithmetic batch (5 theorems via omega: n+0=n, 0+n=n, a+b=b+a, n*1=n, 0≤n)
+# - And commutativity multi-goal 4-step (intro → constructor → exact h.2 → exact h.1)
+# - Medium logic batch (eq_symm via h.symm, eq_trans via h1.trans h2, modus_ponens via f hp)
+# - Hard arithmetic with backtracking (wrong tactics before omega)
 
 # Prover-core unit tests:
 # - config: full TOML deserialize, optional lean_pool, CLI override priority
@@ -557,12 +581,22 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 # - Real LeanPool + MockPolicy: search 3 theorems, verify >= 2 proved, Parquet output
 ```
 
+### Cross-Crate Integration
+
+- **Running search**: `cargo run -p prover-core -- search --model-path ... --theorems ... --output ...`
+- **Dry-run validation**: `cargo run -p prover-core -- search --dry-run --model-path ... --theorems ...` — loads model, pool, theorems, verifies setup, exits without searching
+- **CTRL-C handling**: Graceful interruption during search loop. Partial results are written to Parquet with an enhanced summary noting the interruption.
+- **Reading trajectories**: `TrajectoryReader::read_all(path)` returns `Vec<TrajectoryRecord>`
+- **Label logic**: `TrajectoryWriter::from_search_result()` — proved theorems get Positive labels on the proof path (root→QED), Negative on dead ends. Unproved theorems are all Negative.
+- **SearchStats**: Each `SearchResult` includes `stats: SearchStats` with per-search timing (Lean time, generation time), node counts (expanded, pruned, terminal), and peak frontier size.
+- **Parquet → EBM training**: Phase 4 reads trajectory Parquet files via `TrajectoryReader`, uses positive/negative labels for contrastive loss and `remaining_depth` for regression loss.
+
 ## Testing Policy
 
 **Always run integration tests after implementing or editing them.** Integration tests (`#[ignore]`) exercise real Lean/Pantograph and catch issues that unit tests with mocks cannot. Before running, confirm with the user if runtime is expected to be long (e.g., >30 seconds). Typical runtimes:
 
 - `cargo test -p lean-repl -- --ignored --test-threads=1` — ~60-90s (10 tests, spawns Pantograph)
-- `cargo test -p search -- --ignored --test-threads=1` — ~15s (6 tests, spawns Pantograph)
+- `cargo test -p search -- --ignored --test-threads=1` — ~60s (11 tests, spawns Pantograph)
 - `cargo test -p prover-core -- --ignored --test-threads=1` — ~15s (1 test, spawns Pantograph)
 - `cargo test -p policy -- --ignored --test-threads=1` — requires MODEL_PATH env var, ~30-60s
 

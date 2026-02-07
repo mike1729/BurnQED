@@ -343,3 +343,237 @@ async fn test_search_timeout_exits_early() {
         "Should have at least the root record"
     );
 }
+
+/// Batch test of 5 arithmetic theorems, all 2-step (intro + omega).
+/// Verifies that `omega` can close standard Nat arithmetic goals.
+#[tokio::test]
+#[ignore]
+async fn test_search_medium_arithmetic_batch_via_omega() {
+    let config = get_lean_config(1);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    let theorems = [
+        ("nat_add_zero", "∀ (n : Nat), n + 0 = n", "intro n"),
+        ("zero_add_nat", "∀ (n : Nat), 0 + n = n", "intro n"),
+        ("nat_add_comm", "∀ (a b : Nat), a + b = b + a", "intro a b"),
+        ("nat_mul_one", "∀ (n : Nat), n * 1 = n", "intro n"),
+        ("nat_zero_le", "∀ (n : Nat), 0 ≤ n", "intro n"),
+    ];
+
+    for (name, statement, intro) in &theorems {
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            &format!("⊢ {statement}"),
+            vec![make_tactic(intro, -0.3)],
+        );
+        policy.add_contains_response("⊢", vec![make_tactic("omega", -0.5)]);
+
+        let engine = SearchEngine::new(SearchConfig::default());
+        let result = engine
+            .search_one(&pool, &policy, None, name, statement)
+            .await
+            .unwrap_or_else(|e| panic!("search_one failed for {name}: {e}"));
+
+        expect_proved(&result);
+        assert_eq!(
+            result.proof_tactics,
+            vec![intro.to_string(), "omega".to_string()],
+            "Wrong proof tactics for {name}"
+        );
+        assert_eq!(
+            result.all_records.len(),
+            3,
+            "Expected 3 trajectory records for {name} (root + intro + terminal)"
+        );
+        let terminal = result.all_records.last().unwrap();
+        assert!(terminal.is_proof_complete, "Terminal should be proof-complete for {name}");
+    }
+}
+
+/// 4-step multi-goal proof of `∀ (p q : Prop), p ∧ q → q ∧ p`.
+/// Steps: intro p q h → constructor → exact h.2 → exact h.1
+/// Exercises multi-goal states and goal_id routing.
+#[tokio::test]
+#[ignore]
+async fn test_search_and_comm_multi_goal_four_step() {
+    let config = get_lean_config(1);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    let mut policy = MockPolicy::new();
+    // Step 1: exact match on root goal
+    policy.add_response(
+        "⊢ ∀ (p q : Prop), p ∧ q → q ∧ p",
+        vec![make_tactic("intro p q h", -0.3)],
+    );
+    // Step 2: after intro, state contains "⊢ q ∧ p" — split into two goals
+    // Note: "q ∧ p" appears in the goal but NOT as "q ∧ p" in hypothesis (hypothesis has "p ∧ q")
+    policy.add_contains_response("q ∧ p", vec![make_tactic("constructor", -0.4)]);
+    // Step 3: after constructor, first goal is "⊢ q" — exact h.2 closes it
+    policy.add_contains_response("⊢ q", vec![make_tactic("exact h.2", -0.3)]);
+    // Step 4: remaining goal is "⊢ p" — exact h.1 closes it
+    policy.add_contains_response("⊢ p", vec![make_tactic("exact h.1", -0.3)]);
+
+    let engine = SearchEngine::new(SearchConfig::default());
+    let result = engine
+        .search_one(
+            &pool,
+            &policy,
+            None,
+            "and_comm",
+            "∀ (p q : Prop), p ∧ q → q ∧ p",
+        )
+        .await
+        .expect("search_one failed");
+
+    expect_proved(&result);
+    assert_eq!(
+        result.proof_tactics,
+        vec!["intro p q h", "constructor", "exact h.2", "exact h.1"]
+    );
+    // root + 4 tactic applications = 5 records
+    assert_eq!(result.all_records.len(), 5, "Expected 5 trajectory records");
+    // Verify depth progression
+    for (i, record) in result.all_records.iter().enumerate() {
+        assert_eq!(
+            record.depth_from_root, i as u32,
+            "Record {i} should have depth {i}"
+        );
+    }
+    assert_eq!(result.max_depth_reached, 4);
+}
+
+/// Batch test of 3 logic theorems using term-mode tactics (exact h.symm, etc.).
+/// Each theorem is 2-step: intro + exact <term>.
+#[tokio::test]
+#[ignore]
+async fn test_search_medium_logic_batch() {
+    let config = get_lean_config(1);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    // eq_symm: ∀ (a b : Nat), a = b → b = a
+    {
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            "⊢ ∀ (a b : Nat), a = b → b = a",
+            vec![make_tactic("intro a b h", -0.3)],
+        );
+        policy.add_contains_response("b = a", vec![make_tactic("exact h.symm", -0.3)]);
+
+        let engine = SearchEngine::new(SearchConfig::default());
+        let result = engine
+            .search_one(&pool, &policy, None, "eq_symm", "∀ (a b : Nat), a = b → b = a")
+            .await
+            .expect("search_one failed for eq_symm");
+
+        expect_proved(&result);
+        assert_eq!(result.proof_tactics, vec!["intro a b h", "exact h.symm"]);
+    }
+
+    // eq_trans: ∀ (a b c : Nat), a = b → b = c → a = c
+    {
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            "⊢ ∀ (a b c : Nat), a = b → b = c → a = c",
+            vec![make_tactic("intro a b c h1 h2", -0.3)],
+        );
+        policy.add_contains_response("a = c", vec![make_tactic("exact h1.trans h2", -0.3)]);
+
+        let engine = SearchEngine::new(SearchConfig::default());
+        let result = engine
+            .search_one(
+                &pool,
+                &policy,
+                None,
+                "eq_trans",
+                "∀ (a b c : Nat), a = b → b = c → a = c",
+            )
+            .await
+            .expect("search_one failed for eq_trans");
+
+        expect_proved(&result);
+        assert_eq!(
+            result.proof_tactics,
+            vec!["intro a b c h1 h2", "exact h1.trans h2"]
+        );
+    }
+
+    // modus_ponens: ∀ (p q : Prop), (p → q) → p → q
+    {
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            "⊢ ∀ (p q : Prop), (p → q) → p → q",
+            vec![make_tactic("intro p q f hp", -0.3)],
+        );
+        policy.add_contains_response("hp", vec![make_tactic("exact f hp", -0.3)]);
+
+        let engine = SearchEngine::new(SearchConfig::default());
+        let result = engine
+            .search_one(
+                &pool,
+                &policy,
+                None,
+                "modus_ponens",
+                "∀ (p q : Prop), (p → q) → p → q",
+            )
+            .await
+            .expect("search_one failed for modus_ponens");
+
+        expect_proved(&result);
+        assert_eq!(result.proof_tactics, vec!["intro p q f hp", "exact f hp"]);
+    }
+}
+
+/// Tests search resilience with backtracking: `∀ (a b c : Nat), a + b + c = c + b + a`
+/// where MockPolicy returns wrong tactics before the correct one (omega).
+#[tokio::test]
+#[ignore]
+async fn test_search_hard_arithmetic_with_backtracking() {
+    let config = get_lean_config(1);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    let mut policy = MockPolicy::new();
+    // Root: intro + rfl (rfl will fail on this non-trivial equality)
+    policy.add_response(
+        "⊢ ∀ (a b c : Nat), a + b + c = c + b + a",
+        vec![
+            make_tactic("intro a b c", -0.3),
+            make_tactic("rfl", -5.0),
+        ],
+    );
+    // After intro: rfl fails, then a bogus tactic, then omega succeeds
+    policy.add_contains_response(
+        "a + b + c",
+        vec![
+            make_tactic("rfl", -1.0),
+            make_tactic("exact Nat.zero_le 0", -2.0),
+            make_tactic("omega", -3.0),
+        ],
+    );
+    // Fallback for any unexpected states
+    policy.add_contains_response("⊢", vec![make_tactic("omega", -4.0)]);
+
+    let engine = SearchEngine::new(SearchConfig::default());
+    let result = engine
+        .search_one(
+            &pool,
+            &policy,
+            None,
+            "nat_add_assoc_comm",
+            "∀ (a b c : Nat), a + b + c = c + b + a",
+        )
+        .await
+        .expect("search_one failed");
+
+    expect_proved(&result);
+    assert_eq!(result.proof_tactics[0], "intro a b c");
+    assert!(
+        result.stats.total_tactic_failures >= 1,
+        "Should have at least 1 failed tactic, got {}",
+        result.stats.total_tactic_failures
+    );
+    assert!(
+        result.total_states >= 3,
+        "Should have at least 3 states (root + intro + omega terminal), got {}",
+        result.total_states
+    );
+}
