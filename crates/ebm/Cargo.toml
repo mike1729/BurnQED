@@ -6,5 +6,8 @@ edition = "2021"
 [dependencies]
 burn = { workspace = true }
 burn-contrib = { path = "../burn-contrib" }
+trajectory = { path = "../trajectory" }
+anyhow = { workspace = true }
+serde = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }

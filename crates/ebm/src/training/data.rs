@@ -1,4 +1,437 @@
-/// Parquet dataset and contrastive batch construction.
-pub struct TrajectoryDataset {
-    _private: (),
+//! Contrastive data pipeline for EBM training.
+//!
+//! Reads trajectory Parquet files via the `trajectory` crate and constructs
+//! contrastive samples for training. Does NOT tokenize or encode — provides
+//! raw proof state strings. The training loop calls `encoder.encode_only()`
+//! on each string (the encoder lives in candle, not burn).
+
+use rand::seq::SliceRandom;
+use rand::Rng;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use trajectory::TrajectoryReader;
+
+/// A proof state record for contrastive training.
+#[derive(Clone, Debug)]
+pub struct ProofStateRecord {
+    /// Name of the theorem.
+    pub theorem_name: String,
+    /// Pretty-printed proof state.
+    pub state_pp: String,
+    /// Label: "positive" or "negative".
+    pub label: String,
+    /// Depth from root in the search tree.
+    pub depth_from_root: u32,
+    /// Remaining steps to QED on proof path, -1 if unknown/off path.
+    pub remaining_depth: i32,
+    /// Log probability from the LLM policy for the tactic.
+    pub llm_log_prob: f64,
+}
+
+/// Index for efficient contrastive sampling.
+///
+/// Groups record indices by theorem and label for fast negative mining.
+struct ContrastiveIndex {
+    /// Positive record indices per theorem.
+    pos_by_theorem: HashMap<String, Vec<usize>>,
+    /// Negative record indices per theorem.
+    neg_by_theorem: HashMap<String, Vec<usize>>,
+    /// All negative record indices (for easy negatives from other theorems).
+    all_negatives: Vec<usize>,
+    /// Theorems that have BOTH positive AND negative records.
+    eligible_theorems: Vec<String>,
+}
+
+impl ContrastiveIndex {
+    /// Build the contrastive index from a slice of records.
+    fn build(records: &[ProofStateRecord]) -> Self {
+        let mut pos_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut neg_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut all_negatives = Vec::new();
+
+        for (i, record) in records.iter().enumerate() {
+            match record.label.as_str() {
+                "positive" => {
+                    pos_by_theorem
+                        .entry(record.theorem_name.clone())
+                        .or_default()
+                        .push(i);
+                }
+                "negative" => {
+                    neg_by_theorem
+                        .entry(record.theorem_name.clone())
+                        .or_default()
+                        .push(i);
+                    all_negatives.push(i);
+                }
+                _ => {} // skip unknown labels
+            }
+        }
+
+        // Eligible theorems must have BOTH positive AND negative records
+        let eligible_theorems: Vec<String> = pos_by_theorem
+            .keys()
+            .filter(|t| neg_by_theorem.contains_key(*t))
+            .cloned()
+            .collect();
+
+        ContrastiveIndex {
+            pos_by_theorem,
+            neg_by_theorem,
+            all_negatives,
+            eligible_theorems,
+        }
+    }
+}
+
+/// A single contrastive training example.
+#[derive(Clone, Debug)]
+pub struct ContrastiveSample {
+    /// The positive (on-path) proof state.
+    pub positive: ProofStateRecord,
+    /// Exactly K negative proof states.
+    pub negatives: Vec<ProofStateRecord>,
+    /// Remaining depth for the positive state.
+    pub remaining_depth: i32,
+}
+
+/// Samples contrastive batches from trajectory data.
+///
+/// Implements a negative mining strategy with three categories:
+/// - **Hard (50%)**: dead-end states from the same theorem
+/// - **Medium (30%)**: other positive states used as negatives (off-path siblings)
+/// - **Easy (20%)**: random states from other theorems
+pub struct ContrastiveSampler {
+    records: Vec<ProofStateRecord>,
+    index: ContrastiveIndex,
+    k_negatives: usize,
+    hard_ratio: f64,
+    medium_ratio: f64,
+    // easy_ratio = 1.0 - hard - medium
+}
+
+impl ContrastiveSampler {
+    /// Create a sampler from pre-built records.
+    ///
+    /// # Errors
+    /// Returns an error if no eligible theorems (with both pos + neg records) exist.
+    pub fn from_trajectory_records(
+        records: Vec<ProofStateRecord>,
+        k_negatives: usize,
+    ) -> anyhow::Result<Self> {
+        let index = ContrastiveIndex::build(&records);
+        if index.eligible_theorems.is_empty() {
+            anyhow::bail!(
+                "No eligible theorems found (need theorems with both positive and negative records)"
+            );
+        }
+        Ok(ContrastiveSampler {
+            records,
+            index,
+            k_negatives,
+            hard_ratio: 0.5,
+            medium_ratio: 0.3,
+        })
+    }
+
+    /// Create a sampler from Parquet trajectory files.
+    ///
+    /// Reads via `TrajectoryReader::read_multiple`, converts to `ProofStateRecord`,
+    /// and filters out Unknown labels.
+    pub fn from_parquet(
+        paths: &[PathBuf],
+        k_negatives: usize,
+    ) -> anyhow::Result<Self> {
+        let records = load_records_from_parquet(paths)?;
+        Self::from_trajectory_records(records, k_negatives)
+    }
+
+    /// Override the negative mining ratios.
+    ///
+    /// `hard_ratio` + `medium_ratio` must be <= 1.0.
+    /// Easy ratio is computed as `1.0 - hard - medium`.
+    pub fn with_ratios(mut self, hard_ratio: f64, medium_ratio: f64) -> Self {
+        assert!(
+            hard_ratio + medium_ratio <= 1.0 + 1e-9,
+            "hard + medium ratios must be <= 1.0"
+        );
+        self.hard_ratio = hard_ratio;
+        self.medium_ratio = medium_ratio;
+        self
+    }
+
+    /// Sample a single contrastive example.
+    ///
+    /// Picks a random positive from an eligible theorem, then mines K negatives
+    /// using the hard/medium/easy strategy.
+    pub fn sample(&self, rng: &mut impl Rng) -> ContrastiveSample {
+        // Pick a random eligible theorem
+        let theorem = self.index.eligible_theorems.choose(rng).unwrap();
+
+        // Pick a random positive from this theorem
+        let pos_indices = &self.index.pos_by_theorem[theorem];
+        let &pos_idx = pos_indices.choose(rng).unwrap();
+        let positive = self.records[pos_idx].clone();
+
+        // Compute category counts
+        let n_hard = (self.k_negatives as f64 * self.hard_ratio).round() as usize;
+        let n_medium = (self.k_negatives as f64 * self.medium_ratio).round() as usize;
+        let n_easy = self.k_negatives.saturating_sub(n_hard + n_medium);
+
+        let mut negatives = Vec::with_capacity(self.k_negatives);
+
+        // Hard negatives: dead-end states from SAME theorem
+        if let Some(neg_indices) = self.index.neg_by_theorem.get(theorem) {
+            self.sample_from_pool(neg_indices, n_hard, rng, &mut negatives);
+        }
+
+        // Medium negatives: other positives from same theorem (off-path siblings)
+        // Exclude the current positive
+        let other_pos: Vec<usize> = pos_indices
+            .iter()
+            .filter(|&&i| i != pos_idx)
+            .copied()
+            .collect();
+        self.sample_from_pool(&other_pos, n_medium, rng, &mut negatives);
+
+        // Easy negatives: random states from OTHER theorems
+        let other_negs: Vec<usize> = self
+            .index
+            .all_negatives
+            .iter()
+            .filter(|&&i| self.records[i].theorem_name != *theorem)
+            .copied()
+            .collect();
+        self.sample_from_pool(&other_negs, n_easy, rng, &mut negatives);
+
+        // Pad with random negatives if undersupplied
+        while negatives.len() < self.k_negatives {
+            if !self.index.all_negatives.is_empty() {
+                let &idx = self.index.all_negatives.choose(rng).unwrap();
+                negatives.push(self.records[idx].clone());
+            } else {
+                // Fallback: use any record as negative
+                let idx = rng.gen_range(0..self.records.len());
+                negatives.push(self.records[idx].clone());
+            }
+        }
+
+        let remaining_depth = positive.remaining_depth;
+        ContrastiveSample {
+            positive,
+            negatives,
+            remaining_depth,
+        }
+    }
+
+    /// Sample a batch of contrastive examples.
+    pub fn sample_batch(
+        &self,
+        batch_size: usize,
+        rng: &mut impl Rng,
+    ) -> Vec<ContrastiveSample> {
+        (0..batch_size).map(|_| self.sample(rng)).collect()
+    }
+
+    /// Total number of records in the sampler.
+    pub fn num_records(&self) -> usize {
+        self.records.len()
+    }
+
+    /// Number of eligible theorems (with both pos and neg records).
+    pub fn num_eligible_theorems(&self) -> usize {
+        self.index.eligible_theorems.len()
+    }
+
+    /// Sample up to `count` records from a pool of indices with replacement.
+    fn sample_from_pool(
+        &self,
+        pool: &[usize],
+        count: usize,
+        rng: &mut impl Rng,
+        out: &mut Vec<ProofStateRecord>,
+    ) {
+        if pool.is_empty() {
+            return;
+        }
+        for _ in 0..count {
+            let &idx = pool.choose(rng).unwrap();
+            out.push(self.records[idx].clone());
+        }
+    }
+}
+
+/// Load trajectory records from Parquet files and convert to ProofStateRecords.
+///
+/// Uses `TrajectoryReader::read_multiple` for I/O. Filters out "unknown" labels.
+fn load_records_from_parquet(
+    paths: &[PathBuf],
+) -> anyhow::Result<Vec<ProofStateRecord>> {
+    let trajectory_records = TrajectoryReader::read_multiple(paths)?;
+
+    let records: Vec<ProofStateRecord> = trajectory_records
+        .into_iter()
+        .filter(|r| {
+            let label = r.label.to_string();
+            label == "positive" || label == "negative"
+        })
+        .map(|r| ProofStateRecord {
+            theorem_name: r.theorem_name,
+            state_pp: r.state_pp,
+            label: r.label.to_string(),
+            depth_from_root: r.depth_from_root,
+            remaining_depth: r.remaining_depth,
+            llm_log_prob: r.llm_log_prob,
+        })
+        .collect();
+
+    Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_record(theorem: &str, label: &str, depth: u32) -> ProofStateRecord {
+        ProofStateRecord {
+            theorem_name: theorem.to_string(),
+            state_pp: format!("⊢ state_{theorem}_{label}_{depth}"),
+            label: label.to_string(),
+            depth_from_root: depth,
+            remaining_depth: if label == "positive" {
+                3_i32 - depth as i32
+            } else {
+                -1
+            },
+            llm_log_prob: -0.5,
+        }
+    }
+
+    fn make_test_records() -> Vec<ProofStateRecord> {
+        let mut records = Vec::new();
+        // Theorem A: 3 positive, 3 negative
+        for d in 0..3 {
+            records.push(make_record("thm_a", "positive", d));
+        }
+        for d in 0..3 {
+            records.push(make_record("thm_a", "negative", d));
+        }
+        // Theorem B: 2 positive, 2 negative
+        for d in 0..2 {
+            records.push(make_record("thm_b", "positive", d));
+        }
+        for d in 0..2 {
+            records.push(make_record("thm_b", "negative", d));
+        }
+        records
+    }
+
+    #[test]
+    fn test_build_index() {
+        let records = make_test_records();
+        let index = ContrastiveIndex::build(&records);
+
+        assert_eq!(index.pos_by_theorem["thm_a"].len(), 3);
+        assert_eq!(index.neg_by_theorem["thm_a"].len(), 3);
+        assert_eq!(index.pos_by_theorem["thm_b"].len(), 2);
+        assert_eq!(index.neg_by_theorem["thm_b"].len(), 2);
+        assert_eq!(index.all_negatives.len(), 5); // 3 + 2
+        assert_eq!(index.eligible_theorems.len(), 2);
+    }
+
+    #[test]
+    fn test_eligible_theorems() {
+        // Theorem with only positives should NOT be eligible
+        let mut records = make_test_records();
+        records.push(make_record("thm_c", "positive", 0));
+        records.push(make_record("thm_c", "positive", 1));
+        // thm_c has no negatives
+
+        let index = ContrastiveIndex::build(&records);
+        assert!(!index.eligible_theorems.contains(&"thm_c".to_string()));
+        assert_eq!(index.eligible_theorems.len(), 2); // only thm_a and thm_b
+    }
+
+    #[test]
+    fn test_sample_returns_correct_k() {
+        let records = make_test_records();
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 4).unwrap();
+
+        let mut rng = rand::thread_rng();
+        let sample = sampler.sample(&mut rng);
+
+        assert_eq!(
+            sample.negatives.len(),
+            4,
+            "Expected exactly 4 negatives, got {}",
+            sample.negatives.len()
+        );
+        assert_eq!(sample.positive.label, "positive");
+    }
+
+    #[test]
+    fn test_hard_negatives_from_same_theorem() {
+        let records = make_test_records();
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 4)
+                .unwrap()
+                .with_ratios(1.0, 0.0); // 100% hard negatives
+
+        let mut rng = rand::thread_rng();
+        // Sample many times and check that hard negatives come from same theorem
+        for _ in 0..20 {
+            let sample = sampler.sample(&mut rng);
+            let pos_theorem = &sample.positive.theorem_name;
+            // With hard_ratio=1.0, all negatives should come from same theorem
+            // (they're from neg_by_theorem[theorem])
+            for neg in &sample.negatives {
+                assert_eq!(
+                    &neg.theorem_name, pos_theorem,
+                    "Hard negative should be from same theorem"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_easy_negatives_from_other_theorems() {
+        let records = make_test_records();
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 4)
+                .unwrap()
+                .with_ratios(0.0, 0.0); // 100% easy negatives
+
+        let mut rng = rand::thread_rng();
+        let mut found_other_theorem = false;
+        // Easy negatives should come from OTHER theorems (when available)
+        for _ in 0..50 {
+            let sample = sampler.sample(&mut rng);
+            let pos_theorem = &sample.positive.theorem_name;
+            for neg in &sample.negatives {
+                if neg.theorem_name != *pos_theorem {
+                    found_other_theorem = true;
+                }
+            }
+        }
+        assert!(
+            found_other_theorem,
+            "Easy negatives should include states from other theorems"
+        );
+    }
+
+    #[test]
+    fn test_sample_batch_size() {
+        let records = make_test_records();
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 2).unwrap();
+
+        let mut rng = rand::thread_rng();
+        let batch = sampler.sample_batch(8, &mut rng);
+        assert_eq!(batch.len(), 8);
+        for sample in &batch {
+            assert_eq!(sample.negatives.len(), 2);
+        }
+    }
 }
