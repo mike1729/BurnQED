@@ -28,7 +28,7 @@ pub struct SpectralNormLinearConfig {
 #[derive(Module, Debug)]
 pub struct SpectralNormLinear<B: Backend> {
     /// Weight matrix, shape (d_output, d_input). Kaiming initialized.
-    weight: Param<Tensor<B, 2>>,
+    pub(crate) weight: Param<Tensor<B, 2>>,
     /// Optional bias, shape (d_output,). Zero initialized.
     bias: Option<Param<Tensor<B, 1>>>,
     /// Number of power iterations per forward pass.
