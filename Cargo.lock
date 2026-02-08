@@ -1920,8 +1920,11 @@ name = "ebm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arrow",
  "burn",
  "burn-contrib",
+ "indicatif",
+ "parquet",
  "rand 0.8.5",
  "serde",
  "tempfile",
@@ -4069,6 +4072,7 @@ name = "prover-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "burn",
  "clap",
  "ebm",
  "indicatif",

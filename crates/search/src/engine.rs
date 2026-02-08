@@ -631,6 +631,108 @@ mod tests {
         assert!(result.nodes_expanded <= 3, "Budget should be respected");
     }
 
+    /// A constant value scorer for testing.
+    struct ConstScorer(f64);
+    impl ValueScorer for ConstScorer {
+        fn score(&self, _proof_state: &str) -> Result<f64, SearchError> {
+            Ok(self.0)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_with_value_scorer() {
+        // Two-step proof with a ValueScorer active
+        let mut env = MockEnvironment::new();
+        env.add_response(
+            0,
+            "intro n",
+            TacticResult::Success {
+                state_id: 1,
+                goals: vec![Goal::parse(0, "n : Nat\n⊢ n = n")],
+            },
+        );
+        env.add_response(1, "rfl", TacticResult::ProofComplete { state_id: 2 });
+
+        let mut policy = MockPolicy::new();
+        policy.add_response("⊢ ∀ (n : Nat), n = n", vec![make_tactic("intro n", -0.3)]);
+        policy.add_response("n : Nat\n⊢ n = n", vec![make_tactic("rfl", -0.1)]);
+
+        let scorer = ConstScorer(1.0);
+        let engine = SearchEngine::new(SearchConfig::default());
+        let result = engine
+            .search_one(&env, &policy, Some(&scorer), "nat_refl_scored", "∀ (n : Nat), n = n")
+            .await
+            .unwrap();
+
+        assert!(result.proved, "Should prove with scorer active");
+        assert_eq!(result.proof_tactics, vec!["intro n", "rfl"]);
+
+        // Verify ebm_score fields are set in trajectory records
+        // Root and child nodes (except terminal) should have been scored
+        let scored_records: Vec<_> = result
+            .all_records
+            .iter()
+            .filter(|r| r.ebm_score != 0.0)
+            .collect();
+        assert!(
+            !scored_records.is_empty(),
+            "At least one record should have a non-zero ebm_score when scorer is active"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_search_stats_populated() {
+        // Mix of good and bad tactics to exercise stats fields
+        let mut env = MockEnvironment::new();
+        env.add_response(
+            0,
+            "good_tactic",
+            TacticResult::ProofComplete { state_id: 1 },
+        );
+        // "bad_tactic" will fall through to MockEnvironment's default (Failed)
+
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            "⊢ True",
+            vec![
+                make_tactic("bad_tactic", -2.0),
+                make_tactic("good_tactic", -0.1),
+            ],
+        );
+
+        let config = SearchConfig {
+            max_nodes: 10,
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "stats_test", "True")
+            .await
+            .unwrap();
+
+        assert!(result.proved);
+
+        // Verify SearchStats fields are populated
+        let stats = &result.stats;
+        assert!(
+            stats.total_tactic_attempts > 0,
+            "Should have attempted at least one tactic, got {}",
+            stats.total_tactic_attempts
+        );
+        assert!(
+            stats.total_tactic_failures > 0,
+            "Should have at least one failure (bad_tactic), got {}",
+            stats.total_tactic_failures
+        );
+        assert!(
+            stats.nodes_terminal > 0,
+            "Should have found at least one terminal node, got {}",
+            stats.nodes_terminal
+        );
+        // generate_time and lean_time should be >= 0 (they are u64, so always true,
+        // but we check they were touched by verifying tactic_attempts)
+    }
+
     #[tokio::test]
     async fn test_search_result_proof_tactics() {
         let mut env = MockEnvironment::new();

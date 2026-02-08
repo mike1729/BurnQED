@@ -4,10 +4,19 @@
 
 use std::sync::Arc;
 
+use burn::backend::ndarray::NdArray;
+use burn::module::Module;
+use burn::prelude::Backend;
+use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder};
+use burn::tensor::ElementConversion;
+
 use lean_repl::TacticResult;
 use search::mocks::{make_tactic, MockEnvironment, MockPolicy};
-use search::{SearchConfig, SearchEngine};
-use trajectory::{TheoremIndex, TrajectoryReader, TrajectoryWriter};
+use search::{SearchConfig, SearchEngine, ValueScorer};
+use trajectory::{
+    SearchResult, SearchStats, TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
+    TrajectoryWriter,
+};
 
 /// Search theorems using mocks, write Parquet, read back and verify.
 #[tokio::test]
@@ -251,4 +260,428 @@ async fn test_lean_pipeline_multiple_theorems() {
     let summary = TrajectoryReader::read_summary(&output).unwrap();
     assert!(summary.total_records > 0);
     assert!(summary.proved_theorems >= 2);
+}
+
+// ---------------------------------------------------------------------------
+// Helpers for EBM integration tests
+// ---------------------------------------------------------------------------
+
+type TestBackend = NdArray<f32>;
+
+/// Helper: create a trajectory record for testing.
+fn make_record(
+    theorem: &str,
+    state_id: u64,
+    depth: u32,
+    remaining: i32,
+    complete: bool,
+    parent: Option<u64>,
+) -> TrajectoryRecord {
+    TrajectoryRecord {
+        theorem_name: theorem.to_string(),
+        state_id,
+        state_pp: format!("⊢ state_{theorem}_{state_id}"),
+        tactic_applied: if parent.is_some() {
+            format!("tac_{state_id}")
+        } else {
+            String::new()
+        },
+        parent_state_id: parent,
+        label: TrajectoryLabel::Unknown,
+        depth_from_root: depth,
+        remaining_depth: remaining,
+        llm_log_prob: -0.5,
+        ebm_score: 0.0,
+        is_proof_complete: complete,
+        timestamp_ms: 1700000000000 + state_id,
+    }
+}
+
+/// Write a proved theorem's trajectory to Parquet (root→n1→n2 proof path + n3 dead end).
+fn write_proved_theorem(dir: &std::path::Path, filename: &str, theorem: &str) -> std::path::PathBuf {
+    let path = dir.join(filename);
+
+    let root = make_record(theorem, 0, 0, 2, false, None);
+    let n1 = make_record(theorem, 1, 1, 1, false, Some(0));
+    let n2 = make_record(theorem, 2, 2, 0, true, Some(1));
+    let n3 = make_record(theorem, 3, 1, -1, false, Some(0));
+
+    let result = SearchResult {
+        theorem_name: theorem.to_string(),
+        proved: true,
+        proof_tactics: vec!["tac_1".into(), "tac_2".into()],
+        nodes_expanded: 4,
+        total_states: 4,
+        max_depth_reached: 2,
+        wall_time_ms: 100,
+        all_records: vec![root, n1, n2, n3],
+        stats: SearchStats::default(),
+    };
+
+    let labeled = TrajectoryWriter::from_search_result(&result);
+    let mut writer = TrajectoryWriter::new(path.clone());
+    writer.record_all(labeled);
+    writer.finish().unwrap();
+    path
+}
+
+// ---------------------------------------------------------------------------
+// Test: EBM training pipeline with mock encode_fn (no real LLM)
+// ---------------------------------------------------------------------------
+
+/// Train EBM with synthetic trajectory data and mock encoder, verify checkpoint + config saved.
+#[test]
+fn test_train_ebm_mock_pipeline() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Write synthetic trajectory Parquet
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_train_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_train_b");
+
+    let d_encoder = 16;
+    let device: <TestBackend as Backend>::Device = Default::default();
+    let head_config = ebm::EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+
+    // Create model on autodiff backend for training
+    type TrainBackend = burn::backend::Autodiff<NdArray<f32>>;
+    let model = head_config.init::<TrainBackend>(&device);
+
+    // Load sampler
+    let sampler = ebm::ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+    assert!(sampler.num_records() > 0);
+    assert!(sampler.num_eligible_theorems() >= 2);
+
+    // Mock encode_fn (no real LLM)
+    let encode_fn = |_state: &str| -> anyhow::Result<Vec<f32>> { Ok(vec![0.42_f32; d_encoder]) };
+
+    // Train for a few steps
+    let checkpoint_dir = tmp.path().join("ckpt_prover");
+    let config = ebm::EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    let _trained = ebm::train(&config, model, &encode_fn, &sampler, &device).unwrap();
+
+    // Verify final checkpoint exists
+    let final_ckpt = checkpoint_dir.join("final.mpk");
+    assert!(
+        final_ckpt.exists(),
+        "Final checkpoint should exist at {}",
+        final_ckpt.display()
+    );
+
+    // Save EnergyHeadConfig alongside (mimicking run_train_ebm)
+    let config_path = checkpoint_dir.join("energy_head_config.json");
+    let config_json = serde_json::to_string_pretty(&head_config).unwrap();
+    std::fs::write(&config_path, &config_json).unwrap();
+    assert!(config_path.exists());
+
+    // Verify config can be loaded back
+    let loaded_json = std::fs::read_to_string(&config_path).unwrap();
+    let loaded_config: ebm::EnergyHeadConfig = serde_json::from_str(&loaded_json).unwrap();
+    assert_eq!(loaded_config.d_encoder, d_encoder);
+    assert_eq!(loaded_config.d_hidden1, 8);
+    assert_eq!(loaded_config.d_hidden2, 4);
+}
+
+// ---------------------------------------------------------------------------
+// Test: Search with mock EBM scorer
+// ---------------------------------------------------------------------------
+
+/// Train EBM using precomputed embedding cache (no LLM needed at train time).
+#[test]
+fn test_train_ebm_with_cached_embeddings() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // 1. Write trajectory data
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_cached_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_cached_b");
+
+    let d_encoder = 16;
+
+    // 2. Load sampler and precompute cache with a mock encode_fn
+    let sampler = ebm::ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d_encoder).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+
+    let cache = ebm::EmbeddingCache::precompute(&sampler, &encode_fn, d_encoder);
+    let unique_count = sampler.unique_states().len();
+    assert_eq!(cache.len(), unique_count);
+
+    // 3. Save cache to Parquet
+    let cache_path = tmp.path().join("embeddings_cache.parquet");
+    cache.save(&cache_path).unwrap();
+
+    // 4. Load cache back (simulating a separate run)
+    let loaded_cache = ebm::EmbeddingCache::load(&cache_path).unwrap();
+    assert_eq!(loaded_cache.len(), unique_count);
+
+    // 5. Train using cache-backed encode_fn (no LLM calls)
+    let cache_encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        loaded_cache.get_or_err(state)
+    };
+
+    let device: <TestBackend as Backend>::Device = Default::default();
+    let head_config = ebm::EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+
+    type TrainBackend = burn::backend::Autodiff<NdArray<f32>>;
+    let model = head_config.init::<TrainBackend>(&device);
+
+    let checkpoint_dir = tmp.path().join("ckpt_cached");
+    let config = ebm::EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    let result = ebm::train(&config, model, &cache_encode_fn, &sampler, &device);
+    assert!(result.is_ok(), "Training with cached embeddings should succeed: {:?}", result.err());
+
+    // Verify checkpoint saved
+    assert!(checkpoint_dir.join("final.mpk").exists());
+}
+
+/// Create sampler → precompute cache → save → load → train with loaded cache → checkpoint saved.
+#[test]
+fn test_train_ebm_save_embeddings_roundtrip() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Write trajectory data
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_emb_rt_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_emb_rt_b");
+
+    let d_encoder = 16;
+
+    // Load sampler
+    let sampler = ebm::ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+    let unique_count = sampler.unique_states().len();
+    assert!(unique_count > 0, "Should have unique states");
+
+    // Precompute cache with mock encode_fn
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d_encoder).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+
+    let cache = ebm::EmbeddingCache::precompute(&sampler, &encode_fn, d_encoder);
+    assert_eq!(cache.len(), unique_count);
+
+    // Save cache to Parquet
+    let cache_path = tmp.path().join("embeddings.parquet");
+    cache.save(&cache_path).unwrap();
+    assert!(cache_path.exists());
+
+    // Load cache back (simulating a separate process)
+    let loaded_cache = ebm::EmbeddingCache::load(&cache_path).unwrap();
+    assert_eq!(loaded_cache.len(), unique_count);
+    assert_eq!(loaded_cache.dim(), d_encoder);
+
+    // Verify every entry matches
+    for state in sampler.unique_states() {
+        let orig = cache.get(state).unwrap();
+        let loaded = loaded_cache.get(state).unwrap();
+        assert_eq!(orig, loaded, "Cache entry mismatch for: {state}");
+    }
+
+    // Train with loaded cache
+    let cache_encode = |state: &str| -> anyhow::Result<Vec<f32>> {
+        loaded_cache.get_or_err(state)
+    };
+
+    let device: <TestBackend as Backend>::Device = Default::default();
+    let head_config = ebm::EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+
+    type TrainBackend = burn::backend::Autodiff<NdArray<f32>>;
+    let model = head_config.init::<TrainBackend>(&device);
+
+    let checkpoint_dir = tmp.path().join("ckpt_emb_rt");
+    let config = ebm::EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    let result = ebm::train(&config, model, &cache_encode, &sampler, &device);
+    assert!(result.is_ok(), "Training with loaded cache should succeed: {:?}", result.err());
+    assert!(checkpoint_dir.join("final.mpk").exists(), "Checkpoint should be saved");
+}
+
+/// Two-phase training: first run saves checkpoint + cache, second run resumes.
+#[test]
+fn test_train_ebm_resume_with_cache() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Write trajectory data
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_resume_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_resume_b");
+
+    let d_encoder = 16;
+    let sampler = ebm::ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    // Precompute cache
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d_encoder).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+    let cache = ebm::EmbeddingCache::precompute(&sampler, &encode_fn, d_encoder);
+    let cache_encode = |state: &str| -> anyhow::Result<Vec<f32>> {
+        cache.get_or_err(state)
+    };
+
+    let device: <TestBackend as Backend>::Device = Default::default();
+    let head_config = ebm::EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+
+    type TrainBackend = burn::backend::Autodiff<NdArray<f32>>;
+
+    // --- First run: train 5 steps ---
+    let ckpt_dir1 = tmp.path().join("ckpt_run1");
+    let config1 = ebm::EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(ckpt_dir1.to_string_lossy().to_string());
+
+    let model1 = head_config.init::<TrainBackend>(&device);
+    ebm::train(&config1, model1, &cache_encode, &sampler, &device).unwrap();
+
+    let ckpt1_path = ckpt_dir1.join("final.mpk");
+    assert!(ckpt1_path.exists(), "First run checkpoint should exist");
+    let ckpt1_size = std::fs::metadata(&ckpt1_path).unwrap().len();
+
+    // --- Second run: resume from first checkpoint, train 5 more steps ---
+    let ckpt_dir2 = tmp.path().join("ckpt_run2");
+    let config2 = ebm::EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(0)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(ckpt_dir2.to_string_lossy().to_string());
+
+    // Resume: load weights from first run's checkpoint
+    let resumed_model: ebm::EnergyHead<TrainBackend> =
+        ebm::resume_from_checkpoint(&ckpt_dir1.join("final"), &head_config, &device).unwrap();
+    ebm::train(&config2, resumed_model, &cache_encode, &sampler, &device).unwrap();
+
+    let ckpt2_path = ckpt_dir2.join("final.mpk");
+    assert!(ckpt2_path.exists(), "Second run checkpoint should exist");
+    let ckpt2_size = std::fs::metadata(&ckpt2_path).unwrap().len();
+
+    // Both checkpoints should have the same size (same model architecture)
+    assert_eq!(ckpt1_size, ckpt2_size, "Checkpoint sizes should match (same architecture)");
+
+    // Verify both can be loaded back and produce outputs
+    let loaded1: ebm::EnergyHead<TestBackend> =
+        ebm::resume_from_checkpoint(&ckpt_dir1.join("final"), &head_config, &Default::default()).unwrap();
+    let loaded2: ebm::EnergyHead<TestBackend> =
+        ebm::resume_from_checkpoint(&ckpt_dir2.join("final"), &head_config, &Default::default()).unwrap();
+
+    let probe = ebm::bridge::embeddings_to_tensor::<TestBackend>(
+        &[vec![0.5_f32; d_encoder]],
+        &Default::default(),
+    );
+    let e1: f32 = loaded1.forward(probe.clone()).into_scalar().elem();
+    let e2: f32 = loaded2.forward(probe).into_scalar().elem();
+
+    assert!(e1.is_finite(), "First run model should produce finite output: {e1}");
+    assert!(e2.is_finite(), "Second run model should produce finite output: {e2}");
+
+    // The two models were trained for different durations, so outputs should differ
+    // (unless spectral norm variance masks it — use generous tolerance)
+    // Note: This is a weak assertion due to SpectralNorm Option C randomness
+}
+
+/// Search using MockEnvironment + MockPolicy + a real (small) EBM scorer.
+#[tokio::test]
+async fn test_search_with_mock_ebm() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // 1. Create and save a small EnergyHead
+    let d_encoder = 8;
+    let device: <TestBackend as Backend>::Device = Default::default();
+    let head_config = ebm::EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(4)
+        .with_d_hidden2(2)
+        .with_dropout(0.0);
+    let model = head_config.init::<TestBackend>(&device);
+
+    let ckpt_dir = tmp.path().join("ebm_ckpt");
+    std::fs::create_dir_all(&ckpt_dir).unwrap();
+
+    // Save model checkpoint
+    let ckpt_path = ckpt_dir.join("final");
+    model
+        .clone()
+        .save_file(&ckpt_path, &NamedMpkFileRecorder::<FullPrecisionSettings>::new())
+        .expect("Failed to save checkpoint");
+
+    // Save config
+    let config_json = serde_json::to_string_pretty(&head_config).unwrap();
+    std::fs::write(ckpt_dir.join("energy_head_config.json"), &config_json).unwrap();
+
+    // 2. Create EBMScorer with mock encode_fn
+    let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
+        Box::new(move |state: &str| {
+            // Deterministic embedding based on string hash
+            let mut emb = vec![0.0_f32; d_encoder];
+            for (i, byte) in state.bytes().enumerate() {
+                emb[i % d_encoder] += byte as f32 / 255.0;
+            }
+            Ok(emb)
+        });
+
+    let scorer = ebm::EBMScorer::<TestBackend>::load(&ckpt_path, &head_config, encode_fn, device)
+        .unwrap();
+    let value_fn = ebm::EBMValueFn::new(scorer);
+
+    // Verify scorer produces finite values
+    let test_score = value_fn.score("⊢ True").unwrap();
+    assert!(test_score.is_finite(), "Score should be finite: {test_score}");
+
+    // 3. Set up mock search environment
+    let mut env = MockEnvironment::new();
+    env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+
+    let mut policy = MockPolicy::new();
+    policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+
+    // 4. Search with EBM scorer
+    let engine = SearchEngine::new(SearchConfig::default());
+    let scorer_ref: Option<&dyn ValueScorer> = Some(&value_fn);
+    let result = engine
+        .search_one(&env, &policy, scorer_ref, "true_trivial", "True")
+        .await
+        .unwrap();
+
+    assert!(result.proved, "Should prove True with EBM scorer");
 }

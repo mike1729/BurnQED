@@ -1,11 +1,16 @@
-//! Proof search pipeline and evaluation utilities.
+//! Proof search pipeline, evaluation, and EBM training utilities.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use burn::backend::ndarray::NdArray;
+use burn::backend::Autodiff;
 use indicatif::{ProgressBar, ProgressStyle};
 
+use ebm::{
+    ContrastiveSampler, EBMScorer, EBMTrainingConfig, EBMValueFn, EmbeddingCache, EnergyHeadConfig,
+};
 use lean_repl::LeanPool;
 use policy::{PolicyConfig, TacticGenerator};
 use search::{MutexPolicyProvider, SearchEngine};
@@ -28,6 +33,8 @@ pub struct SearchArgs {
     pub num_workers: Option<usize>,
     /// Load model and pool but don't search. Verifies environment setup.
     pub dry_run: bool,
+    /// Path to EBM checkpoint directory for value-guided search.
+    pub ebm_path: Option<PathBuf>,
 }
 
 /// Arguments for the `eval` subcommand.
@@ -36,6 +43,35 @@ pub struct EvalArgs {
     /// Path to the trajectory Parquet file.
     pub input: PathBuf,
 }
+
+/// Arguments for the `train-ebm` subcommand.
+#[derive(Debug)]
+pub struct TrainEbmArgs {
+    /// Path(s) to trajectory Parquet files.
+    pub trajectories: Vec<PathBuf>,
+    /// Directory for saving checkpoints.
+    pub output_dir: PathBuf,
+    /// Path to the HuggingFace LLM model directory (for encoding).
+    pub llm_path: PathBuf,
+    /// Resume training from a checkpoint directory.
+    pub resume_from: Option<PathBuf>,
+    /// Total training steps.
+    pub steps: usize,
+    /// Learning rate.
+    pub lr: f64,
+    /// Batch size.
+    pub batch_size: usize,
+    /// Number of negative samples per positive.
+    pub k_negatives: usize,
+    /// Path to precomputed embedding cache (Parquet). If omitted, precomputes from LLM.
+    pub embeddings_cache: Option<PathBuf>,
+    /// Save precomputed embeddings to this path for reuse.
+    pub save_embeddings: Option<PathBuf>,
+}
+
+/// Backend types used for EBM inference and training.
+type InferenceBackend = NdArray<f32>;
+type TrainingBackend = Autodiff<NdArray<f32>>;
 
 /// Run proof search over a batch of theorems and write trajectory data to Parquet.
 pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
@@ -56,23 +92,75 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     tracing::info!(model = %args.model_path.display(), "Loading policy model");
     let policy_config = PolicyConfig::new(args.model_path.clone());
     let generator = TacticGenerator::load(&policy_config)?;
-    let policy = MutexPolicyProvider::new(generator);
 
-    // 4. Load theorem index
+    // 4. Set up policy + optional EBM scorer
+    let (policy, value_fn) = if let Some(ref ebm_path) = args.ebm_path {
+        tracing::info!(path = %ebm_path.display(), "Loading EBM scorer");
+
+        // Load EnergyHeadConfig from JSON alongside checkpoint
+        let config_path = ebm_path.join("energy_head_config.json");
+        let config_json = std::fs::read_to_string(&config_path).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to read EnergyHeadConfig from {}: {e}",
+                config_path.display()
+            )
+        })?;
+        let head_config: EnergyHeadConfig = serde_json::from_str(&config_json).map_err(|e| {
+            anyhow::anyhow!("Failed to parse EnergyHeadConfig: {e}")
+        })?;
+
+        // Share the generator between policy and EBM encode closure
+        let shared_gen = Arc::new(std::sync::Mutex::new(generator));
+        let policy = MutexPolicyProvider::new_shared(shared_gen.clone());
+
+        // Create encode_fn closure that uses the shared generator
+        let encode_gen = shared_gen.clone();
+        let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
+            Box::new(move |state: &str| {
+                let mut gen = encode_gen
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Generator lock poisoned: {e}"))?;
+                let embedding = gen.encode_only(state)?;
+                Ok(embedding.data)
+            });
+
+        // Load EBM scorer from checkpoint
+        let checkpoint_path = ebm_path.join("final");
+        let device = Default::default();
+        let scorer =
+            EBMScorer::<InferenceBackend>::load(&checkpoint_path, &head_config, encode_fn, device)?;
+        let value_fn = EBMValueFn::new(scorer);
+
+        tracing::info!("EBM scorer loaded successfully");
+        (policy, Some(value_fn))
+    } else {
+        let policy = MutexPolicyProvider::new(generator);
+        (policy, None)
+    };
+
+    // 5. Load theorem index
     let index = TheoremIndex::from_json(&args.theorems)?;
     tracing::info!(count = index.len(), "Loaded theorems");
 
-    // 4b. Dry-run: verify setup and exit early
+    // 5b. Dry-run: verify setup and exit early
     if args.dry_run {
         println!("Dry run — setup verified successfully");
         println!("  Model: {}", args.model_path.display());
         println!("  Theorems: {} loaded", index.len());
         println!("  Workers: {}", pool.num_workers());
+        println!(
+            "  EBM: {}",
+            if args.ebm_path.is_some() {
+                "loaded"
+            } else {
+                "none"
+            }
+        );
         pool.shutdown().await;
         return Ok(());
     }
 
-    // 5. Run search with progress bar
+    // 6. Run search with progress bar
     let engine = SearchEngine::new(toml.search);
     let mut writer = TrajectoryWriter::new(args.output.clone());
     let mut proved_count: u32 = 0;
@@ -94,6 +182,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             .progress_chars("=> "),
     );
 
+    let scorer_ref: Option<&dyn search::ValueScorer> =
+        value_fn.as_ref().map(|v| v as &dyn search::ValueScorer);
+
     for task in &index.theorems {
         if interrupted {
             break;
@@ -101,7 +192,8 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
         pb.set_message(task.name.clone());
 
-        let search_fut = engine.search_one(&pool, &policy, None, &task.name, &task.statement);
+        let search_fut =
+            engine.search_one(&pool, &policy, scorer_ref, &task.name, &task.statement);
 
         tokio::select! {
             result = search_fut => {
@@ -144,14 +236,14 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
     pb.finish_with_message("done");
 
-    // 6. Write Parquet
+    // 7. Write Parquet
     let record_count = writer.len();
     writer.finish()?;
 
-    // 7. Shutdown pool
+    // 8. Shutdown pool
     pool.shutdown().await;
 
-    // 8. Print enhanced summary
+    // 9. Print enhanced summary
     let elapsed = start.elapsed();
     let elapsed_secs = elapsed.as_secs_f64();
 
@@ -197,6 +289,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     println!(" Total wall time:    {elapsed_secs:.1}s");
     println!(" Trajectory file:    {}", args.output.display());
     println!("   Records:          {record_count}");
+    if args.ebm_path.is_some() {
+        println!(" EBM scorer:         active");
+    }
     println!("══════════════════════════════════════════");
 
     Ok(())
@@ -221,6 +316,107 @@ pub fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         let rate = summary.proved_theorems as f64 / summary.unique_theorems as f64 * 100.0;
         println!("Prove rate: {rate:.1}%");
     }
+
+    Ok(())
+}
+
+/// Train the Energy-Based Model from trajectory data.
+pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
+    tracing::info!(
+        trajectories = args.trajectories.len(),
+        steps = args.steps,
+        lr = args.lr,
+        batch_size = args.batch_size,
+        k_negatives = args.k_negatives,
+        "Starting EBM training"
+    );
+
+    // 1. Load LLM encoder
+    tracing::info!(model = %args.llm_path.display(), "Loading LLM encoder");
+    let policy_config = PolicyConfig::new(args.llm_path);
+    let generator = TacticGenerator::load(&policy_config)?;
+    let hidden_size = generator.hidden_size();
+
+    // 2. Create or resume energy head
+    let head_config = EnergyHeadConfig::new(hidden_size);
+    let device: <TrainingBackend as burn::prelude::Backend>::Device = Default::default();
+    let model = if let Some(ref resume_path) = args.resume_from {
+        tracing::info!(path = %resume_path.display(), "Resuming from checkpoint");
+        let checkpoint_path = resume_path.join("final");
+        ebm::resume_from_checkpoint::<TrainingBackend>(&checkpoint_path, &head_config, &device)?
+    } else {
+        head_config.init::<TrainingBackend>(&device)
+    };
+
+    // 3. Load trajectory data
+    tracing::info!("Loading trajectory data from {} file(s)", args.trajectories.len());
+    let sampler = ContrastiveSampler::from_parquet(&args.trajectories, args.k_negatives)?;
+    tracing::info!(
+        records = sampler.num_records(),
+        eligible_theorems = sampler.num_eligible_theorems(),
+        "Trajectory data loaded"
+    );
+
+    // 4. Build embedding cache (precompute or load from disk)
+    let cache = if let Some(ref cache_path) = args.embeddings_cache {
+        tracing::info!(path = %cache_path.display(), "Loading embedding cache from disk");
+        EmbeddingCache::load(cache_path)?
+    } else {
+        tracing::info!("Precomputing embeddings for all unique states");
+        let gen = std::sync::Mutex::new(generator);
+        let raw_encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+            let mut g = gen
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Generator lock poisoned: {e}"))?;
+            let embedding = g.encode_only(state)?;
+            Ok(embedding.data)
+        };
+        EmbeddingCache::precompute(&sampler, &raw_encode_fn, hidden_size)
+    };
+
+    // 4b. Optionally save cache for reuse
+    if let Some(ref save_path) = args.save_embeddings {
+        cache.save(save_path)?;
+    }
+
+    // 5. Create encode_fn from cache (O(1) lookups)
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> { cache.get_or_err(state) };
+
+    // 6. Build training config
+    let output_dir_str = args.output_dir.to_string_lossy().to_string();
+    let training_config = EBMTrainingConfig::new()
+        .with_lr(args.lr)
+        .with_total_steps(args.steps)
+        .with_batch_size(args.batch_size)
+        .with_k_negatives(args.k_negatives)
+        .with_checkpoint_dir(output_dir_str.clone());
+
+    // 7. Train
+    let _trained = ebm::train(&training_config, model, &encode_fn, &sampler, &device)?;
+
+    // 8. Save EnergyHeadConfig alongside checkpoint
+    std::fs::create_dir_all(&args.output_dir)?;
+    let config_path = args.output_dir.join("energy_head_config.json");
+    let config_json = serde_json::to_string_pretty(&head_config)?;
+    std::fs::write(&config_path, &config_json)?;
+    tracing::info!(
+        path = %config_path.display(),
+        "Saved EnergyHeadConfig"
+    );
+
+    println!();
+    println!("══════════════════════════════════════════");
+    println!(" EBM Training Complete");
+    println!("──────────────────────────────────────────");
+    println!(" Steps:              {}", args.steps);
+    println!(" Learning rate:      {}", args.lr);
+    println!(" Batch size:         {}", args.batch_size);
+    println!(" K negatives:        {}", args.k_negatives);
+    println!(" Records:            {}", sampler.num_records());
+    println!(" Eligible theorems:  {}", sampler.num_eligible_theorems());
+    println!(" Cached embeddings:  {}", cache.len());
+    println!(" Checkpoint dir:     {}", args.output_dir.display());
+    println!("══════════════════════════════════════════");
 
     Ok(())
 }

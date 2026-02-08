@@ -234,6 +234,11 @@ impl ContrastiveSampler {
         (0..batch_size).map(|_| self.sample(rng)).collect()
     }
 
+    /// Extract all unique `state_pp` values from the records.
+    pub fn unique_states(&self) -> std::collections::HashSet<&str> {
+        self.records.iter().map(|r| r.state_pp.as_str()).collect()
+    }
+
     /// Total number of records in the sampler.
     pub fn num_records(&self) -> usize {
         self.records.len()
@@ -433,5 +438,32 @@ mod tests {
         for sample in &batch {
             assert_eq!(sample.negatives.len(), 2);
         }
+    }
+
+    #[test]
+    fn test_unique_states() {
+        let mut records = make_test_records(); // 10 records with 10 unique state_pp values
+        // Duplicate some state_pp values
+        records.push(ProofStateRecord {
+            theorem_name: "thm_a".to_string(),
+            state_pp: records[0].state_pp.clone(), // duplicate
+            label: "positive".to_string(),
+            depth_from_root: 0,
+            remaining_depth: 3,
+            llm_log_prob: -0.5,
+        });
+        records.push(ProofStateRecord {
+            theorem_name: "thm_b".to_string(),
+            state_pp: records[6].state_pp.clone(), // duplicate
+            label: "negative".to_string(),
+            depth_from_root: 0,
+            remaining_depth: -1,
+            llm_log_prob: -0.5,
+        });
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 2).unwrap();
+        let unique = sampler.unique_states();
+        // Original 10 unique states, duplicates should be deduped
+        assert_eq!(unique.len(), 10);
     }
 }

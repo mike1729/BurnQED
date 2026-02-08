@@ -11,6 +11,9 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
+arrow = { workspace = true }
+parquet = { workspace = true }
+indicatif = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

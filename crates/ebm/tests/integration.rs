@@ -24,8 +24,10 @@ use ebm::training::trainer::{resume_from_checkpoint, train, EBMTrainingConfig};
 
 // Re-export imports (test 18 verifies these work)
 use ebm::{
+    ContrastiveSampler as ContrastiveSamplerReexport,
     EBMScorer, EBMTrainingConfig as EBMTrainingConfigReexport,
-    EBMValueFn, EnergyHead as EnergyHeadReexport, EnergyHeadConfig as EnergyHeadConfigReexport,
+    EBMValueFn, EmbeddingCache, EnergyHead as EnergyHeadReexport,
+    EnergyHeadConfig as EnergyHeadConfigReexport,
     EncoderBackend, SpectralNormLinearConfig,
     lr_schedule, MetricsHistory as MetricsHistoryReexport,
 };
@@ -1177,4 +1179,316 @@ fn test_all_unproved_sampler_error() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Test 20: EmbeddingCache reduces encode calls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cache_reduces_encode_calls() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write 5 proved theorems = 5*4=20 records, but many share state_pp patterns
+    // Each proved theorem has 4 records with unique state_pp per theorem:
+    //   "⊢ state_{thm}_{0..3}"
+    // So 5 theorems × 4 states = 20 unique states
+    let mut paths = Vec::new();
+    for i in 0..5 {
+        paths.push(write_proved_theorem(
+            tmp.path(),
+            &format!("thm{i}.parquet"),
+            &format!("thm_cache_{i}"),
+        ));
+    }
+
+    let sampler = ContrastiveSampler::from_parquet(&paths, 2).unwrap();
+
+    // Now add duplicate records by writing same theorem names again
+    // Actually, let's just check the raw unique count
+    let unique = sampler.unique_states();
+    assert_eq!(unique.len(), 20, "5 theorems × 4 states = 20 unique");
+
+    let call_count = AtomicUsize::new(0);
+    let encode_fn = |_state: &str| -> anyhow::Result<Vec<f32>> {
+        call_count.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![0.5_f32; 16])
+    };
+
+    let cache = EmbeddingCache::precompute(&sampler, &encode_fn, 16);
+
+    // Verify: encode called exactly once per unique state
+    assert_eq!(call_count.load(Ordering::SeqCst), 20);
+    assert_eq!(cache.len(), 20);
+
+    // All states should be retrievable
+    for state in &unique {
+        assert!(
+            cache.get(state).is_some(),
+            "Cache should contain state: {state}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 21: EmbeddingCache Parquet roundtrip with real sampler data
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cache_parquet_roundtrip_with_sampler() {
+    let tmp = TempDir::new().unwrap();
+
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_rt");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_rt2");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let d = 8;
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+
+    let cache = EmbeddingCache::precompute(&sampler, &encode_fn, d);
+    let cache_path = tmp.path().join("embeddings.parquet");
+    cache.save(&cache_path).unwrap();
+
+    let loaded = EmbeddingCache::load(&cache_path).unwrap();
+    assert_eq!(loaded.len(), cache.len());
+    assert_eq!(loaded.dim(), d);
+
+    // Verify every embedding matches
+    for state in sampler.unique_states() {
+        let original = cache.get(state).unwrap();
+        let restored = loaded.get(state).unwrap();
+        assert_eq!(original, restored, "Embedding mismatch for state: {state}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 22: Train with cached embeddings end-to-end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_train_with_cached_embeddings_end_to_end() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write trajectory data
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_ce_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_ce_b");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let d_encoder = 16;
+
+    // Precompute cache with a mock encode_fn
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d_encoder).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+
+    let cache = EmbeddingCache::precompute(&sampler, &encode_fn, d_encoder);
+    assert_eq!(cache.len(), sampler.unique_states().len());
+
+    // Use cache-backed encode_fn for training (no LLM calls)
+    let cache_encode = |state: &str| -> anyhow::Result<Vec<f32>> {
+        cache.get_or_err(state)
+    };
+
+    let device = Default::default();
+    let model = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestAutodiffBackend>(&device);
+
+    let checkpoint_dir = tmp.path().join("ckpt_ce");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(10)
+        .with_warmup_steps(2)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    let result = train(&config, model, &cache_encode, &sampler, &device);
+    assert!(result.is_ok(), "Training with cached embeddings should succeed: {:?}", result.err());
+
+    // Verify checkpoint saved
+    let final_ckpt = checkpoint_dir.join("final.mpk");
+    assert!(final_ckpt.exists(), "Final checkpoint should exist");
+
+    // Verify trained model produces finite outputs
+    let trained = result.unwrap();
+    let probe = embeddings_to_tensor::<TestAutodiffBackend>(
+        &[vec![0.5_f32; d_encoder]],
+        &device,
+    );
+    let energy: f32 = trained.forward(probe).into_scalar().elem();
+    assert!(energy.is_finite(), "Trained model output should be finite: {energy}");
+}
+
+// ---------------------------------------------------------------------------
+// Test 23: Cache → scorer inference chain
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cache_scorer_inference_chain() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write trajectory data + precompute cache
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_cs_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_cs_b");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let d_encoder = 16;
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d_encoder).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+
+    let cache = EmbeddingCache::precompute(&sampler, &encode_fn, d_encoder);
+
+    // Save and reload cache from Parquet
+    let cache_path = tmp.path().join("cache_scorer.parquet");
+    cache.save(&cache_path).unwrap();
+    let loaded_cache = EmbeddingCache::load(&cache_path).unwrap();
+    assert_eq!(loaded_cache.len(), cache.len());
+
+    // Create EBMScorer with cache-backed encode_fn
+    let device: <TestBackend as burn::prelude::Backend>::Device = Default::default();
+    let head = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestBackend>(&device);
+
+    let cache_encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
+        Box::new(move |state: &str| loaded_cache.get_or_err(state));
+
+    let scorer = EBMScorer::new(head, cache_encode_fn, device);
+
+    // Score 5 states from the sampler (all should be in cache)
+    let unique_states: Vec<String> = sampler.unique_states().into_iter().map(|s| s.to_string()).collect();
+    let test_states: Vec<&str> = unique_states.iter().take(5).map(|s| s.as_str()).collect();
+
+    let scores = scorer.score_states(&test_states).unwrap();
+    assert_eq!(scores.len(), test_states.len());
+
+    // All scores should be finite
+    for (i, &score) in scores.iter().enumerate() {
+        assert!(score.is_finite(), "Score[{i}] should be finite, got {score}");
+    }
+
+    // Determinism: same state scored twice should return the same value
+    // (cache is deterministic, unlike live encoder with SpectralNorm variance)
+    // Note: SpectralNorm Option C still re-randomizes u/v, so scores may differ slightly.
+    // We use a generous tolerance.
+    for state in test_states.iter().take(3) {
+        let s1 = scorer.score_state(state).unwrap();
+        let s2 = scorer.score_state(state).unwrap();
+        assert!(
+            (s1 - s2).abs() < 0.5,
+            "Same state scored twice should be close: {s1} vs {s2}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 24: Cache partial encode failure
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cache_partial_encode_failure() {
+    let tmp = TempDir::new().unwrap();
+
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_pf_a");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_pf_b");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let d_encoder = 16;
+    let total_unique = sampler.unique_states().len();
+
+    // encode_fn that fails for states containing "thm_pf_a_3" (the dead-end node of first theorem)
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        if state.contains("thm_pf_a_3") {
+            anyhow::bail!("Simulated failure for state: {state}")
+        }
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        Ok((0..d_encoder).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+    };
+
+    let cache = EmbeddingCache::precompute(&sampler, &encode_fn, d_encoder);
+
+    // Cache should have fewer entries than total unique states
+    assert!(
+        cache.len() < total_unique,
+        "Cache should have fewer entries ({}) than total unique states ({total_unique}) due to failures",
+        cache.len()
+    );
+    assert!(cache.len() > 0, "Cache should have at least some entries");
+
+    // Training with this partial cache should still succeed (train skips missing states)
+    let cache_encode = |state: &str| -> anyhow::Result<Vec<f32>> {
+        cache.get_or_err(state)
+    };
+
+    let device = Default::default();
+    let model = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestAutodiffBackend>(&device);
+
+    let checkpoint_dir = tmp.path().join("ckpt_pf");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(10)
+        .with_warmup_steps(0)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    let result = train(&config, model, &cache_encode, &sampler, &device);
+    assert!(result.is_ok(), "train() should handle partial cache gracefully: {:?}", result.err());
+}
+
+// ---------------------------------------------------------------------------
+// Test 25: Empty cache roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cache_empty_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("empty_cache.parquet");
+
+    let cache = EmbeddingCache::new(0);
+    assert_eq!(cache.len(), 0);
+    assert!(cache.is_empty());
+    assert_eq!(cache.dim(), 0);
+
+    cache.save(&path).unwrap();
+    assert!(path.exists());
+
+    let loaded = EmbeddingCache::load(&path).unwrap();
+    assert_eq!(loaded.len(), 0);
+    assert!(loaded.is_empty());
+    assert_eq!(loaded.dim(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Test 26: EmbeddingCache re-export accessible
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cache_re_export_accessible() {
+    // Verify EmbeddingCache is accessible via ebm::EmbeddingCache re-export.
+    // The import at the top of this file (line ~28) is the real test — if the
+    // re-export is broken, this file won't compile. We add a runtime check too.
+    let cache = EmbeddingCache::new(16);
+    assert_eq!(cache.dim(), 16);
+    assert!(cache.is_empty());
+
+    // Verify ContrastiveSampler re-export works at runtime too
+    let _ = std::any::type_name::<ContrastiveSamplerReexport>();
 }

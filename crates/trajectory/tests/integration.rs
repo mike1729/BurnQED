@@ -280,3 +280,79 @@ fn test_multi_theorem_pipeline() {
     let positive_count = proved.iter().filter(|r| r.label == TrajectoryLabel::Positive).count();
     assert_eq!(positive_count, 3); // root, 1, 2 on path
 }
+
+/// Two theorems with overlapping state_ids — verify independent labeling.
+///
+/// Realistic scenario: Pantograph restarts state IDs per worker, so different
+/// theorems can have the same state_id values (0, 1, 2).
+#[test]
+fn test_overlapping_state_ids_across_theorems() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("overlap.parquet");
+
+    let mut writer = TrajectoryWriter::new(path.clone());
+
+    // Theorem A: proved (root 0 → 1 → 2 QED)
+    let result_a = SearchResult {
+        theorem_name: "thm_a".to_string(),
+        proved: true,
+        proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
+        nodes_expanded: 3,
+        total_states: 3,
+        max_depth_reached: 2,
+        wall_time_ms: 100,
+        all_records: vec![
+            make_record("thm_a", 0, None, 0, false),
+            make_record("thm_a", 1, Some(0), 1, false),
+            make_record("thm_a", 2, Some(1), 2, true),
+        ],
+        stats: SearchStats::default(),
+    };
+
+    // Theorem B: unproved (root 0 → 1 dead end, → 2 dead end)
+    // Same state_ids as theorem A!
+    let result_b = SearchResult {
+        theorem_name: "thm_b".to_string(),
+        proved: false,
+        proof_tactics: vec![],
+        nodes_expanded: 3,
+        total_states: 3,
+        max_depth_reached: 1,
+        wall_time_ms: 200,
+        all_records: vec![
+            make_record("thm_b", 0, None, 0, false),
+            make_record("thm_b", 1, Some(0), 1, false),
+            make_record("thm_b", 2, Some(0), 1, false),
+        ],
+        stats: SearchStats::default(),
+    };
+
+    // Label independently and write
+    writer.record_all(TrajectoryWriter::from_search_result(&result_a));
+    writer.record_all(TrajectoryWriter::from_search_result(&result_b));
+    writer.finish().unwrap();
+
+    // Read back all records
+    let all = TrajectoryReader::read_all(&path).unwrap();
+    assert_eq!(all.len(), 6); // 3 + 3
+
+    // Build per-theorem maps
+    let thm_a_records: Vec<_> = all.iter().filter(|r| r.theorem_name == "thm_a").collect();
+    let thm_b_records: Vec<_> = all.iter().filter(|r| r.theorem_name == "thm_b").collect();
+    assert_eq!(thm_a_records.len(), 3);
+    assert_eq!(thm_b_records.len(), 3);
+
+    // Theorem A (proved): state_id 0 → Positive
+    let a_by_id: HashMap<u64, &TrajectoryRecord> =
+        thm_a_records.iter().map(|r| (r.state_id, *r)).collect();
+    assert_eq!(a_by_id[&0].label, TrajectoryLabel::Positive, "thm_a state_id=0 should be Positive");
+    assert_eq!(a_by_id[&1].label, TrajectoryLabel::Positive, "thm_a state_id=1 should be Positive");
+    assert_eq!(a_by_id[&2].label, TrajectoryLabel::Positive, "thm_a state_id=2 should be Positive (QED)");
+
+    // Theorem B (unproved): state_id 0 → Negative (independent of thm_a!)
+    let b_by_id: HashMap<u64, &TrajectoryRecord> =
+        thm_b_records.iter().map(|r| (r.state_id, *r)).collect();
+    assert_eq!(b_by_id[&0].label, TrajectoryLabel::Negative, "thm_b state_id=0 should be Negative");
+    assert_eq!(b_by_id[&1].label, TrajectoryLabel::Negative, "thm_b state_id=1 should be Negative");
+    assert_eq!(b_by_id[&2].label, TrajectoryLabel::Negative, "thm_b state_id=2 should be Negative");
+}

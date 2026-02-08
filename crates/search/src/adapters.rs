@@ -55,17 +55,33 @@ impl TacticRunner for ProofHandleOwned {
 ///
 /// `TacticGenerator` requires `&mut self` for generation (due to KV cache),
 /// so we wrap it in a `Mutex` to satisfy the `Send + Sync` bounds on
-/// `PolicyProvider`.
+/// `PolicyProvider`. The `Arc` allows sharing the generator with other
+/// components (e.g. the EBM encoder closure).
 pub struct MutexPolicyProvider {
-    generator: std::sync::Mutex<TacticGenerator>,
+    generator: Arc<std::sync::Mutex<TacticGenerator>>,
 }
 
 impl MutexPolicyProvider {
     /// Create a new `MutexPolicyProvider` wrapping the given generator.
     pub fn new(generator: TacticGenerator) -> Self {
         Self {
-            generator: std::sync::Mutex::new(generator),
+            generator: Arc::new(std::sync::Mutex::new(generator)),
         }
+    }
+
+    /// Create a new `MutexPolicyProvider` from a pre-shared `Arc<Mutex<TacticGenerator>>`.
+    ///
+    /// Use this when the same generator needs to be shared with other components
+    /// (e.g. an EBM encode closure that calls `encode_only()`).
+    pub fn new_shared(generator: Arc<std::sync::Mutex<TacticGenerator>>) -> Self {
+        Self { generator }
+    }
+
+    /// Get a clone of the internal `Arc<Mutex<TacticGenerator>>`.
+    ///
+    /// Useful for creating encode closures that share the generator.
+    pub fn shared_generator(&self) -> Arc<std::sync::Mutex<TacticGenerator>> {
+        self.generator.clone()
     }
 }
 

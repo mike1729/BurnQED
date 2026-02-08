@@ -109,9 +109,9 @@ burn-qed/
 │       ├── src/
 │       │   ├── main.rs                 # clap: search, eval, train-ebm subcommands
 │       │   ├── config.rs               # SearchToml, LeanPoolOverrides, TOML loading
-│       │   └── pipeline.rs             # run_search() (async), run_eval() (sync)
+│       │   └── pipeline.rs             # run_search() (async), run_eval() (sync), run_train_ebm()
 │       └── tests/
-│           └── integration.rs          # 5 mock tests + 1 #[ignore] Lean test
+│           └── integration.rs          # 7 mock tests + 1 #[ignore] Lean test
 │
 ├── data/
 │   └── test_theorems.json              # 12 Init-only theorems for testing
@@ -494,10 +494,10 @@ writer.finish()?;
 
 **prover-core CLI:**
 - `config.rs`: `SearchToml`, `LeanPoolOverrides`, `load_search_toml()`, `build_lean_pool_config()`
-- `pipeline.rs`: `run_search()` (async, CTRL-C handling, enhanced summary, `--dry-run`), `run_eval()` (sync summary)
-- `main.rs`: clap CLI with `search` (incl. `--dry-run`), `eval`, `train-ebm` subcommands
+- `pipeline.rs`: `run_search()` (async, CTRL-C handling, EBM loading, `--dry-run`), `run_eval()` (sync), `run_train_ebm()` (sync, trains EBM from Parquet)
+- `main.rs`: clap CLI with `search` (incl. `--dry-run`, `--ebm-path`), `eval`, `train-ebm` subcommands
 - Priority chain for config: `with_bundled_pantograph()` defaults < TOML values < `--num-workers` CLI flag
-- EBM scorer stubbed as `None` — Phase 4 adds `--ebm-path` flag and passes `Some(&ebm)`
+- EBM integration: `--ebm-path` loads `EnergyHeadConfig` + checkpoint, shares `TacticGenerator` via `Arc<Mutex>` for both policy and EBM encoding
 
 **Test data:**
 - `data/test_theorems.json`: 12 Init-only theorems (True, False→False, nat_refl, and_comm, etc.)
@@ -512,6 +512,13 @@ cargo run -p prover-core -- search \
   --output output/trajectory.parquet \
   --num-workers 4
 
+# Run proof search with EBM value guidance:
+cargo run -p prover-core -- search \
+  --model-path models/deepseek-prover-v2-7b \
+  --theorems data/test_theorems.json \
+  --output output/trajectory.parquet \
+  --ebm-path checkpoints/ebm
+
 # Verify environment setup without searching:
 cargo run -p prover-core -- search --dry-run \
   --model-path models/deepseek-prover-v2-7b \
@@ -521,8 +528,19 @@ cargo run -p prover-core -- search --dry-run \
 # Print trajectory statistics:
 cargo run -p prover-core -- eval --input output/trajectory.parquet
 
-# Train EBM (Phase 4 stub):
-cargo run -p prover-core -- train-ebm
+# Train EBM from trajectory data:
+cargo run -p prover-core -- train-ebm \
+  --trajectories output/trajectory.parquet \
+  --llm-path models/deepseek-prover-v2-7b \
+  --output-dir checkpoints/ebm \
+  --steps 50000
+
+# Resume EBM training from checkpoint:
+cargo run -p prover-core -- train-ebm \
+  --trajectories output/trajectory.parquet \
+  --llm-path models/deepseek-prover-v2-7b \
+  --output-dir checkpoints/ebm_v2 \
+  --resume-from checkpoints/ebm
 ```
 
 ### Phase 3 Test Coverage
@@ -531,7 +549,7 @@ cargo run -p prover-core -- train-ebm
 cargo test -p trajectory         # 18 unit tests + 6 integration tests
 cargo test -p search             # 31 unit tests (config: 4, node: 8, engine: 10, mocks: 8, + 1 doc)
 cargo test -p search -- --ignored --test-threads=1  # 11 integration tests (need Pantograph, ~60s)
-cargo test -p prover-core        # 3 unit tests (config) + 5 integration tests (mocks + JSON + TOML)
+cargo test -p prover-core        # 3 unit tests (config) + 7 integration tests (mocks + JSON + TOML + EBM)
 cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration test (~15s)
 
 # Trajectory unit tests:
@@ -576,6 +594,8 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 # - Load test_theorems.json: verify >= 10 theorems
 # - Eval reads Parquet: manually write + read_summary
 # - Real search.toml is valid TOML
+# - Train EBM mock pipeline: synthetic Parquet + mock encode_fn, verify checkpoint + config
+# - Search with mock EBM: small EnergyHead saved/loaded, mock search with scorer active
 
 # Prover-core Lean integration test (#[ignore], requires Pantograph):
 # - Real LeanPool + MockPolicy: search 3 theorems, verify >= 2 proved, Parquet output
@@ -584,12 +604,14 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 ### Cross-Crate Integration
 
 - **Running search**: `cargo run -p prover-core -- search --model-path ... --theorems ... --output ...`
+- **Search with EBM**: `cargo run -p prover-core -- search --ebm-path checkpoints/ebm ...` — loads `energy_head_config.json` + `final.mpk` from the checkpoint dir, shares the `TacticGenerator` between policy and EBM encode closure via `Arc<Mutex<TacticGenerator>>`
 - **Dry-run validation**: `cargo run -p prover-core -- search --dry-run --model-path ... --theorems ...` — loads model, pool, theorems, verifies setup, exits without searching
 - **CTRL-C handling**: Graceful interruption during search loop. Partial results are written to Parquet with an enhanced summary noting the interruption.
 - **Reading trajectories**: `TrajectoryReader::read_all(path)` returns `Vec<TrajectoryRecord>`
 - **Label logic**: `TrajectoryWriter::from_search_result()` — proved theorems get Positive labels on the proof path (root→QED), Negative on dead ends. Unproved theorems are all Negative.
 - **SearchStats**: Each `SearchResult` includes `stats: SearchStats` with per-search timing (Lean time, generation time), node counts (expanded, pruned, terminal), and peak frontier size.
-- **Parquet → EBM training**: Phase 4 reads trajectory Parquet files via `TrajectoryReader`, uses positive/negative labels for contrastive loss and `remaining_depth` for regression loss.
+- **Parquet → EBM training**: `cargo run -p prover-core -- train-ebm --trajectories ... --llm-path ...` reads trajectory Parquet files, creates `ContrastiveSampler`, trains EBM via `ebm::train()`, saves checkpoint + `energy_head_config.json`.
+- **MutexPolicyProvider sharing**: `new_shared(Arc<Mutex<TacticGenerator>>)` and `shared_generator()` methods allow the same generator to be used for both policy and EBM encoding.
 
 ## Testing Policy
 
