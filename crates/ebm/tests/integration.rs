@@ -2,8 +2,10 @@
 //!
 //! These tests exercise cross-module interactions: EnergyHead + loss + optimizer,
 //! bridge -> model -> extraction pipeline, Parquet -> ContrastiveSampler pipeline,
-//! and full training step simulations. All use NdArray backend and synthetic data —
-//! no Lean, no LLM model needed.
+//! full training step simulations, and end-to-end train/checkpoint/resume flows.
+//! All use NdArray backend and synthetic data — no Lean, no LLM model needed.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
@@ -18,6 +20,7 @@ use ebm::model::energy_head::EnergyHeadConfig;
 use ebm::training::data::ContrastiveSampler;
 use ebm::training::loss::{depth_regression_loss, info_nce_loss};
 use ebm::training::metrics::{EBMMetrics, MetricsHistory};
+use ebm::training::trainer::{resume_from_checkpoint, train, EBMTrainingConfig};
 use trajectory::{
     SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord, TrajectoryWriter,
 };
@@ -596,5 +599,261 @@ fn test_loss_gradient_direction() {
     assert!(
         gap_after > gap_before,
         "After training, energy gap should increase: before={gap_before:.4}, after={gap_after:.4}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Full train() loop with mock encoder (happy path)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_train_small_loop() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write trajectory data: 2 proved theorems for pos+neg records
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_x");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_y");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let device = Default::default();
+    let d_encoder = 16;
+    let model = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestAutodiffBackend>(&device);
+
+    // Mock encode_fn: deterministic embedding based on string hash
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        let base = (hash as f32) / 1000.0;
+        Ok((0..d_encoder).map(|i| (base + i as f32 * 0.1).sin()).collect())
+    };
+
+    let checkpoint_dir = tmp.path().join("ckpt");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(10)
+        .with_warmup_steps(2)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(5)
+        .with_checkpoint_interval(0) // disable mid-training checkpoints
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    let trained = train(&config, model, &encode_fn, &sampler, &device);
+    assert!(trained.is_ok(), "train() should succeed: {:?}", trained.err());
+
+    let trained_model = trained.unwrap();
+
+    // Verify trained model still produces finite outputs
+    let probe = embeddings_to_tensor::<TestAutodiffBackend>(
+        &[vec![0.5_f32; d_encoder], vec![-0.5_f32; d_encoder]],
+        &device,
+    );
+    let energies = trained_model.forward(probe);
+    let vals: Vec<f32> = energies.into_data().to_vec().unwrap();
+    for (i, &v) in vals.iter().enumerate() {
+        assert!(v.is_finite(), "Energy[{i}] is not finite after training: {v}");
+    }
+
+    // Verify final checkpoint was saved
+    let final_path = checkpoint_dir.join("final.mpk");
+    assert!(
+        final_path.exists(),
+        "Final checkpoint should exist at {final_path:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Checkpoint save then resume_from_checkpoint() roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_checkpoint_save_and_resume() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write trajectory data
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_ckpt");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_ckpt2");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let device = Default::default();
+    let d_encoder = 16;
+    let head_config = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+    let model = head_config.init::<TestAutodiffBackend>(&device);
+
+    let encode_fn = |_state: &str| -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.42_f32; d_encoder])
+    };
+
+    let checkpoint_dir = tmp.path().join("ckpt_roundtrip");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)  // disable logging
+        .with_checkpoint_interval(0) // disable mid-training checkpoints
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    // Train and save
+    let trained = train(&config, model, &encode_fn, &sampler, &device).unwrap();
+
+    // Get output from trained model on a fixed input
+    let probe_data = vec![0.1_f32; d_encoder];
+    let probe_tensor = embeddings_to_tensor::<TestAutodiffBackend>(&[probe_data.clone()], &device);
+    let energy_before: f32 = trained.forward(probe_tensor).into_scalar().elem();
+
+    // Resume from the saved final checkpoint
+    let final_ckpt = checkpoint_dir.join("final");
+    let loaded: ebm::model::energy_head::EnergyHead<TestBackend> =
+        resume_from_checkpoint(&final_ckpt, &head_config, &device).unwrap();
+
+    // Get output from loaded model on the same input
+    let probe_tensor2 = embeddings_to_tensor::<TestBackend>(&[probe_data], &device);
+    let energy_after: f32 = loaded.forward(probe_tensor2).into_scalar().elem();
+
+    // Outputs should be close. Not exact because SpectralNormLinear uses random
+    // u/v vectors (Option C reinit) on each forward call, so different backend
+    // instantiations may have slightly different spectral norm estimates.
+    assert!(
+        (energy_before - energy_after).abs() < 0.1,
+        "Loaded model should produce similar energy: trained={energy_before}, loaded={energy_after}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: train() recovers from encode_fn failures
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_train_encode_failure_recovery() {
+    let tmp = TempDir::new().unwrap();
+
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_fail");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_fail2");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let device = Default::default();
+    let d_encoder = 16;
+    let model = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestAutodiffBackend>(&device);
+
+    // encode_fn that fails on odd-numbered calls
+    let call_count = AtomicUsize::new(0);
+    let encode_fn = |_state: &str| -> anyhow::Result<Vec<f32>> {
+        let n = call_count.fetch_add(1, Ordering::SeqCst);
+        if n % 3 == 1 {
+            anyhow::bail!("Simulated encoding failure at call {n}")
+        }
+        Ok(vec![0.5_f32; d_encoder])
+    };
+
+    let checkpoint_dir = tmp.path().join("ckpt_fail");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(10)
+        .with_warmup_steps(0)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    // Should NOT panic — skips failed steps and continues
+    let result = train(&config, model, &encode_fn, &sampler, &device);
+    assert!(
+        result.is_ok(),
+        "train() should handle encode failures gracefully: {:?}",
+        result.err()
+    );
+
+    // Verify encode_fn was actually called (some calls succeeded, some failed)
+    let total_calls = call_count.load(Ordering::SeqCst);
+    assert!(
+        total_calls > 0,
+        "encode_fn should have been called at least once"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: depth_loss_weight=0 vs depth_loss_weight=1 produces different models
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_train_depth_loss_weight_effect() {
+    let tmp = TempDir::new().unwrap();
+
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_dw");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_dw2");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let device = Default::default();
+    let d_encoder = 16;
+
+    // Deterministic encode_fn for reproducibility
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+        let base = (hash as f32) / 500.0;
+        Ok((0..d_encoder).map(|i| (base + i as f32 * 0.05).sin()).collect())
+    };
+
+    // Train with depth_loss_weight = 0 (contrastive only)
+    let ckpt_dir_0 = tmp.path().join("ckpt_dw0");
+    let config_no_depth = EBMTrainingConfig::new()
+        .with_total_steps(20)
+        .with_warmup_steps(2)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_depth_loss_weight(0.0)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(ckpt_dir_0.to_string_lossy().to_string());
+
+    let model_0 = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestAutodiffBackend>(&device);
+    let trained_0 = train(&config_no_depth, model_0, &encode_fn, &sampler, &device).unwrap();
+
+    // Train with depth_loss_weight = 5.0 (heavy depth regression)
+    let ckpt_dir_5 = tmp.path().join("ckpt_dw5");
+    let config_heavy_depth = EBMTrainingConfig::new()
+        .with_total_steps(20)
+        .with_warmup_steps(2)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_depth_loss_weight(5.0)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(ckpt_dir_5.to_string_lossy().to_string());
+
+    let model_5 = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init::<TestAutodiffBackend>(&device);
+    let trained_5 = train(&config_heavy_depth, model_5, &encode_fn, &sampler, &device).unwrap();
+
+    // Compare outputs on same probe input — different weight configs should diverge
+    let probe = embeddings_to_tensor::<TestAutodiffBackend>(
+        &[vec![0.3_f32; d_encoder], vec![-0.3_f32; d_encoder]],
+        &device,
+    );
+
+    let e0: Vec<f32> = trained_0.forward(probe.clone()).into_data().to_vec().unwrap();
+    let e5: Vec<f32> = trained_5.forward(probe).into_data().to_vec().unwrap();
+
+    // At least one energy value should differ between the two models
+    let max_diff: f32 = e0.iter().zip(e5.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
+    assert!(
+        max_diff > 1e-6,
+        "Models trained with different depth_loss_weight should produce different energies, max_diff={max_diff}"
     );
 }
