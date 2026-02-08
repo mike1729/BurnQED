@@ -23,7 +23,7 @@ candle-nn = "0.8"
 candle-transformers = "0.8"
 
 # EBM training + inference (burn)
-burn = { version = "0.16", features = ["train", "autodiff", "metrics", "dataset"] }
+burn = { version = "0.16", features = ["train", "autodiff", "metrics", "dataset", "ndarray"] }
 
 # Tokenization
 tokenizers = "0.21"

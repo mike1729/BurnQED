@@ -7,3 +7,4 @@ edition = "2021"
 burn = { workspace = true }
 burn-contrib = { path = "../burn-contrib" }
 tracing = { workspace = true }
+rand = { workspace = true }
