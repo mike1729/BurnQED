@@ -6,7 +6,9 @@ use async_trait::async_trait;
 use lean_repl::{LeanPool, ProofHandleOwned, ProofState, TacticResult};
 use policy::{GeneratedTactic, TacticGenerator};
 
-use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner};
+use ebm::inference::EBMValueFn;
+
+use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner, ValueScorer};
 
 // ---------------------------------------------------------------------------
 // ProofEnvironment for Arc<LeanPool>
@@ -79,5 +81,15 @@ impl PolicyProvider for MutexPolicyProvider {
             .map_err(|e| SearchError::Policy(anyhow::anyhow!("{e}")))?;
         gen.generate_candidates(proof_state, n)
             .map_err(SearchError::Policy)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ValueScorer for EBMValueFn
+// ---------------------------------------------------------------------------
+
+impl ValueScorer for EBMValueFn {
+    fn score(&self, proof_state: &str) -> Result<f64, SearchError> {
+        self.score(proof_state).map_err(SearchError::Scorer)
     }
 }
