@@ -14,13 +14,21 @@ use burn::prelude::*;
 use burn::tensor::{Distribution, TensorData};
 use tempfile::TempDir;
 
-use ebm::model::bridge::{embeddings_to_tensor, tensor_to_vec};
+use ebm::bridge::{embeddings_to_tensor, tensor_to_vec};
 use ebm::model::energy_head::EnergyHeadConfig;
 
 use ebm::training::data::ContrastiveSampler;
 use ebm::training::loss::{depth_regression_loss, info_nce_loss};
 use ebm::training::metrics::{EBMMetrics, MetricsHistory};
 use ebm::training::trainer::{resume_from_checkpoint, train, EBMTrainingConfig};
+
+// Re-export imports (test 18 verifies these work)
+use ebm::{
+    EBMScorer, EBMTrainingConfig as EBMTrainingConfigReexport,
+    EBMValueFn, EnergyHead as EnergyHeadReexport, EnergyHeadConfig as EnergyHeadConfigReexport,
+    EncoderBackend, SpectralNormLinearConfig,
+    lr_schedule, MetricsHistory as MetricsHistoryReexport,
+};
 use trajectory::{
     SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord, TrajectoryWriter,
 };
@@ -856,4 +864,317 @@ fn test_train_depth_loss_weight_effect() {
         max_diff > 1e-6,
         "Models trained with different depth_loss_weight should produce different energies, max_diff={max_diff}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Test 14: EBMScorer::load() from checkpoint end-to-end
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_ebm_scorer_load_from_checkpoint() {
+    let tmp = TempDir::new().unwrap();
+
+    // Train a small model and save
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_scorer");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_scorer2");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let device = Default::default();
+    let d_encoder = 16;
+    let head_config = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+    let model = head_config.init::<TestAutodiffBackend>(&device);
+
+    let make_encode_fn = || {
+        let dim = 16;
+        move |state: &str| -> anyhow::Result<Vec<f32>> {
+            let hash = state.bytes().fold(0u32, |acc, b| acc.wrapping_add(b as u32));
+            Ok((0..dim).map(|i| ((hash as f32 + i as f32) * 0.1).sin()).collect())
+        }
+    };
+    let encode_fn = make_encode_fn();
+
+    let checkpoint_dir = tmp.path().join("ckpt_scorer");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(5)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(0)
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    train(&config, model, &encode_fn, &sampler, &device).unwrap();
+
+    // Load via EBMScorer::load (inference backend, not autodiff)
+    let final_ckpt = checkpoint_dir.join("final");
+    let scorer: EBMScorer<TestBackend> = EBMScorer::load(
+        &final_ckpt,
+        &head_config,
+        Box::new(make_encode_fn()),
+        Default::default(),
+    )
+    .unwrap();
+
+    // score_state should return a finite value
+    let score = scorer.score_state("⊢ True").unwrap();
+    assert!(score.is_finite(), "Score should be finite, got {score}");
+
+    // score_states batch should match length
+    let states = ["⊢ True", "n : Nat\n⊢ n = n", "⊢ False → False"];
+    let scores = scorer.score_states(&states).unwrap();
+    assert_eq!(scores.len(), 3);
+    for (i, s) in scores.iter().enumerate() {
+        assert!(s.is_finite(), "Batch score[{i}] should be finite, got {s}");
+    }
+
+    // Empty batch
+    let empty: Vec<f64> = scorer.score_states(&[]).unwrap();
+    assert!(empty.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Test 15: EBMValueFn backend-erased wrapper
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_ebm_value_fn_backend_erased() {
+    let device: <TestBackend as Backend>::Device = Default::default();
+    let head = EnergyHeadConfig::new(8)
+        .with_d_hidden1(4)
+        .with_d_hidden2(2)
+        .with_dropout(0.0)
+        .init::<TestBackend>(&device);
+
+    let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
+        Box::new(|state: &str| {
+            let mut emb = vec![0.0_f32; 8];
+            for (i, byte) in state.bytes().enumerate() {
+                emb[i % 8] += byte as f32 / 255.0;
+            }
+            Ok(emb)
+        });
+
+    let scorer = EBMScorer::new(head, encode_fn, device);
+    let value_fn = EBMValueFn::new(scorer);
+
+    // Score via backend-erased interface
+    let s1 = value_fn.score("⊢ True").unwrap();
+    let s2 = value_fn.score("n : Nat\nhyp : n > 0\n⊢ n + 1 > 1").unwrap();
+
+    assert!(s1.is_finite(), "Score 1 should be finite");
+    assert!(s2.is_finite(), "Score 2 should be finite");
+
+    // Different inputs should produce different scores
+    assert!(
+        (s1 - s2).abs() > 1e-6,
+        "Different states should produce different scores: {s1} vs {s2}"
+    );
+
+    // Calling score multiple times on the same input should work (mutex doesn't deadlock)
+    for _ in 0..10 {
+        let s = value_fn.score("⊢ True").unwrap();
+        assert!(s.is_finite());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 16: EncoderBackend hidden_dim sizes EnergyHead correctly
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_encoder_backend_sizes_energy_head() {
+    let device = Default::default();
+
+    // Shared backend with default dim
+    let shared = EncoderBackend::default();
+    assert_eq!(shared.hidden_dim(), 4096);
+
+    // Use hidden_dim to construct a matching EnergyHead
+    let small_dim = 32;
+    let backend = EncoderBackend::Shared { hidden_dim: small_dim };
+    let head = EnergyHeadConfig::new(backend.hidden_dim())
+        .with_d_hidden1(16)
+        .with_d_hidden2(8)
+        .with_dropout(0.0)
+        .init::<TestBackend>(&device);
+
+    // Forward pass with matching-dimension input should succeed
+    let input = Tensor::<TestBackend, 2>::random(
+        [4, small_dim],
+        Distribution::Normal(0.0, 1.0),
+        &device,
+    );
+    let output = head.forward(input);
+    assert_eq!(output.dims(), [4]);
+
+    // Dedicated variant
+    let dedicated = EncoderBackend::Dedicated { hidden_dim: 1024 };
+    let head2 = EnergyHeadConfig::new(dedicated.hidden_dim())
+        .with_d_hidden1(64)
+        .with_d_hidden2(32)
+        .with_dropout(0.0)
+        .init::<TestBackend>(&device);
+
+    let input2 = Tensor::<TestBackend, 2>::random(
+        [2, 1024],
+        Distribution::Normal(0.0, 1.0),
+        &device,
+    );
+    let output2 = head2.forward(input2);
+    assert_eq!(output2.dims(), [2]);
+
+    // TOML roundtrip → correct dim
+    let toml_str = r#"
+type = "Shared"
+hidden_dim = 64
+"#;
+    let parsed: EncoderBackend = toml::from_str(toml_str).unwrap();
+    assert_eq!(parsed.hidden_dim(), 64);
+    let head3 = EnergyHeadConfig::new(parsed.hidden_dim())
+        .with_d_hidden1(16)
+        .with_d_hidden2(8)
+        .with_dropout(0.0)
+        .init::<TestBackend>(&device);
+    let input3 = Tensor::<TestBackend, 2>::random(
+        [1, 64],
+        Distribution::Normal(0.0, 1.0),
+        &device,
+    );
+    let output3 = head3.forward(input3);
+    assert_eq!(output3.dims(), [1]);
+}
+
+// ---------------------------------------------------------------------------
+// Test 17: Mid-training checkpoint roundtrip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mid_training_checkpoint_roundtrip() {
+    let tmp = TempDir::new().unwrap();
+
+    let path1 = write_proved_theorem(tmp.path(), "thm1.parquet", "thm_midckpt");
+    let path2 = write_proved_theorem(tmp.path(), "thm2.parquet", "thm_midckpt2");
+    let sampler = ContrastiveSampler::from_parquet(&[path1, path2], 2).unwrap();
+
+    let device = Default::default();
+    let d_encoder = 16;
+    let head_config = EnergyHeadConfig::new(d_encoder)
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0);
+    let model = head_config.init::<TestAutodiffBackend>(&device);
+
+    let encode_fn = |_state: &str| -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.3_f32; d_encoder])
+    };
+
+    let checkpoint_dir = tmp.path().join("ckpt_mid");
+    let config = EBMTrainingConfig::new()
+        .with_total_steps(12)
+        .with_warmup_steps(1)
+        .with_batch_size(2)
+        .with_k_negatives(2)
+        .with_log_interval(0)
+        .with_checkpoint_interval(5) // save at step 5 and 10
+        .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
+
+    train(&config, model, &encode_fn, &sampler, &device).unwrap();
+
+    // Verify mid-training checkpoints exist
+    let step5_path = checkpoint_dir.join("step_5.mpk");
+    let step10_path = checkpoint_dir.join("step_10.mpk");
+    let final_path = checkpoint_dir.join("final.mpk");
+
+    assert!(step5_path.exists(), "Step 5 checkpoint should exist at {step5_path:?}");
+    assert!(step10_path.exists(), "Step 10 checkpoint should exist at {step10_path:?}");
+    assert!(final_path.exists(), "Final checkpoint should exist at {final_path:?}");
+
+    // Load step-5 checkpoint and verify it produces valid output
+    let step5_ckpt = checkpoint_dir.join("step_5");
+    let loaded: ebm::EnergyHead<TestBackend> =
+        resume_from_checkpoint(&step5_ckpt, &head_config, &Default::default()).unwrap();
+
+    let probe = embeddings_to_tensor::<TestBackend>(&[vec![0.5_f32; d_encoder]], &Default::default());
+    let energy: f32 = loaded.forward(probe).into_scalar().elem();
+    assert!(energy.is_finite(), "Mid-checkpoint energy should be finite, got {energy}");
+}
+
+// ---------------------------------------------------------------------------
+// Test 18: Re-exports are accessible via ebm::*
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_re_exports_accessible() {
+    // This test verifies that all key types are accessible through the
+    // top-level ebm:: re-exports. If any re-export is broken, this test
+    // fails at compile time (the imports at the top of this file).
+    // Here we just verify a few runtime properties to ensure the types
+    // are the same as the deep-path versions.
+
+    let device: <TestBackend as Backend>::Device = Default::default();
+
+    // EnergyHeadConfig re-export
+    let config: EnergyHeadConfigReexport = EnergyHeadConfigReexport::new(16);
+    assert_eq!(config.d_encoder, 16);
+
+    // EnergyHead re-export
+    let _head: EnergyHeadReexport<TestBackend> = config
+        .with_d_hidden1(8)
+        .with_d_hidden2(4)
+        .with_dropout(0.0)
+        .init(&device);
+
+    // EncoderBackend re-export
+    let backend = EncoderBackend::default();
+    assert_eq!(backend.hidden_dim(), 4096);
+
+    // EBMTrainingConfig re-export
+    let train_config = EBMTrainingConfigReexport::new();
+    assert_eq!(train_config.total_steps, 50_000);
+
+    // lr_schedule re-export
+    let lr = lr_schedule(1e-4, 100, 1000, 50);
+    assert!(lr > 0.0 && lr < 1e-4);
+
+    // MetricsHistory re-export
+    let history = MetricsHistoryReexport::new();
+    assert!(history.is_empty());
+
+    // SpectralNormLinearConfig re-export
+    let _snl_config = SpectralNormLinearConfig::new(8, 4);
+
+    // Verify types are identical by using deep-path and re-export interchangeably:
+    // If these were different types, the assignment would fail.
+    let deep_config = ebm::model::energy_head::EnergyHeadConfig::new(32);
+    let _reexport_config: EnergyHeadConfigReexport = deep_config;
+}
+
+// ---------------------------------------------------------------------------
+// Test 19: All-unproved data produces sampler error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_all_unproved_sampler_error() {
+    let tmp = TempDir::new().unwrap();
+
+    // Write only unproved theorems — these produce only negative labels
+    let path1 = write_unproved_theorem(tmp.path(), "unproved1.parquet", "thm_fail_a");
+    let path2 = write_unproved_theorem(tmp.path(), "unproved2.parquet", "thm_fail_b");
+
+    // ContrastiveSampler requires theorems with BOTH positive and negative records.
+    // All-unproved data has only negative records → no eligible theorems → error.
+    let result = ContrastiveSampler::from_parquet(&[path1, path2], 2);
+    match result {
+        Ok(_) => panic!("Sampler should error when no eligible theorems exist (all unproved)"),
+        Err(e) => {
+            let err_msg = e.to_string();
+            assert!(
+                err_msg.contains("No eligible theorems"),
+                "Error should mention missing eligible theorems, got: {err_msg}"
+            );
+        }
+    }
 }

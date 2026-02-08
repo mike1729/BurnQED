@@ -152,20 +152,28 @@ impl MetricsHistory {
     }
 
     /// Record metrics at a given training step.
+    ///
+    /// # Arguments
+    /// - `step`: the training step number (used for logging/plotting).
+    /// - `metrics`: the [`EBMMetrics`] snapshot for this step.
     pub fn push(&mut self, step: usize, metrics: EBMMetrics) {
         self.history.push((step, metrics));
     }
 
-    /// Get the most recent metrics entry.
+    /// Returns the most recent [`EBMMetrics`] entry, or `None` if empty.
     pub fn last(&self) -> Option<&EBMMetrics> {
         self.history.last().map(|(_, m)| m)
     }
 
     /// Check if training is improving over the last `window` entries.
     ///
-    /// Returns true if the energy gap is trending upward (increasing),
-    /// which indicates the model is learning to separate positive from
-    /// negative states.
+    /// Compares the energy gap of the oldest and newest entries within the
+    /// window. Returns `true` if the gap increased (model is learning to
+    /// separate positive from negative states), `false` otherwise or if
+    /// fewer than 2 entries exist.
+    ///
+    /// # Arguments
+    /// - `window`: number of recent entries to consider. Must be >= 2.
     pub fn is_improving(&self, window: usize) -> bool {
         if self.history.len() < 2 || window < 2 {
             return false;
@@ -183,12 +191,12 @@ impl MetricsHistory {
         last_gap > first_gap
     }
 
-    /// Number of recorded entries.
+    /// Returns the number of recorded entries.
     pub fn len(&self) -> usize {
         self.history.len()
     }
 
-    /// Whether the history is empty.
+    /// Returns `true` if no metrics have been recorded.
     pub fn is_empty(&self) -> bool {
         self.history.is_empty()
     }
