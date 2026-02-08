@@ -298,11 +298,11 @@ The `⊢` symbol separates hypotheses from the goal. This is the string you'll t
 - [x] **Phase 1: Lean REPL** — Pantograph client with worker pool, ProofHandle pattern, and recycling
 - [x] **Phase 2: LLM in candle** — TacticGenerator with generate, encode_only, forked Llama
 - [x] **Phase 3: Search + trajectory + CLI** — Search engine, trajectory Parquet I/O, prover-core CLI
-- [ ] Phase 4: EBM in burn-rs
+- [x] **Phase 4: EBM** — EnergyHead, training loop, inference, CLI integration
 - [ ] Phase 5: Expert iteration
 - [ ] Phase 6: burn-rs PRs
 
-## Current Phase: 4 (EBM in burn-rs)
+## Current Phase: 5 (Expert Iteration)
 
 ### Phase 0 Deliverable (DONE)
 All crates exist as stubs. `cargo check --workspace` passes.
@@ -600,6 +600,32 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 # Prover-core Lean integration test (#[ignore], requires Pantograph):
 # - Real LeanPool + MockPolicy: search 3 theorems, verify >= 2 proved, Parquet output
 ```
+
+### Phase 4 Deliverable (DONE)
+
+**EBM Model (`crates/ebm/`):**
+- `SpectralNormLinear` (Option C: random reinit, 5 power iterations)
+- `EnergyHead`: 4096→512→256→1 MLP with SiLU, dropout, learnable log_temperature
+- `bridge.rs`: Vec<f32> ↔ burn Tensor conversions
+- `EncoderBackend` enum (Shared/Dedicated) for config-driven encoder selection
+
+**Training (`crates/ebm/src/training/`):**
+- `ContrastiveSampler`: hard/medium/easy negative mining from Parquet trajectories
+- `info_nce_loss` + `depth_regression_loss`
+- `EBMMetrics` + `MetricsHistory` + `health_check()` (gradient norm, loss, temperature monitoring)
+- Training loop: AdamW optimizer, warmup+cosine LR schedule, periodic checkpointing
+- `EmbeddingCache`: precompute embeddings once, save/load as Parquet for reuse
+
+**Inference (`crates/ebm/src/inference.rs`):**
+- `EBMScorer<B>`: loads checkpoint + encode_fn, batch scoring
+- `EBMValueFn`: backend-erased wrapper implementing `search::ValueScorer` trait
+
+**CLI Integration (`crates/prover-core/`):**
+- `train-ebm` subcommand with `--embeddings-cache`, `--save-embeddings`, `--resume-from`
+- `search --ebm-path` loads EBM scorer, shares `TacticGenerator` via `Arc<Mutex>` for both policy and EBM encoding
+
+**Test Coverage:**
+- 41 unit tests + 26 integration tests (ebm: 32+9, prover-core: 3+8)
 
 ### Cross-Crate Integration
 

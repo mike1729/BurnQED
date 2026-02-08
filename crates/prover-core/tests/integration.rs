@@ -685,3 +685,325 @@ async fn test_search_with_mock_ebm() {
 
     assert!(result.proved, "Should prove True with EBM scorer");
 }
+
+// ---------------------------------------------------------------------------
+// Test: Eval with mock budgets
+// ---------------------------------------------------------------------------
+
+/// Evaluate at two budgets with mocks, verify IterationResult JSON structure.
+#[tokio::test]
+async fn test_eval_mock_budgets() {
+    // Re-define result types locally (prover-core is a binary crate, modules not importable).
+    // These match crates/prover-core/src/results.rs exactly.
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct IterationResult {
+        iteration: Option<u32>,
+        timestamp: String,
+        llm_path: String,
+        ebm_path: Option<String>,
+        benchmark: String,
+        total_theorems: u32,
+        budget_results: Vec<BudgetResult>,
+        cumulative_solved: u32,
+        cumulative_rate: f64,
+    }
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct BudgetResult {
+        budget: u32,
+        solved: u32,
+        total: u32,
+        rate: f64,
+        avg_nodes: f64,
+        avg_time_secs: f64,
+        median_time_secs: f64,
+        per_theorem: Vec<TheoremResult>,
+    }
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct TheoremResult {
+        name: String,
+        proved: bool,
+        nodes_used: u32,
+        time_secs: f64,
+    }
+
+    let mut env = MockEnvironment::new();
+    env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+
+    let mut policy = MockPolicy::new();
+    policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+    policy.add_response(
+        "⊢ ∀ (n : Nat), n = n",
+        vec![make_tactic("bad_tactic", -5.0)],
+    );
+
+    let config = SearchConfig {
+        max_nodes: 5,
+        ..SearchConfig::default()
+    };
+
+    // Evaluate at budgets [5, 10]
+    let budgets = vec![5u32, 10];
+    let theorems = vec![
+        ("true_trivial", "True"),
+        ("nat_refl", "∀ (n : Nat), n = n"),
+    ];
+
+    let mut budget_results = Vec::new();
+    let mut cumulative_solved_set = std::collections::HashSet::new();
+
+    for &budget in &budgets {
+        let mut search_config = config.clone();
+        search_config.max_nodes = budget;
+        let engine = SearchEngine::new(search_config);
+
+        let mut per_theorem = Vec::new();
+        let mut solved = 0u32;
+
+        for (name, stmt) in &theorems {
+            let result = engine
+                .search_one(&env, &policy, None, name, stmt)
+                .await
+                .unwrap();
+
+            let time_secs = result.wall_time_ms as f64 / 1000.0;
+            if result.proved {
+                solved += 1;
+                cumulative_solved_set.insert(name.to_string());
+            }
+            per_theorem.push(TheoremResult {
+                name: name.to_string(),
+                proved: result.proved,
+                nodes_used: result.nodes_expanded,
+                time_secs,
+            });
+        }
+
+        let total = theorems.len() as u32;
+        let rate = solved as f64 / total as f64;
+        budget_results.push(BudgetResult {
+            budget,
+            solved,
+            total,
+            rate,
+            avg_nodes: 0.0,
+            avg_time_secs: 0.0,
+            median_time_secs: 0.0,
+            per_theorem,
+        });
+    }
+
+    let cumulative_solved = cumulative_solved_set.len() as u32;
+    let cumulative_rate = cumulative_solved as f64 / theorems.len() as f64;
+
+    let iter_result = IterationResult {
+        iteration: None,
+        timestamp: "2026-01-01T00:00:00Z".to_string(),
+        llm_path: "test".to_string(),
+        ebm_path: None,
+        benchmark: "test".to_string(),
+        total_theorems: theorems.len() as u32,
+        budget_results,
+        cumulative_solved,
+        cumulative_rate,
+    };
+
+    // Serialize and verify structure
+    let json = serde_json::to_string_pretty(&iter_result).unwrap();
+    let loaded: IterationResult = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(loaded.budget_results.len(), 2);
+    assert_eq!(loaded.budget_results[0].budget, 5);
+    assert_eq!(loaded.budget_results[1].budget, 10);
+
+    // true_trivial should be solved at both budgets
+    for br in &loaded.budget_results {
+        assert_eq!(br.total, 2);
+        assert_eq!(br.solved, 1); // only True is provable
+        assert!(br.per_theorem.iter().any(|t| t.name == "true_trivial" && t.proved));
+        assert!(br.per_theorem.iter().any(|t| t.name == "nat_refl" && !t.proved));
+    }
+
+    assert_eq!(loaded.cumulative_solved, 1);
+}
+
+// ---------------------------------------------------------------------------
+// Test: Compare two evaluation result JSON files
+// ---------------------------------------------------------------------------
+
+/// Write two IterationResult JSON files, read them back, verify deserialization.
+#[test]
+fn test_compare_two_results() {
+    // Re-define result types locally (prover-core is a binary crate).
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct IterationResult {
+        iteration: Option<u32>,
+        timestamp: String,
+        llm_path: String,
+        ebm_path: Option<String>,
+        benchmark: String,
+        total_theorems: u32,
+        budget_results: Vec<BudgetResult>,
+        cumulative_solved: u32,
+        cumulative_rate: f64,
+    }
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct BudgetResult {
+        budget: u32,
+        solved: u32,
+        total: u32,
+        rate: f64,
+        avg_nodes: f64,
+        avg_time_secs: f64,
+        median_time_secs: f64,
+        per_theorem: Vec<TheoremResult>,
+    }
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    struct TheoremResult {
+        name: String,
+        proved: bool,
+        nodes_used: u32,
+        time_secs: f64,
+    }
+
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    let make_result = |iteration: u32, rate100: f64, rate300: f64| -> IterationResult {
+        IterationResult {
+            iteration: Some(iteration),
+            timestamp: format!("2026-01-0{}T00:00:00Z", iteration + 1),
+            llm_path: "models/test".to_string(),
+            ebm_path: None,
+            benchmark: "data/test.json".to_string(),
+            total_theorems: 10,
+            budget_results: vec![
+                BudgetResult {
+                    budget: 100,
+                    solved: (rate100 * 10.0) as u32,
+                    total: 10,
+                    rate: rate100,
+                    avg_nodes: 50.0,
+                    avg_time_secs: 5.0,
+                    median_time_secs: 4.0,
+                    per_theorem: vec![],
+                },
+                BudgetResult {
+                    budget: 300,
+                    solved: (rate300 * 10.0) as u32,
+                    total: 10,
+                    rate: rate300,
+                    avg_nodes: 150.0,
+                    avg_time_secs: 15.0,
+                    median_time_secs: 12.0,
+                    per_theorem: vec![],
+                },
+            ],
+            cumulative_solved: (rate300 * 10.0) as u32,
+            cumulative_rate: rate300,
+        }
+    };
+
+    let r0 = make_result(0, 0.25, 0.40);
+    let r1 = make_result(1, 0.30, 0.45);
+
+    let path0 = tmp.path().join("eval_0.json");
+    let path1 = tmp.path().join("eval_1.json");
+    std::fs::write(&path0, serde_json::to_string_pretty(&r0).unwrap()).unwrap();
+    std::fs::write(&path1, serde_json::to_string_pretty(&r1).unwrap()).unwrap();
+
+    // Read both back and verify
+    let loaded0: IterationResult =
+        serde_json::from_str(&std::fs::read_to_string(&path0).unwrap()).unwrap();
+    let loaded1: IterationResult =
+        serde_json::from_str(&std::fs::read_to_string(&path1).unwrap()).unwrap();
+
+    assert_eq!(loaded0.iteration, Some(0));
+    assert_eq!(loaded1.iteration, Some(1));
+    assert_eq!(loaded0.budget_results.len(), 2);
+    assert_eq!(loaded1.budget_results.len(), 2);
+
+    // Verify deltas can be computed
+    let delta_100 = loaded1.budget_results[0].rate - loaded0.budget_results[0].rate;
+    let delta_300 = loaded1.budget_results[1].rate - loaded0.budget_results[1].rate;
+    assert!((delta_100 - 0.05).abs() < 1e-9);
+    assert!((delta_300 - 0.05).abs() < 1e-9);
+}
+
+// ---------------------------------------------------------------------------
+// Test: Resume from partial trajectory
+// ---------------------------------------------------------------------------
+
+/// Write partial Parquet with 2 theorems, search 3 with resume, verify merge.
+#[tokio::test]
+async fn test_resume_from_partial() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    // Write partial trajectory with records for t1 and t2
+    let partial_path = tmp.path().join("partial.parquet");
+    let mut partial_writer = TrajectoryWriter::new(partial_path.clone());
+    for name in &["t1", "t2"] {
+        let mut r = make_record(name, 0, 0, -1, false, None);
+        r.label = TrajectoryLabel::Negative;
+        partial_writer.record(r);
+    }
+    partial_writer.finish().unwrap();
+
+    // Read theorem names that are "done"
+    let done = TrajectoryReader::read_theorem_names(&partial_path).unwrap();
+    assert!(done.contains("t1"));
+    assert!(done.contains("t2"));
+    assert!(!done.contains("t3"));
+
+    // Set up mock search for remaining theorem (t3)
+    let mut env = MockEnvironment::new();
+    env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+
+    let mut policy = MockPolicy::new();
+    policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+
+    let config = SearchConfig::default();
+    let engine = SearchEngine::new(config);
+
+    // Only search theorems not in "done" set
+    let all_theorems = vec![
+        ("t1", "True"),
+        ("t2", "True"),
+        ("t3", "True"),
+    ];
+    let remaining: Vec<_> = all_theorems
+        .iter()
+        .filter(|(name, _)| !done.contains(*name))
+        .collect();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].0, "t3");
+
+    // Search remaining and write to separate output
+    let output_path = tmp.path().join("new.parquet");
+    let mut writer = TrajectoryWriter::new(output_path.clone());
+
+    for (name, stmt) in &remaining {
+        let result = engine
+            .search_one(&env, &policy, None, name, stmt)
+            .await
+            .unwrap();
+        let labeled = TrajectoryWriter::from_search_result(&result);
+        writer.record_all(labeled);
+    }
+    writer.finish().unwrap();
+
+    // Merge old + new
+    let old_records = TrajectoryReader::read_all(&partial_path).unwrap();
+    let new_records = TrajectoryReader::read_all(&output_path).unwrap();
+
+    let merged_path = tmp.path().join("merged.parquet");
+    let mut merged_writer = TrajectoryWriter::new(merged_path.clone());
+    merged_writer.record_all(old_records);
+    merged_writer.record_all(new_records);
+    merged_writer.finish().unwrap();
+
+    // Verify merged has all 3 theorem names
+    let merged_names = TrajectoryReader::read_theorem_names(&merged_path).unwrap();
+    assert_eq!(merged_names.len(), 3);
+    assert!(merged_names.contains("t1"));
+    assert!(merged_names.contains("t2"));
+    assert!(merged_names.contains("t3"));
+}

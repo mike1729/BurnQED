@@ -28,8 +28,14 @@ pub fn trajectory_schema() -> Schema {
 }
 
 /// Buffers trajectory records and writes them to a Parquet file.
+///
+/// Supports periodic checkpointing via [`flush_partial`](TrajectoryWriter::flush_partial)
+/// for crash resilience during long search runs.
 pub struct TrajectoryWriter {
-    records: Vec<TrajectoryRecord>,
+    /// Records not yet written to disk.
+    pending: Vec<TrajectoryRecord>,
+    /// Records already flushed to disk (included in next flush/finish).
+    flushed: Vec<TrajectoryRecord>,
     output_path: PathBuf,
 }
 
@@ -37,39 +43,70 @@ impl TrajectoryWriter {
     /// Create a new writer that will write to the given path.
     pub fn new(output_path: PathBuf) -> Self {
         Self {
-            records: Vec::new(),
+            pending: Vec::new(),
+            flushed: Vec::new(),
             output_path,
         }
     }
 
     /// Buffer a single trajectory record.
     pub fn record(&mut self, record: TrajectoryRecord) {
-        self.records.push(record);
+        self.pending.push(record);
     }
 
     /// Buffer multiple trajectory records.
     pub fn record_all(&mut self, records: Vec<TrajectoryRecord>) {
-        self.records.extend(records);
+        self.pending.extend(records);
     }
 
-    /// Number of buffered records.
+    /// Total number of records (both flushed and pending).
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.flushed.len() + self.pending.len()
     }
 
-    /// Whether the buffer is empty.
+    /// Whether both buffers are empty.
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.flushed.is_empty() && self.pending.is_empty()
     }
 
-    /// Write all buffered records to the Parquet file and return the output path.
-    pub fn finish(self) -> anyhow::Result<PathBuf> {
+    /// Write pending records to disk as a checkpoint without consuming self.
+    ///
+    /// After flushing, pending records are moved to the flushed buffer. The
+    /// output file is overwritten with all flushed records (not appended) to
+    /// produce a valid single-batch Parquet file at all times.
+    pub fn flush_partial(&mut self) -> anyhow::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+
+        self.flushed.append(&mut self.pending);
+
+        let batch = build_record_batch(&self.flushed)?;
+        let schema = Arc::new(trajectory_schema());
+        let file = std::fs::File::create(&self.output_path)?;
+        let mut writer = ArrowWriter::try_new(file, schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        tracing::debug!(
+            records = self.flushed.len(),
+            path = %self.output_path.display(),
+            "Flushed partial checkpoint"
+        );
+
+        Ok(())
+    }
+
+    /// Write all records (flushed + pending) to the Parquet file and return the output path.
+    pub fn finish(mut self) -> anyhow::Result<PathBuf> {
+        self.flushed.append(&mut self.pending);
+        let all = self.flushed;
         let schema = Arc::new(trajectory_schema());
 
-        let batch = if self.records.is_empty() {
+        let batch = if all.is_empty() {
             RecordBatch::new_empty(schema.clone())
         } else {
-            build_record_batch(&self.records)?
+            build_record_batch(&all)?
         };
 
         let file = std::fs::File::create(&self.output_path)?;
@@ -78,7 +115,7 @@ impl TrajectoryWriter {
         writer.close()?;
 
         tracing::info!(
-            records = self.records.len(),
+            records = all.len(),
             path = %self.output_path.display(),
             "Wrote trajectory Parquet file"
         );
@@ -460,5 +497,47 @@ mod tests {
             assert_eq!(record.label, TrajectoryLabel::Negative);
             assert_eq!(record.remaining_depth, -1);
         }
+    }
+
+    #[test]
+    fn test_flush_partial_writes_checkpoint() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("partial.parquet");
+
+        let mut writer = TrajectoryWriter::new(path.clone());
+
+        // Add 3 records and flush
+        for i in 0..3 {
+            writer.record(make_test_record(i, TrajectoryLabel::Positive));
+        }
+        writer.flush_partial().unwrap();
+        assert_eq!(writer.len(), 3); // 3 flushed, 0 pending
+
+        // Checkpoint file should exist and be readable
+        let mid_records = crate::reader::TrajectoryReader::read_all(&path).unwrap();
+        assert_eq!(mid_records.len(), 3);
+
+        // Add 2 more records and finish
+        for i in 3..5 {
+            writer.record(make_test_record(i, TrajectoryLabel::Negative));
+        }
+        assert_eq!(writer.len(), 5); // 3 flushed + 2 pending
+
+        writer.finish().unwrap();
+
+        // Final file should have all 5 records
+        let final_records = crate::reader::TrajectoryReader::read_all(&path).unwrap();
+        assert_eq!(final_records.len(), 5);
+    }
+
+    #[test]
+    fn test_flush_partial_empty_noop() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("noop.parquet");
+
+        let mut writer = TrajectoryWriter::new(path.clone());
+        // Flush with no records should not create a file
+        writer.flush_partial().unwrap();
+        assert!(!path.exists());
     }
 }

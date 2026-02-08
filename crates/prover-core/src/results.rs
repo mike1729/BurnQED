@@ -1,0 +1,142 @@
+//! Result types for evaluation and iteration tracking.
+
+use serde::{Deserialize, Serialize};
+
+/// Results from evaluating a model at multiple search budgets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IterationResult {
+    /// Expert iteration number (None for baseline evaluation).
+    pub iteration: Option<u32>,
+    /// ISO 8601 timestamp of when the evaluation was run.
+    pub timestamp: String,
+    /// Path to the LLM model used.
+    pub llm_path: String,
+    /// Path to the EBM checkpoint (if any).
+    pub ebm_path: Option<String>,
+    /// Name/path of the benchmark theorem set.
+    pub benchmark: String,
+    /// Total number of theorems in the benchmark.
+    pub total_theorems: u32,
+    /// Results at each search budget level.
+    pub budget_results: Vec<BudgetResult>,
+    /// Number of theorems solved at ANY budget.
+    pub cumulative_solved: u32,
+    /// Fraction of theorems solved at any budget.
+    pub cumulative_rate: f64,
+}
+
+/// Results for a single search budget level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetResult {
+    /// Maximum node budget for this evaluation.
+    pub budget: u32,
+    /// Number of theorems proved within budget.
+    pub solved: u32,
+    /// Total theorems attempted.
+    pub total: u32,
+    /// Fraction solved (solved / total).
+    pub rate: f64,
+    /// Average nodes expanded per theorem.
+    pub avg_nodes: f64,
+    /// Average wall-clock time per theorem in seconds.
+    pub avg_time_secs: f64,
+    /// Median wall-clock time per theorem in seconds.
+    pub median_time_secs: f64,
+    /// Per-theorem results at this budget.
+    pub per_theorem: Vec<TheoremResult>,
+}
+
+/// Result for a single theorem at a single budget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TheoremResult {
+    /// Theorem name.
+    pub name: String,
+    /// Whether the theorem was proved.
+    pub proved: bool,
+    /// Number of search nodes expanded.
+    pub nodes_used: u32,
+    /// Wall-clock time in seconds.
+    pub time_secs: f64,
+}
+
+/// Compute the median of a slice of f64 values.
+///
+/// Returns 0.0 for empty slices.
+pub fn median(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_iteration_result_serde_roundtrip() {
+        let result = IterationResult {
+            iteration: Some(1),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            llm_path: "models/test".to_string(),
+            ebm_path: Some("checkpoints/ebm".to_string()),
+            benchmark: "data/test.json".to_string(),
+            total_theorems: 10,
+            budget_results: vec![BudgetResult {
+                budget: 100,
+                solved: 5,
+                total: 10,
+                rate: 0.5,
+                avg_nodes: 42.0,
+                avg_time_secs: 3.5,
+                median_time_secs: 3.0,
+                per_theorem: vec![TheoremResult {
+                    name: "thm1".to_string(),
+                    proved: true,
+                    nodes_used: 42,
+                    time_secs: 3.5,
+                }],
+            }],
+            cumulative_solved: 5,
+            cumulative_rate: 0.5,
+        };
+
+        let json = serde_json::to_string_pretty(&result).unwrap();
+        let loaded: IterationResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.iteration, Some(1));
+        assert_eq!(loaded.total_theorems, 10);
+        assert_eq!(loaded.budget_results.len(), 1);
+        assert_eq!(loaded.budget_results[0].budget, 100);
+        assert_eq!(loaded.budget_results[0].per_theorem[0].name, "thm1");
+    }
+
+    #[test]
+    fn test_budget_result_rate_computation() {
+        let br = BudgetResult {
+            budget: 300,
+            solved: 7,
+            total: 20,
+            rate: 7.0 / 20.0,
+            avg_nodes: 150.0,
+            avg_time_secs: 10.0,
+            median_time_secs: 8.5,
+            per_theorem: vec![],
+        };
+        assert!((br.rate - 0.35).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_median_helper() {
+        assert!((median(&mut []) - 0.0).abs() < 1e-9);
+        assert!((median(&mut [5.0]) - 5.0).abs() < 1e-9);
+        assert!((median(&mut [1.0, 3.0]) - 2.0).abs() < 1e-9);
+        assert!((median(&mut [3.0, 1.0, 2.0]) - 2.0).abs() < 1e-9);
+        assert!((median(&mut [4.0, 1.0, 3.0, 2.0]) - 2.5).abs() < 1e-9);
+    }
+}

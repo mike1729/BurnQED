@@ -72,6 +72,12 @@ impl TrajectoryReader {
         })
     }
 
+    /// Read unique theorem names from a Parquet file (for resume filtering).
+    pub fn read_theorem_names(path: &Path) -> anyhow::Result<HashSet<String>> {
+        let records = Self::read_all(path)?;
+        Ok(records.iter().map(|r| r.theorem_name.clone()).collect())
+    }
+
     /// Read only records for a specific theorem from a Parquet file.
     pub fn read_for_theorem(path: &Path, theorem_name: &str) -> anyhow::Result<Vec<TrajectoryRecord>> {
         let records = Self::read_all(path)?;
@@ -351,5 +357,35 @@ mod tests {
 
         let records_x = TrajectoryReader::read_for_theorem(&path, "nonexistent").unwrap();
         assert!(records_x.is_empty());
+    }
+
+    #[test]
+    fn test_read_theorem_names() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("names.parquet");
+
+        let mut writer = TrajectoryWriter::new(path.clone());
+        for i in 0..5 {
+            let mut r = make_test_record(i, TrajectoryLabel::Positive);
+            r.theorem_name = "alpha".to_string();
+            writer.record(r);
+        }
+        for i in 0..3 {
+            let mut r = make_test_record(i, TrajectoryLabel::Negative);
+            r.theorem_name = "beta".to_string();
+            writer.record(r);
+        }
+        for i in 0..2 {
+            let mut r = make_test_record(i, TrajectoryLabel::Unknown);
+            r.theorem_name = "gamma".to_string();
+            writer.record(r);
+        }
+        writer.finish().unwrap();
+
+        let names = TrajectoryReader::read_theorem_names(&path).unwrap();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains("alpha"));
+        assert!(names.contains("beta"));
+        assert!(names.contains("gamma"));
     }
 }

@@ -1,6 +1,7 @@
-//! Proof search pipeline, evaluation, and EBM training utilities.
+//! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -13,10 +14,11 @@ use ebm::{
 };
 use lean_repl::LeanPool;
 use policy::{PolicyConfig, TacticGenerator};
-use search::{MutexPolicyProvider, SearchEngine};
+use search::{MutexPolicyProvider, SearchConfig, SearchEngine};
 use trajectory::{TheoremIndex, TrajectoryReader, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
+use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
 
 /// Arguments for the `search` subcommand.
 #[derive(Debug)]
@@ -35,13 +37,45 @@ pub struct SearchArgs {
     pub dry_run: bool,
     /// Path to EBM checkpoint directory for value-guided search.
     pub ebm_path: Option<PathBuf>,
+    /// Resume from a partial trajectory file — skip already-searched theorems.
+    pub resume_from: Option<PathBuf>,
+    /// Override sampling temperature for tactic generation.
+    pub temperature: Option<f64>,
+}
+
+/// Arguments for the `summary` subcommand (formerly `eval`).
+#[derive(Debug)]
+pub struct SummaryArgs {
+    /// Path to the trajectory Parquet file.
+    pub input: PathBuf,
 }
 
 /// Arguments for the `eval` subcommand.
 #[derive(Debug)]
 pub struct EvalArgs {
-    /// Path to the trajectory Parquet file.
-    pub input: PathBuf,
+    /// Path to the search config TOML file.
+    pub config: PathBuf,
+    /// Path to the HuggingFace model directory.
+    pub model_path: PathBuf,
+    /// Path to EBM checkpoint directory for value-guided search.
+    pub ebm_path: Option<PathBuf>,
+    /// Path to the theorem index JSON file.
+    pub theorems: PathBuf,
+    /// Node budgets to evaluate at (sorted ascending).
+    pub budgets: Vec<u32>,
+    /// Number of attempts per theorem per budget (best-of-N).
+    pub pass_n: u32,
+    /// Path to write JSON evaluation results.
+    pub output: Option<PathBuf>,
+    /// Optional CLI override for number of Lean workers.
+    pub num_workers: Option<usize>,
+}
+
+/// Arguments for the `compare` subcommand.
+#[derive(Debug)]
+pub struct CompareArgs {
+    /// Paths to evaluation result JSON files.
+    pub results: Vec<PathBuf>,
 }
 
 /// Arguments for the `train-ebm` subcommand.
@@ -69,19 +103,33 @@ pub struct TrainEbmArgs {
     pub save_embeddings: Option<PathBuf>,
 }
 
-/// Backend types used for EBM inference and training.
+/// Backend for EBM inference (no autodiff).
 type InferenceBackend = NdArray<f32>;
+/// Backend for EBM training (with autodiff for gradient computation).
 type TrainingBackend = Autodiff<NdArray<f32>>;
 
-/// Run proof search over a batch of theorems and write trajectory data to Parquet.
-pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
-    let start = Instant::now();
+/// Loaded policy model and optional EBM value function.
+struct LoadedPolicy {
+    pool: Arc<LeanPool>,
+    policy: MutexPolicyProvider,
+    value_fn: Option<EBMValueFn>,
+}
 
+/// Load Lean pool, LLM policy, and optional EBM scorer.
+///
+/// This is the shared setup used by both `run_search` and `run_eval`.
+async fn load_policy_and_ebm(
+    config_path: &Path,
+    model_path: &Path,
+    ebm_path: Option<&Path>,
+    num_workers: Option<usize>,
+    temperature: Option<f64>,
+) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
-    let toml = load_search_toml(&args.config)?;
+    let toml = load_search_toml(config_path)?;
 
     // 2. Build Lean pool
-    let lean_config = build_lean_pool_config(&toml.lean_pool, args.num_workers)?;
+    let lean_config = build_lean_pool_config(&toml.lean_pool, num_workers)?;
     tracing::info!(
         num_workers = lean_config.num_workers,
         "Starting Lean worker pool"
@@ -89,20 +137,23 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let pool = Arc::new(LeanPool::new(lean_config).await?);
 
     // 3. Load LLM policy
-    tracing::info!(model = %args.model_path.display(), "Loading policy model");
-    let policy_config = PolicyConfig::new(args.model_path.clone());
+    tracing::info!(model = %model_path.display(), "Loading policy model");
+    let mut policy_config = PolicyConfig::new(model_path.to_path_buf());
+    if let Some(temp) = temperature {
+        policy_config.temperature = temp;
+    }
     let generator = TacticGenerator::load(&policy_config)?;
 
     // 4. Set up policy + optional EBM scorer
-    let (policy, value_fn) = if let Some(ref ebm_path) = args.ebm_path {
-        tracing::info!(path = %ebm_path.display(), "Loading EBM scorer");
+    let (policy, value_fn) = if let Some(ebm_dir) = ebm_path {
+        tracing::info!(path = %ebm_dir.display(), "Loading EBM scorer");
 
         // Load EnergyHeadConfig from JSON alongside checkpoint
-        let config_path = ebm_path.join("energy_head_config.json");
-        let config_json = std::fs::read_to_string(&config_path).map_err(|e| {
+        let cfg_path = ebm_dir.join("energy_head_config.json");
+        let config_json = std::fs::read_to_string(&cfg_path).map_err(|e| {
             anyhow::anyhow!(
                 "Failed to read EnergyHeadConfig from {}: {e}",
-                config_path.display()
+                cfg_path.display()
             )
         })?;
         let head_config: EnergyHeadConfig = serde_json::from_str(&config_json).map_err(|e| {
@@ -125,7 +176,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             });
 
         // Load EBM scorer from checkpoint
-        let checkpoint_path = ebm_path.join("final");
+        let checkpoint_path = ebm_dir.join("final");
         let device = Default::default();
         let scorer =
             EBMScorer::<InferenceBackend>::load(&checkpoint_path, &head_config, encode_fn, device)?;
@@ -138,16 +189,32 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         (policy, None)
     };
 
-    // 5. Load theorem index
+    Ok((toml.search, LoadedPolicy { pool, policy, value_fn }))
+}
+
+/// Run proof search over a batch of theorems and write trajectory data to Parquet.
+pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
+    let start = Instant::now();
+
+    let (search_config, loaded) = load_policy_and_ebm(
+        &args.config,
+        &args.model_path,
+        args.ebm_path.as_deref(),
+        args.num_workers,
+        args.temperature,
+    )
+    .await?;
+
+    // Load theorem index
     let index = TheoremIndex::from_json(&args.theorems)?;
     tracing::info!(count = index.len(), "Loaded theorems");
 
-    // 5b. Dry-run: verify setup and exit early
+    // Dry-run: verify setup and exit early
     if args.dry_run {
         println!("Dry run — setup verified successfully");
         println!("  Model: {}", args.model_path.display());
         println!("  Theorems: {} loaded", index.len());
-        println!("  Workers: {}", pool.num_workers());
+        println!("  Workers: {}", loaded.pool.num_workers());
         println!(
             "  EBM: {}",
             if args.ebm_path.is_some() {
@@ -156,16 +223,38 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 "none"
             }
         );
-        pool.shutdown().await;
+        if let Some(temp) = args.temperature {
+            println!("  Temperature: {temp}");
+        }
+        loaded.pool.shutdown().await;
         return Ok(());
     }
 
-    // 6. Run search with progress bar
-    let engine = SearchEngine::new(toml.search);
+    // Filter theorems for resume
+    let done_names: HashSet<String> = if let Some(ref resume_path) = args.resume_from {
+        let names = TrajectoryReader::read_theorem_names(resume_path)?;
+        tracing::info!(
+            done = names.len(),
+            remaining = index.len() - names.len(),
+            "Resuming from partial trajectory"
+        );
+        names
+    } else {
+        HashSet::new()
+    };
+
+    let theorems_to_search: Vec<_> = index
+        .theorems
+        .iter()
+        .filter(|t| !done_names.contains(&t.name))
+        .collect();
+
+    // Run search with progress bar
+    let engine = SearchEngine::new(search_config);
     let mut writer = TrajectoryWriter::new(args.output.clone());
     let mut proved_count: u32 = 0;
     let mut failed_count: u32 = 0;
-    let total = index.len() as u32;
+    let total = theorems_to_search.len() as u32;
 
     // Aggregate stats
     let mut total_nodes: u64 = 0;
@@ -183,9 +272,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     );
 
     let scorer_ref: Option<&dyn search::ValueScorer> =
-        value_fn.as_ref().map(|v| v as &dyn search::ValueScorer);
+        loaded.value_fn.as_ref().map(|v| v as &dyn search::ValueScorer);
 
-    for task in &index.theorems {
+    for task in &theorems_to_search {
         if interrupted {
             break;
         }
@@ -193,7 +282,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         pb.set_message(task.name.clone());
 
         let search_fut =
-            engine.search_one(&pool, &policy, scorer_ref, &task.name, &task.statement);
+            engine.search_one(&loaded.pool, &loaded.policy, scorer_ref, &task.name, &task.statement);
 
         tokio::select! {
             result = search_fut => {
@@ -231,19 +320,39 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             }
         }
 
+        // Periodic auto-save
+        const AUTOSAVE_INTERVAL: u32 = 50;
+        if searched_count % AUTOSAVE_INTERVAL == 0 && searched_count > 0 {
+            writer.flush_partial()?;
+            tracing::info!(searched = searched_count, "Auto-saved checkpoint");
+        }
+
         pb.inc(1);
     }
 
     pb.finish_with_message("done");
 
-    // 7. Write Parquet
+    // Write Parquet
     let record_count = writer.len();
     writer.finish()?;
 
-    // 8. Shutdown pool
-    pool.shutdown().await;
+    // Merge resumed records if applicable
+    if let Some(ref resume_path) = args.resume_from {
+        if resume_path != &args.output {
+            let old_records = TrajectoryReader::read_all(resume_path)?;
+            let new_records = TrajectoryReader::read_all(&args.output)?;
+            let mut merged_writer = TrajectoryWriter::new(args.output.clone());
+            merged_writer.record_all(old_records);
+            merged_writer.record_all(new_records);
+            merged_writer.finish()?;
+            tracing::info!("Merged resumed records into {}", args.output.display());
+        }
+    }
 
-    // 9. Print enhanced summary
+    // Shutdown pool
+    loaded.pool.shutdown().await;
+
+    // Print enhanced summary
     let elapsed = start.elapsed();
     let elapsed_secs = elapsed.as_secs_f64();
 
@@ -292,13 +401,19 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     if args.ebm_path.is_some() {
         println!(" EBM scorer:         active");
     }
+    if let Some(temp) = args.temperature {
+        println!(" Temperature:        {temp}");
+    }
+    if args.resume_from.is_some() {
+        println!(" Resumed from:       {} theorems already done", done_names.len());
+    }
     println!("══════════════════════════════════════════");
 
     Ok(())
 }
 
 /// Print statistics from a trajectory Parquet file.
-pub fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
+pub fn run_summary(args: SummaryArgs) -> anyhow::Result<()> {
     let summary = TrajectoryReader::read_summary(&args.input)?;
 
     println!("--- Trajectory Summary ---");
@@ -315,6 +430,274 @@ pub fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     if summary.unique_theorems > 0 {
         let rate = summary.proved_theorems as f64 / summary.unique_theorems as f64 * 100.0;
         println!("Prove rate: {rate:.1}%");
+    }
+
+    Ok(())
+}
+
+/// Evaluate a model at multiple search budgets, printing a formatted table
+/// and optionally writing JSON results.
+pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
+    let (base_config, loaded) = load_policy_and_ebm(
+        &args.config,
+        &args.model_path,
+        args.ebm_path.as_deref(),
+        args.num_workers,
+        None,
+    )
+    .await?;
+
+    let index = TheoremIndex::from_json(&args.theorems)?;
+    tracing::info!(count = index.len(), "Loaded theorems");
+
+    let mut budgets = args.budgets;
+    budgets.sort();
+    budgets.dedup();
+
+    let total = index.len() as u32;
+    let mut budget_results = Vec::new();
+    let mut cumulative_solved_set: HashSet<String> = HashSet::new();
+
+    let scorer_ref: Option<&dyn search::ValueScorer> =
+        loaded.value_fn.as_ref().map(|v| v as &dyn search::ValueScorer);
+
+    for &budget in &budgets {
+        tracing::info!(budget, "Evaluating at budget");
+
+        let mut search_config = base_config.clone();
+        search_config.max_nodes = budget;
+        let engine = SearchEngine::new(search_config);
+
+        let mut per_theorem = Vec::new();
+        let mut solved = 0u32;
+        let mut times: Vec<f64> = Vec::new();
+        let mut total_nodes_sum: f64 = 0.0;
+
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template(&format!(
+                    "{{spinner:.green}} [budget={budget}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} {{msg}}"
+                ))
+                .expect("valid progress bar template")
+                .progress_chars("=> "),
+        );
+
+        for task in &index.theorems {
+            pb.set_message(task.name.clone());
+            let mut proved_any = false;
+
+            for _ in 0..args.pass_n {
+                match engine
+                    .search_one(&loaded.pool, &loaded.policy, scorer_ref, &task.name, &task.statement)
+                    .await
+                {
+                    Ok(result) => {
+                        let time_secs = result.wall_time_ms as f64 / 1000.0;
+                        if result.proved {
+                            proved_any = true;
+                        }
+                        // Record the last attempt for per_theorem stats
+                        per_theorem.push(TheoremResult {
+                            name: task.name.clone(),
+                            proved: result.proved,
+                            nodes_used: result.nodes_expanded,
+                            time_secs,
+                        });
+                        times.push(time_secs);
+                        total_nodes_sum += result.nodes_expanded as f64;
+                    }
+                    Err(e) => {
+                        tracing::warn!(theorem = task.name, error = %e, "Eval search failed");
+                        per_theorem.push(TheoremResult {
+                            name: task.name.clone(),
+                            proved: false,
+                            nodes_used: 0,
+                            time_secs: 0.0,
+                        });
+                    }
+                }
+            }
+
+            if proved_any {
+                solved += 1;
+                cumulative_solved_set.insert(task.name.clone());
+            }
+
+            pb.inc(1);
+        }
+
+        pb.finish_and_clear();
+
+        let rate = if total > 0 {
+            solved as f64 / total as f64
+        } else {
+            0.0
+        };
+        let n_attempts = times.len().max(1) as f64;
+        let avg_nodes = total_nodes_sum / n_attempts;
+        let avg_time_secs = times.iter().sum::<f64>() / n_attempts;
+        let median_time_secs = median(&mut times);
+
+        budget_results.push(BudgetResult {
+            budget,
+            solved,
+            total,
+            rate,
+            avg_nodes,
+            avg_time_secs,
+            median_time_secs,
+            per_theorem,
+        });
+    }
+
+    let cumulative_solved = cumulative_solved_set.len() as u32;
+    let cumulative_rate = if total > 0 {
+        cumulative_solved as f64 / total as f64
+    } else {
+        0.0
+    };
+
+    // Print formatted table
+    println!();
+    println!("┌──────────┬───────────┬──────────┬───────────┬───────────┐");
+    println!("│ Budget   │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
+    println!("├──────────┼───────────┼──────────┼───────────┼───────────┤");
+    for br in &budget_results {
+        println!(
+            "│ {:<8} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
+            br.budget, br.solved, br.total, br.rate * 100.0, br.avg_nodes, br.avg_time_secs
+        );
+    }
+    println!("└──────────┴───────────┴──────────┴───────────┴───────────┘");
+    println!(
+        "Cumulative (any budget): {}/{} ({:.1}%)",
+        cumulative_solved,
+        total,
+        cumulative_rate * 100.0
+    );
+
+    // Shutdown pool
+    loaded.pool.shutdown().await;
+
+    // Build and write IterationResult
+    let result = IterationResult {
+        iteration: None,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        llm_path: args.model_path.display().to_string(),
+        ebm_path: args.ebm_path.map(|p| p.display().to_string()),
+        benchmark: args.theorems.display().to_string(),
+        total_theorems: total,
+        budget_results,
+        cumulative_solved,
+        cumulative_rate,
+    };
+
+    let output_path = args
+        .output
+        .unwrap_or_else(|| PathBuf::from("eval_results/eval.json"));
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&result)?;
+    std::fs::write(&output_path, &json)?;
+    println!("Results written to {}", output_path.display());
+
+    Ok(())
+}
+
+/// Compare evaluation results across multiple iterations, printing a delta table.
+pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
+    let mut results: Vec<IterationResult> = Vec::new();
+    for path in &args.results {
+        let json = std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!("Failed to read {}: {e}", path.display())
+        })?;
+        let result: IterationResult = serde_json::from_str(&json).map_err(|e| {
+            anyhow::anyhow!("Failed to parse {}: {e}", path.display())
+        })?;
+        results.push(result);
+    }
+
+    if results.is_empty() {
+        println!("No results to compare.");
+        return Ok(());
+    }
+
+    // Find common budgets across all results
+    let common_budgets: Vec<u32> = if let Some(first) = results.first() {
+        first
+            .budget_results
+            .iter()
+            .map(|br| br.budget)
+            .filter(|b| {
+                results
+                    .iter()
+                    .all(|r| r.budget_results.iter().any(|br| br.budget == *b))
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    // Print header
+    print!("{:<12}", "Iteration");
+    for b in &common_budgets {
+        print!("│ Budget {:<5}", b);
+    }
+    println!("│ Cumulative");
+
+    let sep_width = 12 + common_budgets.len() * 14 + 14;
+    println!("{}", "─".repeat(sep_width));
+
+    // Print each result row
+    for (i, r) in results.iter().enumerate() {
+        let label = r
+            .iteration
+            .map(|n| format!("{n}"))
+            .unwrap_or_else(|| format!("{i}"));
+        print!("{:<12}", label);
+        for b in &common_budgets {
+            if let Some(br) = r.budget_results.iter().find(|br| br.budget == *b) {
+                print!("│ {:>5.1}%      ", br.rate * 100.0);
+            } else {
+                print!("│ {:>12}", "N/A");
+            }
+        }
+        println!("│ {:>5.1}%", r.cumulative_rate * 100.0);
+    }
+
+    // Print delta row if there are exactly 2 results
+    if results.len() == 2 {
+        println!("{}", "─".repeat(sep_width));
+        let (r0, r1) = (&results[0], &results[1]);
+        let l0 = r0
+            .iteration
+            .map(|n| format!("{n}"))
+            .unwrap_or_else(|| "0".to_string());
+        let l1 = r1
+            .iteration
+            .map(|n| format!("{n}"))
+            .unwrap_or_else(|| "1".to_string());
+        print!("Δ ({l0}→{l1})    ");
+        for b in &common_budgets {
+            let rate0 = r0
+                .budget_results
+                .iter()
+                .find(|br| br.budget == *b)
+                .map(|br| br.rate)
+                .unwrap_or(0.0);
+            let rate1 = r1
+                .budget_results
+                .iter()
+                .find(|br| br.budget == *b)
+                .map(|br| br.rate)
+                .unwrap_or(0.0);
+            let delta = (rate1 - rate0) * 100.0;
+            print!("│ {:>+5.1}%      ", delta);
+        }
+        let cum_delta = (r1.cumulative_rate - r0.cumulative_rate) * 100.0;
+        println!("│ {:>+5.1}%", cum_delta);
     }
 
     Ok(())

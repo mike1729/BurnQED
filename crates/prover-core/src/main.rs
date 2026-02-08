@@ -1,12 +1,13 @@
 mod config;
 mod pipeline;
+pub mod results;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use pipeline::{EvalArgs, SearchArgs, TrainEbmArgs};
+use pipeline::{CompareArgs, EvalArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
 
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
@@ -16,6 +17,7 @@ struct Cli {
     command: Command,
 }
 
+/// CLI subcommands for proof search, evaluation, comparison, and EBM training.
 #[derive(Subcommand)]
 enum Command {
     /// Run proof search over a batch of theorems.
@@ -41,12 +43,51 @@ enum Command {
         /// Path to EBM checkpoint directory for value-guided search.
         #[arg(long)]
         ebm_path: Option<PathBuf>,
+        /// Resume from a partial trajectory file — skip already-searched theorems.
+        #[arg(long)]
+        resume_from: Option<PathBuf>,
+        /// Override sampling temperature for tactic generation.
+        #[arg(long)]
+        temperature: Option<f64>,
     },
     /// Print statistics from a trajectory Parquet file.
-    Eval {
+    Summary {
         /// Path to the trajectory Parquet file.
         #[arg(long)]
         input: PathBuf,
+    },
+    /// Evaluate a model at multiple search budgets.
+    Eval {
+        /// Path to search config TOML file.
+        #[arg(long, default_value = "configs/search.toml")]
+        config: PathBuf,
+        /// Path to the HuggingFace model directory.
+        #[arg(long)]
+        model_path: PathBuf,
+        /// Path to EBM checkpoint directory for value-guided search.
+        #[arg(long)]
+        ebm_path: Option<PathBuf>,
+        /// Path to the theorem index JSON file.
+        #[arg(long)]
+        theorems: PathBuf,
+        /// Comma-separated list of node budgets to evaluate at.
+        #[arg(long, value_delimiter = ',', default_values_t = vec![100, 300, 600])]
+        budgets: Vec<u32>,
+        /// Number of attempts per theorem per budget (best-of-N).
+        #[arg(long, default_value_t = 1)]
+        pass_n: u32,
+        /// Path to write JSON evaluation results.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Override the number of Lean workers.
+        #[arg(long)]
+        num_workers: Option<usize>,
+    },
+    /// Compare evaluation results across iterations.
+    Compare {
+        /// Paths to evaluation result JSON files.
+        #[arg(long, required = true, num_args = 1..)]
+        results: Vec<PathBuf>,
     },
     /// Train the Energy-Based Model from trajectory data.
     TrainEbm {
@@ -102,6 +143,8 @@ async fn main() -> anyhow::Result<()> {
             num_workers,
             dry_run,
             ebm_path,
+            resume_from,
+            temperature,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -111,10 +154,35 @@ async fn main() -> anyhow::Result<()> {
                 num_workers,
                 dry_run,
                 ebm_path,
+                resume_from,
+                temperature,
             })
             .await
         }
-        Command::Eval { input } => pipeline::run_eval(EvalArgs { input }),
+        Command::Summary { input } => pipeline::run_summary(SummaryArgs { input }),
+        Command::Eval {
+            config,
+            model_path,
+            ebm_path,
+            theorems,
+            budgets,
+            pass_n,
+            output,
+            num_workers,
+        } => {
+            pipeline::run_eval(EvalArgs {
+                config,
+                model_path,
+                ebm_path,
+                theorems,
+                budgets,
+                pass_n,
+                output,
+                num_workers,
+            })
+            .await
+        }
+        Command::Compare { results } => pipeline::run_compare(CompareArgs { results }),
         Command::TrainEbm {
             trajectories,
             output_dir,
