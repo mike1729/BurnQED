@@ -155,7 +155,7 @@ def extract_minif2f(traced_repo) -> tuple:
 def download_fallback(output_dir: str):
     """Download pre-traced data as fallback when LeanDojo tracing is unavailable.
 
-    Uses LeanDojo's pre-traced benchmark data from GitHub releases.
+    Uses LeanDojo's pre-traced benchmark data from Zenodo.
     """
     import subprocess
     import tempfile
@@ -163,8 +163,8 @@ def download_fallback(output_dir: str):
     logger.info("Downloading pre-traced LeanDojo data (fallback mode)...")
 
     release_url = (
-        "https://github.com/lean-dojo/LeanDojo/releases/download/"
-        "v2.1.0/leandojo_benchmark_4.tar.gz"
+        "https://zenodo.org/records/12740403/files/"
+        "leandojo_benchmark_4.tar.gz?download=1"
     )
 
     output_path = Path(output_dir)
@@ -174,7 +174,7 @@ def download_fallback(output_dir: str):
         archive = os.path.join(tmpdir, "benchmark.tar.gz")
         logger.info("Downloading %s ...", release_url)
         subprocess.run(
-            ["curl", "-L", "-o", archive, release_url],
+            ["curl", "-L", "--fail", "-o", archive, release_url],
             check=True,
         )
         logger.info("Extracting...")
@@ -191,12 +191,29 @@ def download_fallback(output_dir: str):
 
 
 def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
-    """Convert LeanDojo benchmark format to our TheoremIndex + tactic pairs format."""
+    """Convert LeanDojo benchmark format to our TheoremIndex + tactic pairs format.
+
+    LeanDojo benchmark entries have: url, commit, file_path, full_name, start, end,
+    traced_tactics. No top-level ``statement`` field — we derive it from the first
+    tactic's ``state_before`` (the initial goal, e.g. ``⊢ ...``).
+
+    We only process the ``random/`` split to avoid duplicates (``novel_premises/``
+    contains the same theorems in a different split).
+    """
+    seen_names: set[str] = set()
     theorems = []
     tactic_pairs = []
 
-    # LeanDojo benchmark has train/val/test splits with JSON files
-    for split_file in sorted(benchmark_dir.rglob("*.json")):
+    # Prefer the random/ split; only fall back to other JSON files if needed.
+    random_dir = None
+    for candidate in benchmark_dir.rglob("random"):
+        if candidate.is_dir():
+            random_dir = candidate
+            break
+
+    json_files = sorted(random_dir.glob("*.json")) if random_dir else sorted(benchmark_dir.rglob("*.json"))
+
+    for split_file in json_files:
         try:
             with open(split_file) as f:
                 data = json.load(f)
@@ -210,22 +227,31 @@ def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
             if not isinstance(entry, dict):
                 continue
 
-            if "full_name" in entry and "statement" in entry:
-                theorems.append({
-                    "name": entry["full_name"],
-                    "statement": entry["statement"],
-                })
+            full_name = entry.get("full_name")
+            traced = entry.get("traced_tactics", [])
 
-            # Extract tactic pairs if available
-            if "traced_tactics" in entry:
-                for i, tactic_info in enumerate(entry["traced_tactics"]):
-                    if "state_before" in tactic_info and "tactic" in tactic_info:
-                        tactic_pairs.append({
-                            "state": tactic_info["state_before"],
-                            "tactic": tactic_info["tactic"],
-                            "theorem": entry.get("full_name", "unknown"),
-                            "depth": i,
-                        })
+            # Build theorem entry — derive statement from first tactic's state_before
+            if full_name and full_name not in seen_names:
+                statement = entry.get("statement", "")
+                if not statement and traced:
+                    # state_before looks like "hyp1 : T\nhyp2 : T\n⊢ goal"
+                    statement = traced[0].get("state_before", "")
+                if statement:
+                    seen_names.add(full_name)
+                    theorems.append({
+                        "name": full_name,
+                        "statement": statement,
+                    })
+
+            # Extract tactic pairs
+            for i, tactic_info in enumerate(traced):
+                if "state_before" in tactic_info and "tactic" in tactic_info:
+                    tactic_pairs.append({
+                        "state": tactic_info["state_before"],
+                        "tactic": tactic_info["tactic"],
+                        "theorem": full_name or "unknown",
+                        "depth": i,
+                    })
 
     # Write outputs
     write_theorem_index(theorems, output_dir / "theorem_index.json")

@@ -18,6 +18,7 @@ TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
 LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
+NUM_WORKERS="${NUM_WORKERS:-64}"
 PROVER="cargo run --release -p prover-core --"
 
 echo "================================================================"
@@ -64,7 +65,8 @@ with open('${THEOREM_INDEX}') as f:
             $EBM_FLAG \
             --theorems "$THEOREM_INDEX" \
             --output "$TRAJ_OUTPUT" \
-            --resume-from "$TRAJ_OUTPUT"
+            --resume-from "$TRAJ_OUTPUT" \
+            --num-workers "$NUM_WORKERS"
     fi
 else
     echo "No partial trajectory found. Starting search from scratch..."
@@ -79,7 +81,8 @@ else
         --model-path "$LLM_DIR" \
         $EBM_FLAG \
         --theorems "$THEOREM_INDEX" \
-        --output "$TRAJ_OUTPUT"
+        --output "$TRAJ_OUTPUT" \
+        --num-workers "$NUM_WORKERS"
 fi
 
 # Summary

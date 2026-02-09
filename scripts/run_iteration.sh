@@ -5,6 +5,7 @@
 #   ./scripts/run_iteration.sh <iteration_number>
 #   ./scripts/run_iteration.sh 0   # First iteration (base model fine-tune)
 #   ./scripts/run_iteration.sh 1   # Second iteration (adds trajectory data + EBM)
+#   NUM_WORKERS=64 ./scripts/run_iteration.sh 1
 #
 # Prerequisites:
 #   - Rust prover-core built (cargo build --release -p prover-core)
@@ -30,6 +31,7 @@ THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
+NUM_WORKERS="${NUM_WORKERS:-64}"
 PROVER="cargo run --release -p prover-core --"
 
 mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$CKPT_DIR" "$LLM_DIR" "$EBM_DIR"
@@ -43,6 +45,7 @@ echo "  LLM output:     ${LLM_DIR}"
 echo "  EBM output:     ${EBM_DIR}"
 echo "  Trajectory dir:  ${TRAJ_DIR}"
 echo "  Theorem index:   ${THEOREM_INDEX}"
+echo "  Workers:         ${NUM_WORKERS}"
 echo "================================================================"
 
 # ── Step 1: LLM Fine-tuning ───────────────────────────────────────────────
@@ -52,12 +55,18 @@ echo "=== Step 1: LLM Fine-tuning ==="
 # Compute learning rate: halve each iteration (2e-4, 1e-4, 5e-5, ...)
 LR=$(python3 -c "print(2e-4 / (2 ** ${ITER}))")
 
+VAL_DATA_FLAG=""
+if [ -f "$VAL_DATA" ]; then
+    VAL_DATA_FLAG="--val-data ${VAL_DATA}"
+fi
+
 if [ "$ITER" -eq 0 ]; then
     echo "Iteration 0: training on base Mathlib tactic pairs only"
+    # shellcheck disable=SC2086
     accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
         --model-name "$LLM_BASE" \
         --data "$TRAIN_DATA" \
-        --val-data "$VAL_DATA" \
+        $VAL_DATA_FLAG \
         --output "${CKPT_DIR}/iter_0" \
         --epochs 3 \
         --lr "$LR"
@@ -75,9 +84,11 @@ else
 
     BASE_CKPT="${CKPT_DIR}/iter_${PREV}"
 
+    # shellcheck disable=SC2086
     accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
         --model-name "$LLM_BASE" \
         --data "$TRAIN_DATA" \
+        $VAL_DATA_FLAG \
         "${EXTRA_DATA_ARGS[@]}" \
         --output "${CKPT_DIR}/iter_${ITER}" \
         --base "$BASE_CKPT" \
@@ -114,12 +125,15 @@ if [ "$ITER" -gt 0 ]; then
         RESUME_FLAG="--resume-from ${PREV_EBM}"
     fi
 
+    EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"
+
     # shellcheck disable=SC2086
     $PROVER train-ebm \
         --trajectories "${TRAJ_FILES[@]}" \
         --llm-path "$LLM_DIR" \
         --output-dir "$EBM_DIR" \
         --steps 50000 \
+        --save-embeddings "$EMBEDDINGS_SAVE" \
         $RESUME_FLAG
 else
     echo ""
@@ -142,7 +156,8 @@ $PROVER search \
     --model-path "$LLM_DIR" \
     $EBM_FLAG \
     --theorems "$THEOREM_INDEX" \
-    --output "$TRAJ_OUTPUT"
+    --output "$TRAJ_OUTPUT" \
+    --num-workers "$NUM_WORKERS"
 
 # ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
 if [ "$ITER" -eq 0 ]; then
@@ -155,7 +170,8 @@ if [ "$ITER" -eq 0 ]; then
         --model-path "$LLM_DIR" \
         --temperature 1.2 \
         --theorems "$THEOREM_INDEX" \
-        --output "$NOISY_OUTPUT"
+        --output "$NOISY_OUTPUT" \
+        --num-workers "$NUM_WORKERS"
 fi
 
 # ── Step 4: Evaluation ────────────────────────────────────────────────────
@@ -169,13 +185,28 @@ else
     EVAL_THEOREMS="$THEOREM_INDEX"
 fi
 
+# Eval WITH EBM (if available)
 # shellcheck disable=SC2086
 $PROVER eval \
     --model-path "$LLM_DIR" \
     $EBM_FLAG \
     --theorems "$EVAL_THEOREMS" \
     --budgets 100,300,600 \
-    --output "${EVAL_DIR}/iter_${ITER}.json"
+    --output "${EVAL_DIR}/iter_${ITER}.json" \
+    --num-workers "$NUM_WORKERS"
+
+# ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
+if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
+    echo ""
+    echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
+
+    $PROVER eval \
+        --model-path "$LLM_DIR" \
+        --theorems "$EVAL_THEOREMS" \
+        --budgets 100,300,600 \
+        --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
+        --num-workers "$NUM_WORKERS"
+fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────────────
 echo ""
@@ -191,6 +222,14 @@ if [ "$ITER" -gt 0 ]; then
         echo "=== Cross-Iteration Comparison ==="
         $PROVER compare --results "$PREV_EVAL" "$CURR_EVAL"
     fi
+
+    # EBM ablation comparison
+    NO_EBM_EVAL="${EVAL_DIR}/iter_${ITER}_no_ebm.json"
+    if [ -f "$NO_EBM_EVAL" ] && [ -f "$CURR_EVAL" ]; then
+        echo ""
+        echo "=== EBM Ablation Comparison ==="
+        $PROVER compare --results "$NO_EBM_EVAL" "$CURR_EVAL"
+    fi
 fi
 
 echo ""
@@ -198,6 +237,9 @@ echo "================================================================"
 echo "  Iteration ${ITER} complete!"
 echo "  Trajectory:  ${TRAJ_OUTPUT}"
 echo "  Eval:        ${EVAL_DIR}/iter_${ITER}.json"
+if [ "$ITER" -gt 0 ] && [ -f "${EVAL_DIR}/iter_${ITER}_no_ebm.json" ]; then
+    echo "  Ablation:    ${EVAL_DIR}/iter_${ITER}_no_ebm.json"
+fi
 echo "  LLM:         ${LLM_DIR}"
 if [ "$ITER" -gt 0 ]; then
     echo "  EBM:         ${EBM_DIR}"
