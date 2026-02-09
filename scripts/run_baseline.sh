@@ -5,6 +5,7 @@
 #   B1. Pipeline validation on test_theorems.json (quick)
 #   B2. miniF2F benchmark evaluation at budgets 100, 300, 600
 #   B3. Full theorem_index search for training data collection
+#   B3b. Train baseline EBM on raw model trajectories
 #   B4. Record results summary
 #
 # Usage:

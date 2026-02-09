@@ -110,6 +110,8 @@ burn-qed/
 │       │   ├── main.rs                 # clap: search, eval, train-ebm subcommands
 │       │   ├── config.rs               # SearchToml, LeanPoolOverrides, TOML loading
 │       │   └── pipeline.rs             # run_search() (async), run_eval() (sync), run_train_ebm()
+│       ├── examples/
+│       │   └── gen_synthetic_parquet.rs # Generate synthetic trajectory Parquet for testing
 │       └── tests/
 │           └── integration.rs          # 7 mock tests + 1 #[ignore] Lean test
 │
@@ -130,7 +132,13 @@ burn-qed/
 │
 └── scripts/
     ├── setup_pantograph.sh             # One-time: init submodule + lake build
-    └── run_iteration.sh
+    ├── setup_cloud.sh                  # Cloud GPU bootstrap (Rust, elan, Python, build)
+    ├── prepare_data.sh                 # Data pipeline: trace Mathlib, format tactic pairs, validate
+    ├── run_baseline.sh                 # Phase B: raw model baseline evaluation
+    ├── run_iteration.sh                # One expert iteration (fine-tune, EBM, search, eval)
+    ├── run_all_iterations.sh           # Full experiment: baseline + N iterations + analysis
+    ├── resume_search.sh                # Resume interrupted search from partial Parquet
+    └── lean_start.sh                   # Quick end-to-end validation pipeline
 ```
 
 ## Settled Architecture Decisions — Do NOT Change
@@ -299,10 +307,10 @@ The `⊢` symbol separates hypotheses from the goal. This is the string you'll t
 - [x] **Phase 2: LLM in candle** — TacticGenerator with generate, encode_only, forked Llama
 - [x] **Phase 3: Search + trajectory + CLI** — Search engine, trajectory Parquet I/O, prover-core CLI
 - [x] **Phase 4: EBM** — EnergyHead, training loop, inference, CLI integration
-- [ ] Phase 5: Expert iteration
+- [x] **Phase 5: Expert iteration** — eval/compare/resume CLI, Python training pipeline, shell orchestration, cloud deployment
 - [ ] Phase 6: burn-rs PRs
 
-## Current Phase: 5 (Expert Iteration)
+## Current Phase: Experiment Execution
 
 ### Phase 0 Deliverable (DONE)
 All crates exist as stubs. `cargo check --workspace` passes.
@@ -549,8 +557,9 @@ cargo run -p prover-core -- train-ebm \
 cargo test -p trajectory         # 18 unit tests + 6 integration tests
 cargo test -p search             # 31 unit tests (config: 4, node: 8, engine: 10, mocks: 8, + 1 doc)
 cargo test -p search -- --ignored --test-threads=1  # 11 integration tests (need Pantograph, ~60s)
-cargo test -p prover-core        # 3 unit tests (config) + 7 integration tests (mocks + JSON + TOML + EBM)
+cargo test -p prover-core        # 3 unit tests (config) + 13 integration tests (mocks + JSON + TOML + EBM)
 cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration test (~15s)
+cargo test -p prover-core --test integration_llm -- --ignored --test-threads=1  # 4 TinyLlama tests (~10-35min each on CPU)
 
 # Trajectory unit tests:
 # - types: label display/serde, TheoremTask/Index deserialize, record defaults
@@ -599,6 +608,12 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 
 # Prover-core Lean integration test (#[ignore], requires Pantograph):
 # - Real LeanPool + MockPolicy: search 3 theorems, verify >= 2 proved, Parquet output
+
+# Prover-core TinyLlama integration tests (#[ignore], require models/tinyllama-1.1b):
+# - test_tinyllama_encode_and_ebm_train: real encode_only() → EBM train, dim=2048
+# - test_tinyllama_ebm_scorer_roundtrip: train → save → load → score with real dimensions
+# - test_tinyllama_shared_generator_policy_and_ebm: Arc<Mutex> interleaving policy + encode
+# - test_tinyllama_full_pipeline_with_lean: search → Parquet → train EBM → search with EBM (also needs Pantograph)
 ```
 
 ### Phase 4 Deliverable (DONE)
@@ -625,7 +640,7 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 - `search --ebm-path` loads EBM scorer, shares `TacticGenerator` via `Arc<Mutex>` for both policy and EBM encoding
 
 **Test Coverage:**
-- 41 unit tests + 26 integration tests (ebm: 32+9, prover-core: 3+8)
+- 41 unit tests + 30 integration tests (ebm: 32+9, prover-core: 3+8+4 TinyLlama)
 
 ### Cross-Crate Integration
 
@@ -646,6 +661,7 @@ cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration te
 - `cargo test -p lean-repl -- --ignored --test-threads=1` — ~60-90s (10 tests, spawns Pantograph)
 - `cargo test -p search -- --ignored --test-threads=1` — ~60s (11 tests, spawns Pantograph)
 - `cargo test -p prover-core -- --ignored --test-threads=1` — ~15s (1 test, spawns Pantograph)
+- `cargo test -p prover-core --test integration_llm -- --ignored --test-threads=1` — ~10-35min per test (4 tests, require TinyLlama model weights)
 - `cargo test -p policy -- --ignored --test-threads=1` — requires MODEL_PATH env var, ~30-60s
 
 All integration tests that use Pantograph **must** run with `--test-threads=1` to avoid resource contention.
@@ -659,6 +675,85 @@ When making architectural changes, adding new public types, or completing phases
 - `docs/phase1_instructions.md` (and future `phase*_instructions.md`) — step-by-step prompts and verification checklists
 
 If a code change would make any code sample, type signature, or architectural description in these docs incorrect, fix the docs in the same change.
+
+## Experiment Execution
+
+### Quick Start
+
+```bash
+# 1. Data preparation (CPU, ~30-60 min)
+./scripts/prepare_data.sh              # or: ./scripts/prepare_data.sh --fallback
+
+# 2. Cloud bootstrap (on GPU instance)
+bash scripts/setup_cloud.sh
+
+# 3. Run full experiment
+NUM_WORKERS=64 ./scripts/run_all_iterations.sh
+```
+
+### Scripts
+
+| Script | Purpose | GPU? |
+|--------|---------|------|
+| `scripts/setup_cloud.sh` | Install Rust, elan, Python deps, build Pantograph + prover-core | No |
+| `scripts/prepare_data.sh` | Trace Mathlib + format tactic pairs + validate outputs | No |
+| `scripts/run_baseline.sh` | Phase B: raw model baseline on test_theorems + miniF2F + theorem_index + baseline EBM | Yes |
+| `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
+| `scripts/run_all_iterations.sh` | Full experiment: baseline + iters 0-4 + final analysis | Yes |
+| `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
+| `scripts/lean_start.sh` | Quick end-to-end validation on test_theorems (no training data needed) | Yes |
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `NUM_WORKERS` | 64 | Number of Lean worker processes |
+| `MAX_ITER` | 4 | Maximum iteration number (0-indexed) |
+| `LLM_BASE` | `deepseek-ai/DeepSeek-Prover-V2-7B` | Base model for fine-tuning |
+| `SKIP_BASELINE` | 0 | Set to 1 to skip Phase B baseline |
+| `MODEL_PATH` | (none) | Local model dir for tokenizer in data prep |
+| `MATHLIB_COMMIT` | `v4.27.0` | Mathlib4 tag to trace |
+
+### Experiment Outputs
+
+```
+baselines/                          # Phase B: raw model baseline
+├── raw_test_theorems.parquet       # Pipeline validation (16 theorems)
+└── raw_minif2f.json                # miniF2F zero-shot evaluation
+
+checkpoints/ebm/baseline/           # Baseline EBM (trained on raw model trajectories)
+├── final.mpk                       # burn-rs model weights
+├── energy_head_config.json         # EnergyHeadConfig for loading
+└── embeddings.parquet              # Precomputed embedding cache
+
+eval_results/                       # Phase C-E: per-iteration evaluations
+├── iter_0.json                     # Fine-tuned, no EBM
+├── iter_1.json                     # Fine-tuned + EBM
+├── iter_1_no_ebm.json              # EBM ablation
+├── iter_2.json ... iter_4.json
+└── iter_4_no_ebm.json              # Final ablation
+
+trajectories/                       # Training data for next iteration
+├── baseline_raw.parquet            # Raw model trajectories
+├── iter_0.parquet                  # Iter 0 trajectories
+├── iter_0_noisy.parquet            # Iter 0 noise injection (T=1.2)
+└── iter_1.parquet ... iter_4.parquet
+
+checkpoints/
+├── llm/iter_0 ... iter_4           # LoRA adapters
+├── ebm/baseline                    # Baseline EBM (raw model encoder)
+└── ebm/iter_1 ... iter_4           # Fine-tuned EBM weights + config + embeddings cache
+
+models/llm/iter_0 ... iter_4        # Merged safetensors for candle
+logs/iter_0.log ... iter_4.log      # Per-iteration logs
+```
+
+### Go/No-Go Checkpoints
+
+1. **After B2** (raw baseline): If <5% on miniF2F → investigate model loading or search config
+2. **After C3** (iter 0): If no improvement over baseline → check training data + loss curves
+3. **After D4 vs D5** (EBM ablation): Key result — if EBM shows no improvement → investigate embeddings
+4. **After each iteration**: If solve rate plateaus or decreases → stop early
 
 ## Reference
 
