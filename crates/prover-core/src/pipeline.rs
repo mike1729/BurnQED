@@ -485,7 +485,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
 
         for task in &index.theorems {
             pb.set_message(task.name.clone());
-            let mut proved_any = false;
+            let mut best: Option<TheoremResult> = None;
 
             for _ in 0..args.pass_n {
                 match engine
@@ -494,35 +494,46 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 {
                     Ok(result) => {
                         let time_secs = result.wall_time_ms as f64 / 1000.0;
-                        if result.proved {
-                            proved_any = true;
-                        }
-                        // Record the last attempt for per_theorem stats
-                        per_theorem.push(TheoremResult {
+                        times.push(time_secs);
+                        total_nodes_sum += result.nodes_expanded as f64;
+                        let tr = TheoremResult {
                             name: task.name.clone(),
                             proved: result.proved,
                             nodes_used: result.nodes_expanded,
                             time_secs,
+                        };
+                        // Keep best: proved > unproved, then fewest nodes
+                        best = Some(match best {
+                            None => tr,
+                            Some(prev) if !prev.proved && tr.proved => tr,
+                            Some(prev) => prev,
                         });
-                        times.push(time_secs);
-                        total_nodes_sum += result.nodes_expanded as f64;
                     }
                     Err(e) => {
                         tracing::warn!(theorem = task.name, error = %e, "Eval search failed");
-                        per_theorem.push(TheoremResult {
-                            name: task.name.clone(),
-                            proved: false,
-                            nodes_used: 0,
-                            time_secs: 0.0,
-                        });
+                        if best.is_none() {
+                            best = Some(TheoremResult {
+                                name: task.name.clone(),
+                                proved: false,
+                                nodes_used: 0,
+                                time_secs: 0.0,
+                            });
+                        }
                     }
                 }
             }
 
-            if proved_any {
+            let best = best.unwrap_or_else(|| TheoremResult {
+                name: task.name.clone(),
+                proved: false,
+                nodes_used: 0,
+                time_secs: 0.0,
+            });
+            if best.proved {
                 solved += 1;
                 cumulative_solved_set.insert(task.name.clone());
             }
+            per_theorem.push(best);
 
             pb.inc(1);
         }

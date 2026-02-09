@@ -95,6 +95,7 @@ pub struct SearchEngine {
 impl SearchEngine {
     /// Create a new search engine with the given configuration.
     pub fn new(config: SearchConfig) -> Self {
+        config.validate();
         Self { config }
     }
 

@@ -164,36 +164,40 @@ pub enum PantographResponse {
 impl PantographResponse {
     /// Parse a JSON response line from Pantograph as a `goal.start` response.
     pub fn parse_goal_start(json: &str) -> Result<Self, crate::types::LeanError> {
-        // Try error first (has "error" + "desc" fields)
-        if let Ok(err) = serde_json::from_str::<PantographError>(json) {
-            if json.contains("\"error\"") && json.contains("\"desc\"") {
-                return Ok(PantographResponse::Error(err));
-            }
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|e| crate::types::LeanError::Protocol(format!("Invalid JSON: {e}. Raw: {json}")))?;
+
+        // Check if response has "error" + "desc" keys (Pantograph error format)
+        if value.get("error").is_some() && value.get("desc").is_some() {
+            let err: PantographError = serde_json::from_value(value)
+                .map_err(|e| crate::types::LeanError::Protocol(format!("Failed to parse error: {e}")))?;
+            return Ok(PantographResponse::Error(err));
         }
 
-        match serde_json::from_str::<GoalStartResult>(json) {
-            Ok(result) => Ok(PantographResponse::GoalStarted(result)),
-            Err(e) => Err(crate::types::LeanError::Protocol(format!(
+        let result: GoalStartResult = serde_json::from_value(value)
+            .map_err(|e| crate::types::LeanError::Protocol(format!(
                 "Failed to parse goal.start response: {e}. Raw: {json}"
-            ))),
-        }
+            )))?;
+        Ok(PantographResponse::GoalStarted(result))
     }
 
     /// Parse a JSON response line from Pantograph as a `goal.tactic` response.
     pub fn parse_goal_tactic(json: &str) -> Result<Self, crate::types::LeanError> {
-        // Try error first
-        if let Ok(err) = serde_json::from_str::<PantographError>(json) {
-            if json.contains("\"error\"") && json.contains("\"desc\"") {
-                return Ok(PantographResponse::Error(err));
-            }
+        let value: serde_json::Value = serde_json::from_str(json)
+            .map_err(|e| crate::types::LeanError::Protocol(format!("Invalid JSON: {e}. Raw: {json}")))?;
+
+        // Check if response has "error" + "desc" keys (Pantograph error format)
+        if value.get("error").is_some() && value.get("desc").is_some() {
+            let err: PantographError = serde_json::from_value(value)
+                .map_err(|e| crate::types::LeanError::Protocol(format!("Failed to parse error: {e}")))?;
+            return Ok(PantographResponse::Error(err));
         }
 
-        match serde_json::from_str::<GoalTacticResult>(json) {
-            Ok(result) => Ok(PantographResponse::TacticResult(result)),
-            Err(e) => Err(crate::types::LeanError::Protocol(format!(
+        let result: GoalTacticResult = serde_json::from_value(value)
+            .map_err(|e| crate::types::LeanError::Protocol(format!(
                 "Failed to parse goal.tactic response: {e}. Raw: {json}"
-            ))),
-        }
+            )))?;
+        Ok(PantographResponse::TacticResult(result))
     }
 }
 

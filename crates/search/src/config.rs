@@ -52,6 +52,21 @@ fn default_timeout() -> u64 {
     600
 }
 
+impl SearchConfig {
+    /// Log a warning if alpha + beta don't sum to 1.0.
+    pub fn validate(&self) {
+        let sum = self.alpha + self.beta;
+        if (sum - 1.0).abs() > 1e-6 {
+            tracing::warn!(
+                alpha = self.alpha,
+                beta = self.beta,
+                sum,
+                "alpha + beta = {sum:.4}, expected 1.0; scores may not be normalized"
+            );
+        }
+    }
+}
+
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
@@ -121,5 +136,23 @@ mod tests {
     fn test_alpha_beta_sum() {
         let cfg = SearchConfig::default();
         assert!((cfg.alpha + cfg.beta - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_validate_default_ok() {
+        // Default config should not warn (alpha + beta == 1.0)
+        let cfg = SearchConfig::default();
+        cfg.validate(); // Should not panic
+    }
+
+    #[test]
+    fn test_validate_non_normalized() {
+        // Non-normalized weights should not panic (just logs a warning)
+        let cfg = SearchConfig {
+            alpha: 0.3,
+            beta: 0.3,
+            ..Default::default()
+        };
+        cfg.validate(); // Should log warning but not panic
     }
 }

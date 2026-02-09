@@ -315,7 +315,7 @@ impl CausalSelfAttention {
                         .contiguous()?;
                 }
                 let v_seq_len = v.dims()[1];
-                if v_seq_len > 2 * self.max_position_embeddings {
+                if v_seq_len > self.max_position_embeddings {
                     v = v
                         .narrow(
                             D::Minus1,

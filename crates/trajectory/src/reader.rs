@@ -43,28 +43,43 @@ impl TrajectoryReader {
     }
 
     /// Compute summary statistics from a trajectory Parquet file.
+    ///
+    /// Streams batches and only extracts the columns needed for summary
+    /// computation, avoiding full record deserialization.
     pub fn read_summary(path: &Path) -> anyhow::Result<TrajectorySummary> {
-        let records = Self::read_all(path)?;
+        let file = std::fs::File::open(path)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
 
+        let mut total_records = 0;
         let mut positive_count = 0;
         let mut negative_count = 0;
         let mut theorem_names = HashSet::new();
         let mut proved_theorems = HashSet::new();
 
-        for record in &records {
-            match record.label {
-                TrajectoryLabel::Positive => positive_count += 1,
-                TrajectoryLabel::Negative => negative_count += 1,
-                TrajectoryLabel::Unknown => {}
-            }
-            theorem_names.insert(record.theorem_name.clone());
-            if record.is_proof_complete {
-                proved_theorems.insert(record.theorem_name.clone());
+        for batch_result in reader {
+            let batch = batch_result?;
+            let num_rows = batch.num_rows();
+            total_records += num_rows;
+
+            let names = get_string_column(&batch, "theorem_name")?;
+            let labels = get_string_column(&batch, "label")?;
+            let proof_complete = get_bool_column(&batch, "is_proof_complete")?;
+
+            for i in 0..num_rows {
+                match TrajectoryLabel::from_str_lossy(labels.value(i)) {
+                    TrajectoryLabel::Positive => positive_count += 1,
+                    TrajectoryLabel::Negative => negative_count += 1,
+                    TrajectoryLabel::Unknown => {}
+                }
+                theorem_names.insert(names.value(i).to_string());
+                if proof_complete.value(i) {
+                    proved_theorems.insert(names.value(i).to_string());
+                }
             }
         }
 
         Ok(TrajectorySummary {
-            total_records: records.len(),
+            total_records,
             positive_count,
             negative_count,
             unique_theorems: theorem_names.len(),
@@ -73,94 +88,133 @@ impl TrajectoryReader {
     }
 
     /// Read unique theorem names from a Parquet file (for resume filtering).
+    ///
+    /// Streams batches and only extracts the `theorem_name` column.
     pub fn read_theorem_names(path: &Path) -> anyhow::Result<HashSet<String>> {
-        let records = Self::read_all(path)?;
-        Ok(records.iter().map(|r| r.theorem_name.clone()).collect())
+        let file = std::fs::File::open(path)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+
+        let mut names = HashSet::new();
+        for batch_result in reader {
+            let batch = batch_result?;
+            let theorem_names = get_string_column(&batch, "theorem_name")?;
+            for i in 0..batch.num_rows() {
+                names.insert(theorem_names.value(i).to_string());
+            }
+        }
+
+        Ok(names)
     }
 
     /// Read only records for a specific theorem from a Parquet file.
+    ///
+    /// Streams batches and only deserializes rows where `theorem_name` matches.
     pub fn read_for_theorem(path: &Path, theorem_name: &str) -> anyhow::Result<Vec<TrajectoryRecord>> {
-        let records = Self::read_all(path)?;
-        Ok(records
-            .into_iter()
-            .filter(|r| r.theorem_name == theorem_name)
-            .collect())
+        let file = std::fs::File::open(path)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+
+        let mut records = Vec::new();
+        for batch_result in reader {
+            let batch = batch_result?;
+            let names = get_string_column(&batch, "theorem_name")?;
+
+            let has_match = (0..batch.num_rows()).any(|i| names.value(i) == theorem_name);
+            if !has_match {
+                continue;
+            }
+
+            // Only deserialize the full batch when it contains matching rows
+            let all_batch_records = extract_records_from_batch(&batch)?;
+            for record in all_batch_records {
+                if record.theorem_name == theorem_name {
+                    records.push(record);
+                }
+            }
+        }
+
+        Ok(records)
     }
 }
 
-/// Extract trajectory records from a single Arrow RecordBatch.
-fn extract_records_from_batch(batch: &RecordBatch) -> anyhow::Result<Vec<TrajectoryRecord>> {
-    let theorem_names = batch
-        .column(0)
+/// Helper to get a named StringArray column from a RecordBatch.
+fn get_string_column<'a>(batch: &'a RecordBatch, name: &str) -> anyhow::Result<&'a StringArray> {
+    batch
+        .column_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("Missing column: {name}"))?
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| anyhow::anyhow!("Column 0 (theorem_name) is not StringArray"))?;
+        .ok_or_else(|| anyhow::anyhow!("Column {name} is not StringArray"))
+}
 
-    let state_ids = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 1 (state_id) is not UInt64Array"))?;
-
-    let state_pps = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| anyhow::anyhow!("Column 2 (state_pp) is not StringArray"))?;
-
-    let tactics = batch
-        .column(3)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| anyhow::anyhow!("Column 3 (tactic_applied) is not StringArray"))?;
-
-    let parent_ids = batch
-        .column(4)
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 4 (parent_state_id) is not UInt64Array"))?;
-
-    let labels = batch
-        .column(5)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(|| anyhow::anyhow!("Column 5 (label) is not StringArray"))?;
-
-    let depths = batch
-        .column(6)
-        .as_any()
-        .downcast_ref::<UInt32Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 6 (depth_from_root) is not UInt32Array"))?;
-
-    let remaining = batch
-        .column(7)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 7 (remaining_depth) is not Int32Array"))?;
-
-    let log_probs = batch
-        .column(8)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 8 (llm_log_prob) is not Float64Array"))?;
-
-    let ebm_scores = batch
-        .column(9)
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 9 (ebm_score) is not Float64Array"))?;
-
-    let proof_complete = batch
-        .column(10)
+/// Helper to get a named BooleanArray column from a RecordBatch.
+fn get_bool_column<'a>(batch: &'a RecordBatch, name: &str) -> anyhow::Result<&'a BooleanArray> {
+    batch
+        .column_by_name(name)
+        .ok_or_else(|| anyhow::anyhow!("Missing column: {name}"))?
         .as_any()
         .downcast_ref::<BooleanArray>()
-        .ok_or_else(|| anyhow::anyhow!("Column 10 (is_proof_complete) is not BooleanArray"))?;
+        .ok_or_else(|| anyhow::anyhow!("Column {name} is not BooleanArray"))
+}
 
-    let timestamps = batch
-        .column(11)
+/// Extract trajectory records from a single Arrow RecordBatch using named columns.
+fn extract_records_from_batch(batch: &RecordBatch) -> anyhow::Result<Vec<TrajectoryRecord>> {
+    let theorem_names = get_string_column(batch, "theorem_name")?;
+
+    let state_ids = batch
+        .column_by_name("state_id")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: state_id"))?
         .as_any()
         .downcast_ref::<UInt64Array>()
-        .ok_or_else(|| anyhow::anyhow!("Column 11 (timestamp_ms) is not UInt64Array"))?;
+        .ok_or_else(|| anyhow::anyhow!("Column state_id is not UInt64Array"))?;
+
+    let state_pps = get_string_column(batch, "state_pp")?;
+    let tactics = get_string_column(batch, "tactic_applied")?;
+
+    let parent_ids = batch
+        .column_by_name("parent_state_id")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: parent_state_id"))?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| anyhow::anyhow!("Column parent_state_id is not UInt64Array"))?;
+
+    let labels = get_string_column(batch, "label")?;
+
+    let depths = batch
+        .column_by_name("depth_from_root")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: depth_from_root"))?
+        .as_any()
+        .downcast_ref::<UInt32Array>()
+        .ok_or_else(|| anyhow::anyhow!("Column depth_from_root is not UInt32Array"))?;
+
+    let remaining = batch
+        .column_by_name("remaining_depth")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: remaining_depth"))?
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .ok_or_else(|| anyhow::anyhow!("Column remaining_depth is not Int32Array"))?;
+
+    let log_probs = batch
+        .column_by_name("llm_log_prob")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: llm_log_prob"))?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| anyhow::anyhow!("Column llm_log_prob is not Float64Array"))?;
+
+    let ebm_scores = batch
+        .column_by_name("ebm_score")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: ebm_score"))?
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .ok_or_else(|| anyhow::anyhow!("Column ebm_score is not Float64Array"))?;
+
+    let proof_complete = get_bool_column(batch, "is_proof_complete")?;
+
+    let timestamps = batch
+        .column_by_name("timestamp_ms")
+        .ok_or_else(|| anyhow::anyhow!("Missing column: timestamp_ms"))?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| anyhow::anyhow!("Column timestamp_ms is not UInt64Array"))?;
 
     let mut records = Vec::with_capacity(batch.num_rows());
     for i in 0..batch.num_rows() {

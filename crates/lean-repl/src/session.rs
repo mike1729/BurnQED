@@ -33,36 +33,7 @@ impl<'a> ProofSession<'a> {
     /// Updates the session's current state on success. Returns a reference
     /// to the tactic result for inspection.
     pub async fn apply(&mut self, tactic: &str) -> Result<&TacticResult, LeanError> {
-        if self.completed {
-            return Err(LeanError::Protocol("Proof already complete".into()));
-        }
-
-        let result = self
-            .handle
-            .run_tactic(self.current_state.state_id, None, tactic)
-            .await?;
-
-        match &result {
-            TacticResult::Success { state_id, goals } => {
-                self.current_state = ProofState {
-                    state_id: *state_id,
-                    goals: goals.clone(),
-                };
-            }
-            TacticResult::ProofComplete { state_id } => {
-                self.current_state = ProofState {
-                    state_id: *state_id,
-                    goals: Vec::new(),
-                };
-                self.completed = true;
-            }
-            TacticResult::Failed { .. } => {
-                // State unchanged on failure
-            }
-        }
-
-        self.history.push((tactic.to_string(), result));
-        Ok(&self.history.last().unwrap().1)
+        self.apply_inner(None, tactic).await
     }
 
     /// Apply a tactic to a specific goal ID.
@@ -71,13 +42,22 @@ impl<'a> ProofSession<'a> {
         goal_id: u64,
         tactic: &str,
     ) -> Result<&TacticResult, LeanError> {
+        self.apply_inner(Some(goal_id), tactic).await
+    }
+
+    /// Shared implementation for `apply` and `apply_to_goal`.
+    async fn apply_inner(
+        &mut self,
+        goal_id: Option<u64>,
+        tactic: &str,
+    ) -> Result<&TacticResult, LeanError> {
         if self.completed {
             return Err(LeanError::Protocol("Proof already complete".into()));
         }
 
         let result = self
             .handle
-            .run_tactic(self.current_state.state_id, Some(goal_id), tactic)
+            .run_tactic(self.current_state.state_id, goal_id, tactic)
             .await?;
 
         match &result {
