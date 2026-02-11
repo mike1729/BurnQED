@@ -66,7 +66,10 @@ that touch multiple files, or anything requiring more than ~50 lines of changes)
    - How to verify the changes work
    - Manual testing steps if applicable
 
-3. **Invoke the `gemini-plan-reviewer` subagent** after writing the plan.
+3. **MANDATORY: Invoke the `gemini-plan-reviewer` subagent** after writing the plan.
+   **You MUST NOT call ExitPlanMode or present the plan to the user until the reviewer has run.**
+   This is a hard gate — no exceptions. If you are in plan mode, the sequence is always:
+   write plan → run reviewer → handle verdict → then (and only then) ExitPlanMode.
 
 4. If the reviewer returns **NEEDS_REVISION**:
    - Read every concern carefully
@@ -81,6 +84,7 @@ that touch multiple files, or anything requiring more than ~50 lines of changes)
    - When in doubt, default to waiting for confirmation
 
 6. **Do not skip planning** for non-trivial tasks. When in doubt, plan.
+   **Do not skip the plan reviewer.** Skipping it is a protocol violation.
 
 ## Implementation Protocol
 
