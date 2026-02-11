@@ -1,0 +1,16 @@
+{
+  "theorems": [
+    {
+      "name": "true_trivial",
+      "statement": "True"
+    },
+    {
+      "name": "false_implies_false",
+      "statement": "False \u2192 False"
+    },
+    {
+      "name": "nat_refl",
+      "statement": "\u2200 (n : Nat), n = n"
+    }
+  ]
+}

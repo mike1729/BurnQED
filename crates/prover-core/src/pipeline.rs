@@ -1,6 +1,6 @@
 //! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -164,15 +164,33 @@ async fn load_policy_and_ebm(
         let shared_gen = Arc::new(std::sync::Mutex::new(generator));
         let policy = MutexPolicyProvider::new_shared(shared_gen.clone());
 
-        // Create encode_fn closure that uses the shared generator
+        // Create encode_fn closure with embedding cache to avoid redundant 7B forward passes
         let encode_gen = shared_gen.clone();
+        let embedding_cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
         let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
             Box::new(move |state: &str| {
+                // Fast path: check cache first (avoids generator lock entirely)
+                {
+                    let cache = embedding_cache
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+                    if let Some(cached) = cache.get(state) {
+                        return Ok(cached.clone());
+                    }
+                }
+                // Cache miss: compute embedding via 7B forward pass
                 let mut gen = encode_gen
                     .lock()
                     .map_err(|e| anyhow::anyhow!("Generator lock poisoned: {e}"))?;
                 let embedding = gen.encode_only(state)?;
-                Ok(embedding.data)
+                let data = embedding.data;
+                // Insert into cache
+                embedding_cache
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?
+                    .insert(state.to_owned(), data.clone());
+                Ok(data)
             });
 
         // Load EBM scorer from checkpoint

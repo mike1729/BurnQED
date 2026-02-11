@@ -192,6 +192,14 @@ impl SearchEngine {
             let goals_text = arena[node_idx].goals_as_text();
             let node_depth = arena[node_idx].depth;
 
+            // Skip nodes at max depth — all children would exceed the limit,
+            // so generating candidates and calling Lean would be wasted work.
+            if node_depth >= self.config.max_depth {
+                nodes_expanded += 1;
+                stats.nodes_pruned += 1;
+                continue;
+            }
+
             tracing::debug!(
                 node = node_idx,
                 state_id = node_state_id,
@@ -216,15 +224,6 @@ impl SearchEngine {
                 match result {
                     TacticResult::Success { state_id, goals } => {
                         let child_depth = node_depth + 1;
-                        if child_depth > self.config.max_depth {
-                            stats.nodes_pruned += 1;
-                            tracing::debug!(
-                                tactic = candidate.text,
-                                depth = child_depth,
-                                "Skipping: exceeds max depth"
-                            );
-                            continue;
-                        }
 
                         let state_pp = goals
                             .iter()
@@ -267,15 +266,6 @@ impl SearchEngine {
                     }
                     TacticResult::ProofComplete { state_id } => {
                         let child_depth = node_depth + 1;
-                        if child_depth > self.config.max_depth {
-                            stats.nodes_pruned += 1;
-                            tracing::debug!(
-                                tactic = candidate.text,
-                                depth = child_depth,
-                                "Skipping proof-complete: exceeds max depth"
-                            );
-                            continue;
-                        }
                         stats.nodes_terminal += 1;
                         let terminal = SearchNode {
                             state_id,

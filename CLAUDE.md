@@ -1,5 +1,164 @@
 # burn-qed
 
+# Global Claude Code Instructions
+
+## Gemini Tool Usage Rules
+
+NEVER use the `ask-gemini` MCP tool directly for code reviews, plan reviews, or security reviews.
+Always use the designated subagents instead:
+- For plan reviews → invoke `gemini-plan-reviewer` subagent
+- For code reviews → invoke `gemini-reviewer` subagent
+- For security reviews → invoke `gemini-security-reviewer` subagent
+
+The `ask-gemini` MCP tool may only be used for quick one-off questions that don't fit any subagent or slash command.
+## Custom Agent Definitions
+
+Custom subagents are defined in `.claude/agents/`. To invoke one, use the **Task tool** with
+`subagent_type: "Bash"` and run the bash script defined in the agent's `.md` file. Each agent file
+contains a complete bash script that gathers project context and calls `gemini` CLI.
+
+Available agents:
+- **`gemini-plan-reviewer`** (`.claude/agents/gemini-plan-reviewer.md`) — Reviews plans in `.claude/plan.md` before implementation
+- **`gemini-reviewer`** (`.claude/agents/gemini-reviewer.md`) — Reviews code changes after implementation
+- **`gemini-security-reviewer`** (`.claude/agents/gemini-security-reviewer.md`) — Security audit on changes
+
+**How to invoke**: Read the agent `.md` file, extract the bash script block, and execute it via
+`Bash` tool from the project root directory. The script handles context gathering and Gemini
+invocation automatically.
+
+## Planning Protocol
+
+When planning any non-trivial task (new features, refactors, architecture changes, bug fixes
+that touch multiple files, or anything requiring more than ~50 lines of changes):
+
+1. **Think deeply first.** Before writing any plan, understand the full scope of the request.
+   Read relevant files, check dependencies, and understand existing patterns.
+
+2. **Write the plan to `.claude/plan.md`** with this structure:
+
+   ### Goal
+   One clear sentence describing what we're trying to achieve and why.
+
+   ### Context
+   - What currently exists (relevant files, functions, patterns)
+   - What problem this solves or what value it adds
+
+   ### Approach
+   Numbered steps, each concrete and actionable. For each step:
+   - What file(s) are affected
+   - What specifically changes
+   - Why this approach over alternatives
+
+   ### Files Affected
+   List every file to be created, modified, or deleted.
+
+   ### Dependencies
+   New libraries, services, environment variables, or config changes needed.
+
+   ### Edge Cases & Risks
+   - What could go wrong
+   - Breaking changes
+   - Migration needs
+   - Backward compatibility concerns
+
+   ### Testing Strategy
+   - What tests to write or update
+   - How to verify the changes work
+   - Manual testing steps if applicable
+
+3. **Invoke the `gemini-plan-reviewer` subagent** after writing the plan.
+
+4. If the reviewer returns **NEEDS_REVISION**:
+   - Read every concern carefully
+   - Update `.claude/plan.md` to address all high and medium severity concerns
+   - Re-invoke the reviewer
+   - Maximum 3 revision cycles — if still not approved, present concerns to the user
+
+5. If the reviewer returns **APPROVE**:
+   - **High complexity** (as rated by reviewer): present the full plan with a summary to the user and **wait for explicit confirmation** before implementing
+   - **Medium complexity**: present a brief summary and **wait for confirmation**
+   - **Low complexity**: briefly state what will be done and proceed unless the user objects
+   - When in doubt, default to waiting for confirmation
+
+6. **Do not skip planning** for non-trivial tasks. When in doubt, plan.
+
+## Implementation Protocol
+
+When implementing after an approved plan:
+
+1. Follow the plan step by step in the order specified
+2. Do not deviate from the plan without stating why
+3. If you discover the plan needs adjustment mid-implementation, update `.claude/plan.md`
+   and note what changed and why
+
+## Code Review Protocol
+
+After implementation is complete (before committing):
+
+1. **Invoke the `gemini-reviewer` subagent**
+
+2. If verdict is **REQUEST_CHANGES**:
+   - Fix all "error" severity issues immediately
+   - Fix all "warning" severity issues unless there's a clear reason not to
+   - "Suggestion" severity items: apply if quick, otherwise note for later
+   - Re-invoke the reviewer after fixes
+   - Maximum 5 review cycles
+
+3. If verdict is **NEEDS_DISCUSSION**:
+   - Present the findings to the user with your assessment
+   - Wait for the user's decision before proceeding
+
+4. If verdict is **APPROVE**:
+   - Safe to commit
+
+## Security Review Protocol
+
+**Automatically invoke the `gemini-security-reviewer` subagent** when changes touch ANY of:
+
+- Authentication or authorization (login, signup, tokens, sessions, roles, permissions)
+- Payment or financial logic
+- User data handling (PII, passwords, emails, addresses)
+- API endpoints (new or modified routes)
+- Database queries or schema changes
+- File uploads or user-generated content
+- Environment variables, secrets, or credentials
+- Infrastructure config (Docker, CI/CD, deployment)
+- New dependency additions
+- CORS, CSP, or security header changes
+
+If the security reviewer returns **FAIL**:
+- Do NOT commit under any circumstances
+- Fix all critical and high severity vulnerabilities
+- Re-invoke the security reviewer
+- Only proceed after verdict changes to PASS or WARN
+
+## General Coding Standards
+
+- Write clean, readable code. Prioritize clarity over cleverness.
+- Use meaningful names for variables, functions, and files.
+- Handle errors explicitly — no silent failures or empty catch blocks.
+- Add comments only when the "why" isn't obvious from the code.
+- Keep functions focused — one function, one responsibility.
+- Don't leave dead code, unused imports, or TODO comments without context.
+- Match existing project patterns and conventions.
+- When modifying existing code, maintain the established style.
+
+## Git Commit Standards
+
+- Write clear, descriptive commit messages
+- Use conventional commit format when the project uses it
+- Keep commits atomic — one logical change per commit
+- Don't commit generated files, build artifacts, or secrets
+
+## Communication Style
+
+- Be direct. State what you're doing and why.
+- When unsure, say so and explain what you'd need to clarify.
+- If a task is ambiguous, ask before assuming.
+- When presenting review findings, lead with the most important issues.
+- Don't repeat yourself or pad responses with unnecessary explanation.
+
+
 Lean 4 theorem prover combining LLM policy (tactic generation) with Energy-Based Model value function (proof state scoring) to guide best-first proof search. Trained via expert iteration.
 
 ## Architecture Overview
@@ -19,127 +178,6 @@ Lean 4 REPL Pool (tokio, Pantograph JSON protocol)
 ```
 
 Single shared 7B backbone serves both policy and value function (AlphaZero-style). The energy head (~5M params) is the only component trained in Rust via burn-rs. LLM fine-tuning happens in Python with HuggingFace PEFT/LoRA.
-
-## Project Layout
-
-```
-burn-qed/
-├── CLAUDE.md                           # THIS FILE
-├── Cargo.toml                          # Workspace root
-├── vendor/
-│   └── Pantograph/                     # Git submodule (pinned commit d047b1d)
-├── docs/
-│   ├── burn-qed_plan.md               # Full architecture plan with all code samples
-│   ├── phase1_instructions.md          # Phase 1 step-by-step prompts
-│   ├── phase2_instructions.md          # Phase 2 step-by-step prompts
-│   ├── phase3_instructions.md          # Phase 3 step-by-step prompts
-│   ├── phase4_instructions.md          # Phase 4 step-by-step prompts
-│   ├── phase5_instructions.md          # Phase 5 step-by-step prompts
-│   └── week2_summary.md               # Week 2 progress summary
-├── crates/
-│   ├── lean-repl/                      # Phase 1: Lean 4 REPL async client
-│   │   ├── Cargo.toml
-│   │   ├── build.rs                    # Emits LEAN_REPL_MANIFEST_DIR for path discovery
-│   │   └── src/
-│   │       ├── lib.rs                  # Public API: LeanPool, ProofHandle, ProofHandleOwned
-│   │       ├── worker.rs               # LeanWorker: spawn, communicate, recycle
-│   │       ├── pool.rs                 # LeanPool, ProofHandle, WorkerGuard (+Owned variants)
-│   │       ├── session.rs              # ProofSession: stateful proof tracking (holds ProofHandle)
-│   │       ├── protocol.rs             # Pantograph JSON request/response serde types
-│   │       └── types.rs                # ProofState, TacticResult, LeanError, Goal, discover_pantograph()
-│   │
-│   ├── policy/                         # Phase 2: LLM tactic generator (candle)
-│   │   ├── Cargo.toml
-│   │   ├── src/
-│   │   │   ├── lib.rs                  # Public API: TacticGenerator, LeanTokenizer, PolicyConfig
-│   │   │   ├── llama.rs                # Forked Llama with forward_hidden_states(), DeepSeekConfig
-│   │   │   ├── model.rs                # TacticGenerator: load, generate, encode_only
-│   │   │   ├── tokenizer.rs            # LeanTokenizer: HuggingFace tokenizer wrapper
-│   │   │   └── types.rs                # PolicyConfig, DeviceConfig, GeneratedTactic, Embedding
-│   │   └── tests/
-│   │       └── integration.rs          # 10 #[ignore] tests (need MODEL_PATH)
-│   │
-│   ├── ebm/                            # Phase 4: Energy-Based Model (burn-rs)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── model/
-│   │       │   ├── mod.rs
-│   │       │   ├── spectral_norm.rs    # SpectralNormLinear (Option C: random reinit)
-│   │       │   ├── energy_head.rs      # 4096 → 512 → 256 → 1
-│   │       │   └── encoder.rs          # EncoderBackend enum
-│   │       ├── training/
-│   │       │   ├── mod.rs
-│   │       │   ├── loss.rs             # InfoNCE + depth regression
-│   │       │   ├── data.rs             # Parquet dataset + contrastive batcher
-│   │       │   ├── trainer.rs          # Training loop (single optimizer on head only)
-│   │       │   └── metrics.rs          # EBMMetrics + health_check()
-│   │       └── inference.rs            # Batch scoring for search
-│   │
-│   ├── search/                         # Phase 3: Best-first search
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs                  # Public API: SearchEngine, SearchStats, traits, nodes
-│   │       ├── config.rs               # SearchConfig (from TOML, with defaults)
-│   │       ├── node.rs                 # SearchNode, ScoredNode, path extraction
-│   │       ├── engine.rs               # Traits + SearchEngine::search_one + SearchStats instrumentation
-│   │       ├── mocks.rs               # MockPolicy, MockEnvironment for testing
-│   │       └── adapters.rs            # Real impls: LeanPool, ProofHandleOwned, TacticGenerator
-│   │
-│   ├── trajectory/                     # Phase 3: Parquet I/O
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── writer.rs               # Arrow schema, write trajectory records
-│   │       ├── reader.rs               # Read + deserialize
-│   │       └── types.rs                # TrajectoryRecord
-│   │
-│   ├── burn-contrib/                   # Phase 6: Reusable burn-rs modules → upstream PRs
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── spectral_norm.rs
-│   │       ├── info_nce_loss.rs
-│   │       ├── warmup_scheduler.rs
-│   │       ├── parquet_dataset.rs
-│   │       └── pooling.rs
-│   │
-│   └── prover-core/                    # CLI binary
-│       ├── Cargo.toml
-│       ├── src/
-│       │   ├── main.rs                 # clap: search, eval, train-ebm subcommands
-│       │   ├── config.rs               # SearchToml, LeanPoolOverrides, TOML loading
-│       │   └── pipeline.rs             # run_search() (async), run_eval() (sync), run_train_ebm()
-│       ├── examples/
-│       │   └── gen_synthetic_parquet.rs # Generate synthetic trajectory Parquet for testing
-│       └── tests/
-│           └── integration.rs          # 7 mock tests + 1 #[ignore] Lean test
-│
-├── data/
-│   └── test_theorems.json              # 12 Init-only theorems for testing
-│
-├── python/
-│   ├── training/
-│   │   ├── train_llm.py                # LoRA fine-tuning
-│   │   └── export_llm.py              # safetensors for candle
-│   └── data/
-│       ├── trace_mathlib.py
-│       └── prepare_tactic_pairs.py
-│
-├── configs/
-│   ├── models.toml
-│   └── search.toml
-│
-└── scripts/
-    ├── setup_pantograph.sh             # One-time: init submodule + lake build
-    ├── setup_cloud.sh                  # Cloud GPU bootstrap (Rust, elan, Python, build)
-    ├── prepare_data.sh                 # Data pipeline: trace Mathlib, format tactic pairs, validate
-    ├── run_baseline.sh                 # Phase B: raw model baseline evaluation
-    ├── run_iteration.sh                # One expert iteration (fine-tune, EBM, search, eval)
-    ├── run_all_iterations.sh           # Full experiment: baseline + N iterations + analysis
-    ├── resume_search.sh                # Resume interrupted search from partial Parquet
-    └── lean_start.sh                   # Quick end-to-end validation pipeline
-```
 
 ## Settled Architecture Decisions — Do NOT Change
 
@@ -248,7 +286,7 @@ cd vendor/Pantograph && lake build
 ### Launching
 
 ```bash
-# The binary is typically at ~/.elan/toolchains/.../bin/pantograph
+# The binary is typically at .elan/toolchains/.../bin/pantograph
 # Or built from source: https://github.com/lenianiva/Pantograph
 pantograph --env-path /path/to/mathlib/build/
 ```
@@ -327,52 +365,6 @@ A working async Lean 4 REPL client that can:
 8. Handle timeouts (30s) and crashes gracefully
 9. Pass 10 integration tests including concurrent multi-step branching proofs
 
-### Phase 1 API Summary
-
-```rust
-// Basic proof (worker held for lifetime of `proof`):
-let pool = LeanPool::new(config).await?;
-let mut proof = pool.start_proof("∀ (n : Nat), n = n").await?;
-let sid = proof.state_id();
-let r = proof.run_tactic(sid, None, "intro n").await?;
-
-// Concurrent proofs via tokio::spawn (owned, 'static):
-let pool = Arc::new(pool);
-tokio::spawn({
-    let pool = pool.clone();
-    async move {
-        let mut proof = pool.start_proof_owned("∀ n, n = n").await.unwrap();
-        // ...
-    }
-});
-
-// Advanced: checkout raw worker for multi-proof scenarios:
-let mut guard = pool.checkout().await?;
-let w = guard.worker();
-let s1 = w.start_proof("True").await?;
-let s2 = w.start_proof("False → False").await?;
-// both proofs share the same worker
-```
-
-### Phase 1 Test Coverage
-
-```
-cargo test -p lean-repl           # 20 unit + 2 doc tests
-cargo test -p lean-repl -- --ignored --test-threads=1  # 10 integration tests
-
-# Integration tests (require Pantograph built):
-# - Single-worker simple proof (intro + rfl)
-# - Tactic error handling
-# - Multi-goal proofs (And.intro)
-# - ProofSession (stateful tracking)
-# - Sequential 100 proofs (4 workers)
-# - Concurrent 20 proofs (4 workers, owned handles)
-# - Concurrent multi-step isolation (10 proofs, branching, state immutability)
-# - Worker recycling after N requests
-# - Timeout recovery
-# - Proof search simulation (branching, goalId, 20 theorems, error recovery)
-```
-
 ### Phase 2 Deliverable (DONE)
 A working LLM inference crate that can:
 1. Load DeepSeek-Prover-V2-7B (Llama architecture) from HuggingFace safetensors
@@ -383,27 +375,6 @@ A working LLM inference crate that can:
 6. Handle multi-shard safetensors loading
 7. Pass 21 unit tests (types, tokenizer, llama config, sampling, prompt formatting)
 8. 10 integration tests ready (require MODEL_PATH env var)
-
-### Phase 2 API Summary
-
-```rust
-// Load model from HuggingFace directory:
-let config = PolicyConfig::new(PathBuf::from("./models/deepseek-prover-v2-7b"));
-let mut gen = TacticGenerator::load(&config)?;
-
-// Generate candidate tactics for a proof state:
-let candidates = gen.generate_candidates("n : Nat\n⊢ n + 0 = n", 32)?;
-for c in &candidates {
-    println!("{}: log_prob={:.4}", c.text, c.log_prob);
-}
-
-// Extract mean-pooled embeddings for EBM scoring:
-let embedding = gen.encode_only("n : Nat\n⊢ n + 0 = n")?;
-assert_eq!(embedding.dim, 4096);
-
-// Batch encoding:
-let embeddings = gen.encode_batch(&["⊢ True", "⊢ False → False"])?;
-```
 
 ### Phase 2 Architecture Notes
 
@@ -416,34 +387,6 @@ let embeddings = gen.encode_batch(&["⊢ True", "⊢ False → False"])?;
 - **YaRN RoPE ignored**: Standard RoPE used. YaRN is backwards-compatible within original 4096 context, and our sequences are ≤2048 tokens.
 - **Prompt format**: `[GOAL]{proof_state}[PROOFSTEP]` — simple structured format for DeepSeek-Prover-V2.
 - **f32 on CPU, bf16 on CUDA**: CPU doesn't support bf16 well in candle.
-
-### Phase 2 Test Coverage
-
-```
-cargo test -p policy                    # 21 unit tests
-cargo test -p policy -- --ignored --nocapture --test-threads=1  # 10 integration tests
-
-# Unit tests (no model needed):
-# - types: DeviceConfig, PolicyConfig deserialization (8 tests)
-# - tokenizer: truncate operations (4 tests)
-# - llama: DeepSeekConfig deserialization, EosToks (4 tests)
-# - model: prompt formatting, top-p sampling (5 tests)
-
-# Integration tests (default: TinyLlama-1.1B at models/tinyllama-1.1b):
-# - Model loading + hidden_size verification
-# - Tokenizer roundtrip + special tokens
-# - Forward logits shape verification
-# - Single tactic generation
-# - Candidate generation (sorted by log_prob)
-# - Embedding shape (dim == hidden_size, dynamic)
-# - Embedding distinctness (different states → different embeddings)
-# - Embedding determinism (same state → same embedding)
-# - Batch encoding
-#
-# TinyLlama-1.1B is the default test model — same Llama architecture as DeepSeek-7B
-# but loads in seconds on CPU. All assertions use gen.hidden_size() dynamically.
-# Override: MODEL_PATH=models/deepseek-prover-v2-7b cargo test -p policy -- --ignored
-```
 
 ### Phase 3 Deliverable (DONE)
 
@@ -466,30 +409,6 @@ A trait-based best-first search engine that can:
 9. Instrument `SearchStats` (timing, pruning, frontier size) per search
 10. Pass 31 unit tests using mocks (no Lean, no LLM)
 
-### Phase 3 API Summary
-
-```rust
-// Configure search:
-let config = SearchConfig::default(); // max_nodes=600, max_depth=50, alpha=0.5, beta=0.5
-
-// Search with mocks (testing):
-let engine = SearchEngine::new(config);
-let result = engine.search_one(&env, &policy, scorer.as_deref(), "thm_name", "True").await?;
-assert!(result.proved);
-assert_eq!(result.proof_tactics, vec!["trivial"]);
-
-// Search with real Lean + LLM:
-let pool = Arc::new(LeanPool::new(lean_config).await?);
-let policy = MutexPolicyProvider::new(TacticGenerator::load(&policy_config)?);
-let result = engine.search_one(&pool, &policy, None, "nat_refl", "∀ (n : Nat), n = n").await?;
-
-// Write trajectory to Parquet:
-let labeled = TrajectoryWriter::from_search_result(&result);
-let mut writer = TrajectoryWriter::new("output.parquet".into());
-writer.record_all(labeled);
-writer.finish()?;
-```
-
 ### Phase 3 Architecture Notes
 
 - **Trait-based abstraction**: `ProofEnvironment`, `TacticRunner` (async) and `PolicyProvider`, `ValueScorer` (sync) allow testing with mocks.
@@ -509,112 +428,6 @@ writer.finish()?;
 
 **Test data:**
 - `data/test_theorems.json`: 12 Init-only theorems (True, False→False, nat_refl, and_comm, etc.)
-
-### prover-core API Summary
-
-```bash
-# Run proof search:
-cargo run -p prover-core -- search \
-  --model-path models/deepseek-prover-v2-7b \
-  --theorems data/test_theorems.json \
-  --output output/trajectory.parquet \
-  --num-workers 4
-
-# Run proof search with EBM value guidance:
-cargo run -p prover-core -- search \
-  --model-path models/deepseek-prover-v2-7b \
-  --theorems data/test_theorems.json \
-  --output output/trajectory.parquet \
-  --ebm-path checkpoints/ebm
-
-# Verify environment setup without searching:
-cargo run -p prover-core -- search --dry-run \
-  --model-path models/deepseek-prover-v2-7b \
-  --theorems data/test_theorems.json \
-  --output output/trajectory.parquet
-
-# Print trajectory statistics:
-cargo run -p prover-core -- eval --input output/trajectory.parquet
-
-# Train EBM from trajectory data:
-cargo run -p prover-core -- train-ebm \
-  --trajectories output/trajectory.parquet \
-  --llm-path models/deepseek-prover-v2-7b \
-  --output-dir checkpoints/ebm \
-  --steps 50000
-
-# Resume EBM training from checkpoint:
-cargo run -p prover-core -- train-ebm \
-  --trajectories output/trajectory.parquet \
-  --llm-path models/deepseek-prover-v2-7b \
-  --output-dir checkpoints/ebm_v2 \
-  --resume-from checkpoints/ebm
-```
-
-### Phase 3 Test Coverage
-
-```
-cargo test -p trajectory         # 18 unit tests + 6 integration tests
-cargo test -p search             # 31 unit tests (config: 4, node: 8, engine: 10, mocks: 8, + 1 doc)
-cargo test -p search -- --ignored --test-threads=1  # 11 integration tests (need Pantograph, ~60s)
-cargo test -p prover-core        # 3 unit tests (config) + 13 integration tests (mocks + JSON + TOML + EBM)
-cargo test -p prover-core -- --ignored --test-threads=1  # 1 Lean integration test (~15s)
-cargo test -p prover-core --test integration_llm -- --ignored --test-threads=1  # 4 TinyLlama tests (~10-35min each on CPU)
-
-# Trajectory unit tests:
-# - types: label display/serde, TheoremTask/Index deserialize, record defaults
-# - writer: schema, empty file, write+verify, from_search_result (proved/unproved/
-#           single-node/no-terminal/multiple-terminals)
-# - reader: roundtrip, nullable parent, summary, read_for_theorem
-
-# Trajectory integration tests (no Lean, no model):
-# - Label roundtrip through Parquet (proved tree with dead ends)
-# - TheoremIndex from JSON file / invalid JSON / missing file
-# - Read multiple Parquet files
-# - Multi-theorem pipeline (proved + unproved + trivial, summary verification)
-
-# Search unit tests (all use mocks, no Lean/LLM):
-# - config: defaults, partial/full TOML, alpha+beta sum
-# - node: combined_score, ScoredNode ordering, goals_as_text, path extraction, branching
-# - engine: 1-step proof, 2-step proof, node budget, depth limit, tactic failure,
-#           empty frontier, trajectory records, proof_tactics, timeout=0, empty candidates
-# - mocks: make_tactic, MockPolicy exact/default/empty/contains/exact-before-contains,
-#           MockEnvironment canned/unknown
-
-# Search integration tests (require Pantograph, use MockPolicy + real LeanPool):
-# - One-step proof (True via trivial) with trajectory verification
-# - Two-step proof (∀ n, n = n via intro n + rfl) with parent chain
-# - Survives tactic failures (bad tactic + good tactic)
-# - Unproved with bad tactics (budget exhaustion)
-# - Trajectory record field-level validation (3 records, depths, labels)
-# - Concurrent two proofs (2 workers, tokio::join!, no cross-contamination)
-# - Timeout exits early (3s timeout with high node budget)
-# - Medium arithmetic batch (5 theorems via omega: n+0=n, 0+n=n, a+b=b+a, n*1=n, 0≤n)
-# - And commutativity multi-goal 4-step (intro → constructor → exact h.2 → exact h.1)
-# - Medium logic batch (eq_symm via h.symm, eq_trans via h1.trans h2, modus_ponens via f hp)
-# - Hard arithmetic with backtracking (wrong tactics before omega)
-
-# Prover-core unit tests:
-# - config: full TOML deserialize, optional lean_pool, CLI override priority
-
-# Prover-core integration tests (mocks, no Lean/LLM):
-# - Mock pipeline: search 2 theorems + write/read Parquet + verify summary
-# - Mock unproved: all tactics fail, verify negative labels
-# - Load test_theorems.json: verify >= 10 theorems
-# - Eval reads Parquet: manually write + read_summary
-# - Real search.toml is valid TOML
-# - Train EBM mock pipeline: synthetic Parquet + mock encode_fn, verify checkpoint + config
-# - Search with mock EBM: small EnergyHead saved/loaded, mock search with scorer active
-
-# Prover-core Lean integration test (#[ignore], requires Pantograph):
-# - Real LeanPool + MockPolicy: search 3 theorems, verify >= 2 proved, Parquet output
-
-# Prover-core TinyLlama integration tests (#[ignore], require models/tinyllama-1.1b):
-# - test_tinyllama_encode_and_ebm_train: real encode_only() → EBM train, dim=2048
-# - test_tinyllama_ebm_scorer_roundtrip: train → save → load → score with real dimensions
-# - test_tinyllama_shared_generator_policy_and_ebm: Arc<Mutex> interleaving policy + encode
-# - test_tinyllama_full_pipeline_with_lean: search → Parquet → train EBM → search with EBM (also needs Pantograph)
-```
 
 ### Phase 4 Deliverable (DONE)
 

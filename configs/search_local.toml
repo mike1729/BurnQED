@@ -1,0 +1,11 @@
+[search]
+max_nodes = 20
+max_depth = 10
+beam_width = 4
+num_candidates = 8
+alpha = 0.5
+beta = 0.5
+timeout_per_theorem = 60
+
+[lean_pool]
+tactic_timeout_secs = 30
