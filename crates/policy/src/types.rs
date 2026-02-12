@@ -67,7 +67,7 @@ fn default_top_p() -> f64 {
     0.95
 }
 fn default_max_tactic_tokens() -> usize {
-    128
+    48
 }
 
 impl PolicyConfig {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(cfg.num_candidates, 32);
         assert!((cfg.temperature - 0.6).abs() < 1e-9);
         assert!((cfg.top_p - 0.95).abs() < 1e-9);
-        assert_eq!(cfg.max_tactic_tokens, 128);
+        assert_eq!(cfg.max_tactic_tokens, 48);
     }
 
     #[test]

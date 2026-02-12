@@ -323,6 +323,12 @@ impl TacticGenerator {
                 continue;
             }
 
+            // Deduplicate: skip if we already have this tactic (keep highest log_prob)
+            if candidates.iter().any(|c: &GeneratedTactic| c.text == text) {
+                tracing::debug!(candidate = i, text = %text, "Skipping duplicate tactic");
+                continue;
+            }
+
             candidates.push(GeneratedTactic {
                 text,
                 log_prob: log_probs[i],
@@ -343,6 +349,12 @@ impl TacticGenerator {
                 .partial_cmp(&a.log_prob)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        tracing::info!(
+            total = n,
+            unique = candidates.len(),
+            "Batch generation complete"
+        );
 
         Ok(candidates)
     }

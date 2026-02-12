@@ -45,7 +45,7 @@ cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
 max_nodes = 100
 max_depth = 25
-num_candidates = 8
+num_candidates = 4
 beam_width = 8
 alpha = 0.5
 beta = 0.5
@@ -60,7 +60,7 @@ TOML
 
 # ── Step 1: LLM-only search ──────────────────────────────────────────────
 echo ""
-echo "=== Step 1: LLM-only Search (16 theorems, 30 nodes) ==="
+echo "=== Step 1: LLM-only Search (16 theorems, 100 nodes) ==="
 LLM_TRAJ="${WORK_DIR}/llm_only.parquet"
 
 $PROVER search \
