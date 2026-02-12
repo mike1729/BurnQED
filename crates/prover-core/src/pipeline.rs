@@ -44,6 +44,8 @@ pub struct SearchArgs {
     pub temperature: Option<f64>,
     /// Number of theorems to search in parallel (default: 1 = sequential).
     pub concurrency: usize,
+    /// Maximum number of theorems to search (truncates the index).
+    pub max_theorems: Option<usize>,
 }
 
 /// Arguments for the `summary` subcommand (formerly `eval`).
@@ -74,6 +76,8 @@ pub struct EvalArgs {
     pub num_workers: Option<usize>,
     /// Number of theorems to search in parallel (default: 1 = sequential).
     pub concurrency: usize,
+    /// Maximum number of theorems to evaluate (truncates the index).
+    pub max_theorems: Option<usize>,
 }
 
 /// Arguments for the `compare` subcommand.
@@ -240,7 +244,13 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     .await?;
 
     // Load theorem index
-    let index = TheoremIndex::from_json(&args.theorems)?;
+    let mut index = TheoremIndex::from_json(&args.theorems)?;
+    if let Some(max) = args.max_theorems {
+        if max < index.len() {
+            tracing::info!(total = index.len(), max, "Truncating theorem index");
+            index.theorems.truncate(max);
+        }
+    }
     tracing::info!(count = index.len(), "Loaded theorems");
 
     // Dry-run: verify setup and exit early
@@ -539,7 +549,13 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     )
     .await?;
 
-    let index = TheoremIndex::from_json(&args.theorems)?;
+    let mut index = TheoremIndex::from_json(&args.theorems)?;
+    if let Some(max) = args.max_theorems {
+        if max < index.len() {
+            tracing::info!(total = index.len(), max, "Truncating theorem index");
+            index.theorems.truncate(max);
+        }
+    }
     tracing::info!(count = index.len(), "Loaded theorems");
 
     let mut budgets = args.budgets;

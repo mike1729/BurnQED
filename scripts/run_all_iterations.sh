@@ -22,6 +22,8 @@ MAX_ITER=${MAX_ITER:-4}
 SKIP_BASELINE=${SKIP_BASELINE:-0}
 export NUM_WORKERS="${NUM_WORKERS:-30}"
 export CONCURRENCY="${CONCURRENCY:-8}"
+export MAX_THEOREMS="${MAX_THEOREMS:-2000}"
+export EBM_STEPS="${EBM_STEPS:-10000}"
 
 mkdir -p "${REPO_ROOT}/logs"
 
@@ -30,6 +32,8 @@ echo "  BurnQED Expert Iteration Experiment"
 echo "  Running iterations 0 through ${MAX_ITER}"
 echo "  Workers: ${NUM_WORKERS}"
 echo "  Concurrency: ${CONCURRENCY}"
+echo "  Max theorems: ${MAX_THEOREMS}"
+echo "  EBM steps: ${EBM_STEPS}"
 echo "================================================================"
 
 # ── Phase B: Baseline ────────────────────────────────────────────────────

@@ -25,6 +25,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 NUM_WORKERS="${NUM_WORKERS:-30}"
 CONCURRENCY="${CONCURRENCY:-8}"
+MAX_THEOREMS="${MAX_THEOREMS:-2000}"
+EBM_STEPS="${EBM_STEPS:-10000}"
 
 # Auto-detect CUDA
 CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
@@ -40,6 +42,8 @@ echo "================================================================"
 echo "  Model:        ${MODEL_PATH}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Concurrency:  ${CONCURRENCY}"
+echo "  Max theorems: ${MAX_THEOREMS}"
+echo "  EBM steps:    ${EBM_STEPS}"
 echo "  Output dir:   ${BASELINES_DIR}"
 echo "================================================================"
 
@@ -76,7 +80,8 @@ if [ -f "$MINIF2F" ]; then
         --budgets 100,300,600 \
         --output "${BASELINES_DIR}/raw_minif2f.json" \
         --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY"
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS"
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
     echo "Run: python python/data/trace_mathlib.py --output-dir data/"
@@ -93,7 +98,8 @@ if [ -f "$THEOREM_INDEX" ]; then
         --theorems "$THEOREM_INDEX" \
         --output "${TRAJ_DIR}/baseline_raw.parquet" \
         --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY"
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS"
 
     echo ""
     echo "Full theorem search summary:"
@@ -114,7 +120,7 @@ if [ -f "${TRAJ_DIR}/baseline_raw.parquet" ]; then
         --trajectories "${TRAJ_DIR}/baseline_raw.parquet" \
         --llm-path "$MODEL_PATH" \
         --output-dir "$BASELINE_EBM_DIR" \
-        --steps 50000 \
+        --steps "$EBM_STEPS" \
         --save-embeddings "${BASELINE_EBM_DIR}/embeddings.parquet"
 
     echo "Baseline EBM saved to: ${BASELINE_EBM_DIR}"

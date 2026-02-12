@@ -34,6 +34,8 @@ TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
 NUM_WORKERS="${NUM_WORKERS:-30}"
 CONCURRENCY="${CONCURRENCY:-8}"
+MAX_THEOREMS="${MAX_THEOREMS:-2000}"
+EBM_STEPS="${EBM_STEPS:-10000}"
 
 # Auto-detect CUDA
 CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
@@ -52,6 +54,8 @@ echo "  Trajectory dir:  ${TRAJ_DIR}"
 echo "  Theorem index:   ${THEOREM_INDEX}"
 echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
+echo "  Max theorems:    ${MAX_THEOREMS}"
+echo "  EBM steps:       ${EBM_STEPS}"
 echo "================================================================"
 
 # ── Step 1: LLM Fine-tuning ───────────────────────────────────────────────
@@ -138,7 +142,7 @@ if [ "$ITER" -gt 0 ]; then
         --trajectories "${TRAJ_FILES[@]}" \
         --llm-path "$LLM_DIR" \
         --output-dir "$EBM_DIR" \
-        --steps 50000 \
+        --steps "$EBM_STEPS" \
         --save-embeddings "$EMBEDDINGS_SAVE" \
         $RESUME_FLAG
 else
@@ -164,7 +168,8 @@ $PROVER search \
     --theorems "$THEOREM_INDEX" \
     --output "$TRAJ_OUTPUT" \
     --num-workers "$NUM_WORKERS" \
-    --concurrency "$CONCURRENCY"
+    --concurrency "$CONCURRENCY" \
+    --max-theorems "$MAX_THEOREMS"
 
 # ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
 if [ "$ITER" -eq 0 ]; then
@@ -179,7 +184,8 @@ if [ "$ITER" -eq 0 ]; then
         --theorems "$THEOREM_INDEX" \
         --output "$NOISY_OUTPUT" \
         --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY"
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS"
 fi
 
 # ── Step 4: Evaluation ────────────────────────────────────────────────────
@@ -202,7 +208,8 @@ $PROVER eval \
     --budgets 100,300,600 \
     --output "${EVAL_DIR}/iter_${ITER}.json" \
     --num-workers "$NUM_WORKERS" \
-    --concurrency "$CONCURRENCY"
+    --concurrency "$CONCURRENCY" \
+    --max-theorems "$MAX_THEOREMS"
 
 # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
 if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
@@ -215,7 +222,8 @@ if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         --budgets 100,300,600 \
         --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
         --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY"
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS"
 fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────────────

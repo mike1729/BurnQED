@@ -52,6 +52,9 @@ enum Command {
         /// Number of theorems to search in parallel (default: 1 = sequential).
         #[arg(long, default_value_t = 1)]
         concurrency: usize,
+        /// Maximum number of theorems to search (truncates the index).
+        #[arg(long)]
+        max_theorems: Option<usize>,
     },
     /// Print statistics from a trajectory Parquet file.
     Summary {
@@ -88,6 +91,9 @@ enum Command {
         /// Number of theorems to search in parallel (default: 1 = sequential).
         #[arg(long, default_value_t = 1)]
         concurrency: usize,
+        /// Maximum number of theorems to evaluate (truncates the index).
+        #[arg(long)]
+        max_theorems: Option<usize>,
     },
     /// Compare evaluation results across iterations.
     Compare {
@@ -152,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
             resume_from,
             temperature,
             concurrency,
+            max_theorems,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -164,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
                 resume_from,
                 temperature,
                 concurrency,
+                max_theorems,
             })
             .await
         }
@@ -178,6 +186,7 @@ async fn main() -> anyhow::Result<()> {
             output,
             num_workers,
             concurrency,
+            max_theorems,
         } => {
             pipeline::run_eval(EvalArgs {
                 config,
@@ -189,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
                 output,
                 num_workers,
                 concurrency,
+                max_theorems,
             })
             .await
         }
