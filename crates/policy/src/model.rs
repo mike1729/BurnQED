@@ -259,9 +259,10 @@ impl TacticGenerator {
         let newline_id = self.tokenizer.token_to_id("\n");
         let eos_fallback = eos_id.unwrap_or(0);
 
-        let mut sequences: Vec<Vec<u32>> = Vec::with_capacity(n);
+        let mut sequences: Vec<Vec<u32>> = vec![Vec::new(); n];
         let mut log_probs: Vec<f64> = vec![0.0; n];
         let mut stopped: Vec<bool> = vec![false; n];
+        let mut has_content: Vec<bool> = vec![false; n];
         let mut stop_reasons: Vec<&str> = vec!["max_tokens"; n];
 
         // Compute log-probs from shared prefill logits
@@ -281,7 +282,6 @@ impl TacticGenerator {
             if eos_id == Some(token) {
                 stopped[i] = true;
                 stop_reasons[i] = "eos";
-                sequences.push(Vec::new());
                 first_tokens.push(eos_fallback);
                 continue;
             }
@@ -294,20 +294,18 @@ impl TacticGenerator {
                     .map(|t| t.contains('\n'))
                     .unwrap_or(false);
             if is_newline {
-                // Leading newline for first token — treat as empty (skip)
-                stopped[i] = true;
-                stop_reasons[i] = "newline";
-                sequences.push(Vec::new());
-                first_tokens.push(eos_fallback);
+                // Leading newline — skip but feed the actual token to keep
+                // KV cache aligned. Don't record as content, don't stop.
+                first_tokens.push(token);
                 continue;
             }
 
-            sequences.push(vec![token]);
+            has_content[i] = true;
+            sequences[i].push(token);
             first_tokens.push(token);
         }
 
         // 4. Batch decode loop
-        // Build (N, 1) input from first tokens
         let mut batch_input_vec = first_tokens;
 
         for step in 0..self.config.max_tactic_tokens.saturating_sub(1) {
@@ -357,12 +355,19 @@ impl TacticGenerator {
                         .map(|t| t.contains('\n'))
                         .unwrap_or(false);
                 if is_newline {
-                    stopped[i] = true;
-                    stop_reasons[i] = "newline";
-                    batch_input_vec.push(eos_fallback);
+                    if has_content[i] {
+                        // Newline after content → tactic complete
+                        stopped[i] = true;
+                        stop_reasons[i] = "newline";
+                        batch_input_vec.push(eos_fallback);
+                    } else {
+                        // Leading newline → skip, feed actual token for KV alignment
+                        batch_input_vec.push(token);
+                    }
                     continue;
                 }
 
+                has_content[i] = true;
                 sequences[i].push(token);
                 batch_input_vec.push(token);
             }
