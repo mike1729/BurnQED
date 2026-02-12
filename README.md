@@ -72,7 +72,7 @@ cd BurnQED
 # Build the prover
 cargo build --release -p prover-core
 
-# Run end-to-end validation (LLM search → train EBM → search with EBM → compare)
+# Smoke test (~2-3 min on A100: LLM search → train EBM → search with EBM → compare)
 ./scripts/lean_start.sh /path/to/deepseek-prover-v2-7b
 ```
 

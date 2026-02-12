@@ -518,7 +518,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
 | `scripts/run_all_iterations.sh` | Full experiment: baseline + iters 0-4 + final analysis | Yes |
 | `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
-| `scripts/lean_start.sh` | Quick end-to-end validation on test_theorems (no training data needed) | Yes |
+| `scripts/lean_start.sh` | Smoke test: 3 theorems, 100-node budget, EBM train+search (~2-3 min on A100) | Yes |
 
 ### Environment Variables
 
