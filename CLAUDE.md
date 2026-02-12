@@ -4,27 +4,26 @@
 
 ## Gemini Tool Usage Rules
 
-NEVER use the `ask-gemini` MCP tool directly for code reviews, plan reviews, or security reviews.
-Always use the designated subagents instead:
-- For plan reviews → invoke `gemini-plan-reviewer` subagent
-- For code reviews → invoke `gemini-reviewer` subagent
-- For security reviews → invoke `gemini-security-reviewer` subagent
+For structured reviews, always use the designated review workflows:
+- For plan reviews → follow `gemini-plan-reviewer` agent instructions
+- For code reviews → follow `gemini-reviewer` agent instructions
+- For security reviews → follow `gemini-security-reviewer` agent instructions
 
-The `ask-gemini` MCP tool may only be used for quick one-off questions that don't fit any subagent or slash command.
+The `ask-gemini` MCP tool may be used directly for quick one-off questions that don't fit any review workflow.
+
 ## Custom Agent Definitions
 
-Custom subagents are defined in `.claude/agents/`. To invoke one, use the **Task tool** with
-`subagent_type: "Bash"` and run the bash script defined in the agent's `.md` file. Each agent file
-contains a complete bash script that gathers project context and calls `gemini` CLI.
+Review agents are defined in `.claude/agents/`. Each agent file contains step-by-step instructions
+for gathering context and invoking `mcp__gemini-cli__ask-gemini` with `model: "gemini-3-pro-preview"`.
 
 Available agents:
-- **`gemini-plan-reviewer`** (`.claude/agents/gemini-plan-reviewer.md`) — Reviews plans in `.claude/plan.md` before implementation
+- **`gemini-plan-reviewer`** (`.claude/agents/gemini-plan-reviewer.md`) — Reviews plans before implementation
 - **`gemini-reviewer`** (`.claude/agents/gemini-reviewer.md`) — Reviews code changes after implementation
 - **`gemini-security-reviewer`** (`.claude/agents/gemini-security-reviewer.md`) — Security audit on changes
 
-**How to invoke**: Read the agent `.md` file, extract the bash script block, and execute it via
-`Bash` tool from the project root directory. The script handles context gathering and Gemini
-invocation automatically.
+**How to invoke**: Read the agent `.md` file, follow its execution steps (gather context, compose
+prompt with `@file` includes), then call `mcp__gemini-cli__ask-gemini` with the specified model
+and prompt template. Present findings as described in the agent file.
 
 ## Planning Protocol
 
@@ -34,7 +33,7 @@ that touch multiple files, or anything requiring more than ~50 lines of changes)
 1. **Think deeply first.** Before writing any plan, understand the full scope of the request.
    Read relevant files, check dependencies, and understand existing patterns.
 
-2. **Write the plan to `.claude/plan.md`** with this structure:
+2. **Write the plan** to the active plan mode file (Claude Code stores plans at `~/.claude/plans/`) with this structure:
 
    ### Goal
    One clear sentence describing what we're trying to achieve and why.
@@ -73,7 +72,7 @@ that touch multiple files, or anything requiring more than ~50 lines of changes)
 
 4. If the reviewer returns **NEEDS_REVISION**:
    - Read every concern carefully
-   - Update `.claude/plan.md` to address all high and medium severity concerns
+   - Update the plan file to address all high and medium severity concerns
    - Re-invoke the reviewer
    - Maximum 3 revision cycles — if still not approved, present concerns to the user
 
@@ -92,7 +91,7 @@ When implementing after an approved plan:
 
 1. Follow the plan step by step in the order specified
 2. Do not deviate from the plan without stating why
-3. If you discover the plan needs adjustment mid-implementation, update `.claude/plan.md`
+3. If you discover the plan needs adjustment mid-implementation, update the plan file
    and note what changed and why
 
 ## Code Review Protocol
