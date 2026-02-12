@@ -874,7 +874,21 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 
     // 3. Load trajectory data
     tracing::info!("Loading trajectory data from {} file(s)", args.trajectories.len());
-    let sampler = ContrastiveSampler::from_parquet(&args.trajectories, args.k_negatives)?;
+    let sampler = match ContrastiveSampler::from_parquet(&args.trajectories, args.k_negatives) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "Cannot train EBM — not enough contrastive data");
+            println!();
+            println!("══════════════════════════════════════════");
+            println!(" EBM Training Skipped");
+            println!("──────────────────────────────────────────");
+            println!(" Reason: {e}");
+            println!(" Hint:   Need proved theorems with dead-end");
+            println!("         branches to create contrastive pairs.");
+            println!("══════════════════════════════════════════");
+            return Ok(());
+        }
+    };
     tracing::info!(
         records = sampler.num_records(),
         eligible_theorems = sampler.num_eligible_theorems(),

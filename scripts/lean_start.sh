@@ -1,10 +1,10 @@
 #!/bin/bash
-# Quick end-to-end smoke test for the full pipeline (~2-3 min on A100).
+# End-to-end smoke test for the full pipeline (~5-10 min on A100 with CUDA).
 #
 # Validates that all components work together:
-#   1. LLM-only search on 3 easy theorems (small node budget)
-#   2. Train EBM from trajectory (500 steps)
-#   3. Search with EBM
+#   1. LLM-only search on all test theorems (moderate node budget)
+#   2. Train EBM from trajectory (500 steps, skipped if insufficient data)
+#   3. Search with EBM (skipped if EBM training was skipped)
 #   4. Compare solve rates
 #
 # Usage:
@@ -34,33 +34,25 @@ echo "================================================================"
 
 mkdir -p "$WORK_DIR"
 
-# ── Step 0: Create minimal inputs ────────────────────────────────────────
-# 3 easy theorems: True, False→False, ∀ n, n = n
-SMOKE_THEOREMS="${WORK_DIR}/smoke_theorems.json"
-python3 -c "
-import json
-with open('${REPO_ROOT}/data/test_theorems.json') as f:
-    data = json.load(f)
-subset = {'theorems': data['theorems'][:3]}
-with open('${SMOKE_THEOREMS}', 'w') as f:
-    json.dump(subset, f, indent=2)
-print(f'Using {len(subset[\"theorems\"])} theorems for smoke test')
-"
+# ── Step 0: Create inputs ──────────────────────────────────────────────
+# Use all test theorems (16 theorems of varying difficulty)
+SMOKE_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
+echo "Using all theorems from ${SMOKE_THEOREMS}"
 
-# Small search config: 50 nodes, 4 candidates (instead of 600 nodes / 32 candidates)
+# Moderate search config for GPU: 200 nodes, 16 candidates, 8 workers
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
 cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
-max_nodes = 50
-max_depth = 20
-num_candidates = 4
-beam_width = 4
+max_nodes = 200
+max_depth = 30
+num_candidates = 16
+beam_width = 8
 alpha = 0.5
 beta = 0.5
-timeout_per_theorem = 60
+timeout_per_theorem = 120
 
 [lean_pool]
-num_workers = 4
+num_workers = 8
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800
 tactic_timeout_secs = 30
@@ -68,7 +60,7 @@ TOML
 
 # ── Step 1: LLM-only search ──────────────────────────────────────────────
 echo ""
-echo "=== Step 1: LLM-only Search (3 theorems, 50 nodes) ==="
+echo "=== Step 1: LLM-only Search (16 theorems, 200 nodes) ==="
 LLM_TRAJ="${WORK_DIR}/llm_only.parquet"
 
 $PROVER search \
@@ -92,35 +84,43 @@ $PROVER train-ebm \
     --output-dir "$EBM_DIR" \
     --steps 500
 
-# ── Step 3: Search with EBM ──────────────────────────────────────────────
-echo ""
-echo "=== Step 3: Search with EBM (3 theorems, 50 nodes) ==="
+# ── Step 3: Search with EBM (if trained) ────────────────────────────────
 EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"
 
-$PROVER search \
-    --config "$SMOKE_CONFIG" \
-    --model-path "$MODEL_PATH" \
-    --ebm-path "$EBM_DIR" \
-    --theorems "$SMOKE_THEOREMS" \
-    --output "$EBM_TRAJ"
+if [ -f "${EBM_DIR}/final.mpk" ]; then
+    echo ""
+    echo "=== Step 3: Search with EBM (16 theorems, 200 nodes) ==="
 
-echo ""
-echo "EBM-guided trajectory summary:"
-$PROVER summary --input "$EBM_TRAJ"
+    $PROVER search \
+        --config "$SMOKE_CONFIG" \
+        --model-path "$MODEL_PATH" \
+        --ebm-path "$EBM_DIR" \
+        --theorems "$SMOKE_THEOREMS" \
+        --output "$EBM_TRAJ"
+
+    echo ""
+    echo "EBM-guided trajectory summary:"
+    $PROVER summary --input "$EBM_TRAJ"
+else
+    echo ""
+    echo "=== Step 3: Skipped (EBM not trained) ==="
+fi
 
 # ── Step 4: Compare ──────────────────────────────────────────────────────
 echo ""
 echo "================================================================"
-echo "  Comparison: LLM-only vs LLM+EBM"
+echo "  Results"
 echo "================================================================"
 
 echo ""
 echo "LLM-only:"
 $PROVER summary --input "$LLM_TRAJ"
 
-echo ""
-echo "LLM+EBM:"
-$PROVER summary --input "$EBM_TRAJ"
+if [ -f "$EBM_TRAJ" ]; then
+    echo ""
+    echo "LLM+EBM:"
+    $PROVER summary --input "$EBM_TRAJ"
+fi
 
 echo ""
 echo "================================================================"

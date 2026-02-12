@@ -192,6 +192,9 @@ impl TacticGenerator {
         for i in 0..n {
             tracing::debug!(candidate = i, total = n, "Generating candidate");
             match self.generate_one(proof_state) {
+                Ok(tactic) if tactic.text.is_empty() => {
+                    tracing::debug!(candidate = i, "Skipping empty tactic");
+                }
                 Ok(tactic) => candidates.push(tactic),
                 Err(e) => {
                     tracing::warn!(candidate = i, error = %e, "Failed to generate candidate");
