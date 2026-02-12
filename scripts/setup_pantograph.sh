@@ -48,6 +48,10 @@ if [ "$SKIP_MATHLIB" -eq 0 ]; then
         echo "Mathlib already present in lakefile.lean"
     fi
 
+    echo "Resolving Mathlib dependency..."
+    cd "$PANTOGRAPH_DIR"
+    lake update mathlib
+
     echo "Downloading prebuilt Mathlib oleans (~2GB, one-time)..."
     lake exe cache get || echo "WARNING: cache get failed, will build from source (slower)"
 
