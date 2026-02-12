@@ -18,7 +18,7 @@ TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
 LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
-NUM_WORKERS="${NUM_WORKERS:-64}"
+NUM_WORKERS="${NUM_WORKERS:-8}"
 
 # Auto-detect CUDA
 CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")

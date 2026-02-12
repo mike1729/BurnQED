@@ -299,6 +299,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let mut writer = TrajectoryWriter::new(args.output.clone());
     let mut proved_count: u32 = 0;
     let mut failed_count: u32 = 0;
+    let mut error_count: u32 = 0;
     let total = theorems_to_search.len() as u32;
 
     // Aggregate stats
@@ -396,7 +397,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                     writer.record_all(labeled);
                 }
                 Err(e) => {
-                    failed_count += 1;
+                    error_count += 1;
                     tracing::warn!(theorem = outcome.name, error = %e, "Search failed, skipping");
                 }
             },
@@ -457,6 +458,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     } else {
         0.0
     };
+    let total_attempted = searched_count + error_count;
     let avg_nodes = if searched_count > 0 {
         total_nodes as f64 / searched_count as f64
     } else {
@@ -472,9 +474,12 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     println!("══════════════════════════════════════════");
     println!(" burn-qed Search Results{partial_note}");
     println!("──────────────────────────────────────────");
-    println!(" Theorems searched:  {searched_count}");
+    println!(" Theorems attempted: {total_attempted}");
     println!(" Proved:             {proved_count} ({prove_pct:.1}%)");
     println!(" Failed:             {failed_count} ({fail_pct:.1}%)");
+    if error_count > 0 {
+        println!(" Errors:             {error_count} (start_proof failed)");
+    }
     println!(" Total nodes:        {total_nodes}");
     println!(" Avg nodes/theorem:  {avg_nodes:.1}");
     println!(" Avg time/theorem:   {avg_time:.1}s");
