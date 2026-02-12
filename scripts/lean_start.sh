@@ -1,9 +1,9 @@
 #!/bin/bash
-# End-to-end smoke test for the full pipeline (~5-10 min on A100 with CUDA).
+# End-to-end smoke test for the full pipeline (~3-5 min on A100 with CUDA).
 #
 # Validates that all components work together:
-#   1. LLM-only search on all test theorems (moderate node budget)
-#   2. Train EBM from trajectory (500 steps, skipped if insufficient data)
+#   1. LLM-only search on all test theorems (light node budget)
+#   2. Train EBM from trajectory (200 steps, skipped if insufficient data)
 #   3. Search with EBM (skipped if EBM training was skipped)
 #   4. Compare solve rates
 #
@@ -39,17 +39,17 @@ mkdir -p "$WORK_DIR"
 SMOKE_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
 echo "Using all theorems from ${SMOKE_THEOREMS}"
 
-# Moderate search config for GPU: 200 nodes, 16 candidates, 8 workers
+# Light search config for smoke test: 30 nodes, 2 candidates, 45s timeout
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
 cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
-max_nodes = 200
-max_depth = 30
-num_candidates = 4
-beam_width = 8
+max_nodes = 30
+max_depth = 15
+num_candidates = 2
+beam_width = 4
 alpha = 0.5
 beta = 0.5
-timeout_per_theorem = 120
+timeout_per_theorem = 45
 fallback_tactics = ["simp", "omega", "decide", "aesop", "norm_num", "ring", "intro", "tauto"]
 
 [lean_pool]
@@ -61,7 +61,7 @@ TOML
 
 # ── Step 1: LLM-only search ──────────────────────────────────────────────
 echo ""
-echo "=== Step 1: LLM-only Search (16 theorems, 200 nodes) ==="
+echo "=== Step 1: LLM-only Search (16 theorems, 30 nodes) ==="
 LLM_TRAJ="${WORK_DIR}/llm_only.parquet"
 
 $PROVER search \
@@ -76,21 +76,21 @@ $PROVER summary --input "$LLM_TRAJ"
 
 # ── Step 2: Train EBM ────────────────────────────────────────────────────
 echo ""
-echo "=== Step 2: Train EBM (500 steps) ==="
+echo "=== Step 2: Train EBM (200 steps) ==="
 EBM_DIR="${WORK_DIR}/ebm_checkpoint"
 
 $PROVER train-ebm \
     --trajectories "$LLM_TRAJ" \
     --llm-path "$MODEL_PATH" \
     --output-dir "$EBM_DIR" \
-    --steps 500
+    --steps 200
 
 # ── Step 3: Search with EBM (if trained) ────────────────────────────────
 EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"
 
 if [ -f "${EBM_DIR}/final.mpk" ]; then
     echo ""
-    echo "=== Step 3: Search with EBM (16 theorems, 200 nodes) ==="
+    echo "=== Step 3: Search with EBM (16 theorems, 30 nodes) ==="
 
     $PROVER search \
         --config "$SMOKE_CONFIG" \
