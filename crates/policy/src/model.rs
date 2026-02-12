@@ -307,6 +307,8 @@ fn format_tactic_message(proof_state: &str) -> String {
 /// - Raw tactic text (`"intro h"`)
 /// - Code-fenced output (`` ```lean4\nintro h\n``` ``)
 /// - Comment lines (`"-- We introduce h\nintro h"`)
+/// - Full theorem declarations (`"theorem X : T := by\n  tactic"` → `"tactic"`)
+/// - Inline proof (`"theorem X := by trivial"` → `"trivial"`)
 fn extract_first_tactic(raw: &str) -> String {
     let text = raw.trim();
     // Strip code fence if present
@@ -319,12 +321,27 @@ fn extract_first_tactic(raw: &str) -> String {
     } else {
         text.to_string()
     };
-    // Take the first non-empty, non-comment line
+    // Take the first non-empty, non-comment, non-declaration line
     text.lines()
         .map(|l| l.trim())
-        .find(|l| !l.is_empty() && !l.starts_with("--") && !l.starts_with("/-"))
-        .unwrap_or("")
-        .to_string()
+        .filter(|l| !l.is_empty() && !l.starts_with("--") && !l.starts_with("/-"))
+        .find_map(|l| {
+            // Skip theorem/lemma/example declarations
+            if l.starts_with("theorem ") || l.starts_with("lemma ") || l.starts_with("example ") {
+                // Check for inline tactic after "by": "theorem X := by trivial"
+                if let Some(by_pos) = l.rfind(" by ") {
+                    let after_by = l[by_pos + 4..].trim();
+                    if !after_by.is_empty() {
+                        return Some(after_by.to_string());
+                    }
+                }
+                // Declaration ends with "by" — tactic is on the next line
+                None
+            } else {
+                Some(l.to_string())
+            }
+        })
+        .unwrap_or_default()
 }
 
 /// Log the top-k most probable tokens from a logits tensor.
@@ -473,6 +490,40 @@ mod tests {
     fn test_extract_first_tactic_block_comment() {
         let raw = "/- some reasoning -/\nomega";
         assert_eq!(extract_first_tactic(raw), "omega");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_theorem_declaration() {
+        // Model generates "theorem X : T := by\n  tactic" — skip declaration, extract tactic
+        let raw = "```lean4\ntheorem proof_of_true : True := by\n  trivial\n```";
+        assert_eq!(extract_first_tactic(raw), "trivial");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_theorem_inline_by() {
+        // Model generates "theorem X := by trivial" — extract tactic after "by"
+        let raw = "theorem foo : True := by trivial";
+        assert_eq!(extract_first_tactic(raw), "trivial");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_theorem_multi_step() {
+        // Multi-step proof: extract only the first tactic
+        let raw = "```lean4\ntheorem and_comm : P ∧ Q → Q ∧ P := by\n  intro ⟨hp, hq⟩\n  exact ⟨hq, hp⟩\n```";
+        assert_eq!(extract_first_tactic(raw), "intro ⟨hp, hq⟩");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_lemma_declaration() {
+        let raw = "lemma foo : True := by\n  simp";
+        assert_eq!(extract_first_tactic(raw), "simp");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_theorem_only_declaration() {
+        // Model only generates the declaration with no tactic body
+        let raw = "theorem foo : True := by";
+        assert_eq!(extract_first_tactic(raw), "");
     }
 
     #[test]
