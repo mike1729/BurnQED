@@ -3,6 +3,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PANTOGRAPH_DIR="$REPO_ROOT/vendor/Pantograph"
+MATHLIB_VERSION="${MATHLIB_VERSION:-v4.26.0}"
+SKIP_MATHLIB="${SKIP_MATHLIB:-0}"
 
 echo "=== BurnQED: Pantograph Setup ==="
 
@@ -20,7 +22,7 @@ if [ ! -f "$PANTOGRAPH_DIR/lakefile.lean" ]; then
     git submodule update --init vendor/Pantograph
 fi
 
-# Build Pantograph
+# Build base Pantograph
 echo "Building Pantograph (this may take a few minutes on first run)..."
 cd "$PANTOGRAPH_DIR"
 lake build
@@ -30,6 +32,32 @@ if [ -f "$PANTOGRAPH_DIR/.lake/build/bin/repl" ] || [ -f "$PANTOGRAPH_DIR/.lake/
     echo "SUCCESS: Pantograph REPL binary built."
 else
     echo "WARNING: REPL binary not found at expected path. 'lake exe repl' may still work."
+fi
+
+# Add Mathlib dependency (needed for theorem_index search)
+if [ "$SKIP_MATHLIB" -eq 0 ]; then
+    echo ""
+    echo "=== Adding Mathlib ${MATHLIB_VERSION} ==="
+
+    if ! grep -q "require.*mathlib" "$PANTOGRAPH_DIR/lakefile.lean"; then
+        echo "" >> "$PANTOGRAPH_DIR/lakefile.lean"
+        echo "require mathlib from git" >> "$PANTOGRAPH_DIR/lakefile.lean"
+        echo "  \"https://github.com/leanprover-community/mathlib4\" @ \"${MATHLIB_VERSION}\"" >> "$PANTOGRAPH_DIR/lakefile.lean"
+        echo "Added Mathlib ${MATHLIB_VERSION} to lakefile.lean"
+    else
+        echo "Mathlib already present in lakefile.lean"
+    fi
+
+    echo "Downloading prebuilt Mathlib oleans (~2GB, one-time)..."
+    lake exe cache get || echo "WARNING: cache get failed, will build from source (slower)"
+
+    echo "Rebuilding with Mathlib..."
+    lake build
+
+    echo "SUCCESS: Pantograph built with Mathlib support."
+else
+    echo ""
+    echo "Skipping Mathlib setup (SKIP_MATHLIB=1)"
 fi
 
 echo ""

@@ -15,7 +15,7 @@
 # Environment variables:
 #   MODEL_PATH      Local model dir for tokenizer (optional, speeds up formatting)
 #   PYTHON          Python executable (default: python3)
-#   MATHLIB_COMMIT  Mathlib4 tag to trace (default: v4.27.0)
+#   MATHLIB_COMMIT  Mathlib4 tag to trace (default: v4.26.0)
 #
 # Exit codes:
 #   0  Success — all outputs validated
@@ -35,7 +35,7 @@ cd "$REPO_ROOT"
 
 # ── Configuration ───────────────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
-MATHLIB_COMMIT="${MATHLIB_COMMIT:-v4.27.0}"
+MATHLIB_COMMIT="${MATHLIB_COMMIT:-v4.26.0}"
 MODEL_PATH="${MODEL_PATH:-}"
 DATA_DIR="${REPO_ROOT}/data"
 VENV_DIR="${REPO_ROOT}/.venv"

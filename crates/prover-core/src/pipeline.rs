@@ -46,6 +46,8 @@ pub struct SearchArgs {
     pub concurrency: usize,
     /// Maximum number of theorems to search (truncates the index).
     pub max_theorems: Option<usize>,
+    /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
+    pub imports: Option<Vec<String>>,
 }
 
 /// Arguments for the `summary` subcommand (formerly `eval`).
@@ -78,6 +80,8 @@ pub struct EvalArgs {
     pub concurrency: usize,
     /// Maximum number of theorems to evaluate (truncates the index).
     pub max_theorems: Option<usize>,
+    /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
+    pub imports: Option<Vec<String>>,
 }
 
 /// Arguments for the `compare` subcommand.
@@ -133,12 +137,13 @@ async fn load_policy_and_ebm(
     ebm_path: Option<&Path>,
     num_workers: Option<usize>,
     temperature: Option<f64>,
+    imports: Option<&[String]>,
 ) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
     let toml = load_search_toml(config_path)?;
 
     // 2. Build Lean pool
-    let lean_config = build_lean_pool_config(&toml.lean_pool, num_workers)?;
+    let lean_config = build_lean_pool_config(&toml.lean_pool, num_workers, imports)?;
     tracing::info!(
         num_workers = lean_config.num_workers,
         "Starting Lean worker pool"
@@ -240,6 +245,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         args.ebm_path.as_deref(),
         args.num_workers,
         args.temperature,
+        args.imports.as_deref(),
     )
     .await?;
 
@@ -551,6 +557,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         args.ebm_path.as_deref(),
         args.num_workers,
         None,
+        args.imports.as_deref(),
     )
     .await?;
 

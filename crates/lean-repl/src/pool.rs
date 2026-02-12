@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, SemaphorePermit};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, SemaphorePermit};
 
 use crate::types::{LeanError, LeanPoolConfig, ProofState, TacticResult};
 use crate::worker::LeanWorker;
@@ -31,11 +31,12 @@ impl LeanPool {
             workers.push(LeanWorker::spawn(&config).await?);
         }
 
-        tracing::info!(num_workers = config.num_workers, "Lean pool initialized");
+        let num = config.num_workers;
+        tracing::info!(num_workers = num, "Lean pool initialized");
 
         Ok(Self {
             workers: Mutex::new(workers),
-            semaphore: Arc::new(Semaphore::new(config.num_workers)),
+            semaphore: Arc::new(Semaphore::new(num)),
             config,
         })
     }
@@ -50,10 +51,12 @@ impl LeanPool {
             .await
             .map_err(|_| LeanError::Protocol("Semaphore closed".into()))?;
 
-        let mut workers = self.workers.lock().await;
-        let mut worker = workers
-            .pop()
-            .ok_or_else(|| LeanError::Protocol("No workers available despite permit".into()))?;
+        let mut worker = {
+            let mut workers = self.workers.lock().unwrap();
+            workers
+                .pop()
+                .ok_or_else(|| LeanError::Protocol("No workers available despite permit".into()))?
+        };
 
         // Recycle if the worker has exceeded its limits
         if worker.needs_recycling() {
@@ -78,10 +81,12 @@ impl LeanPool {
             .await
             .map_err(|_| LeanError::Protocol("Semaphore closed".into()))?;
 
-        let mut workers = self.workers.lock().await;
-        let mut worker = workers
-            .pop()
-            .ok_or_else(|| LeanError::Protocol("No workers available despite permit".into()))?;
+        let mut worker = {
+            let mut workers = self.workers.lock().unwrap();
+            workers
+                .pop()
+                .ok_or_else(|| LeanError::Protocol("No workers available despite permit".into()))?
+        };
 
         if worker.needs_recycling() {
             tracing::debug!(
@@ -96,11 +101,7 @@ impl LeanPool {
 
     /// Return a worker to the free list (synchronous, used from Drop).
     fn return_worker_sync(workers: &Mutex<Vec<LeanWorker>>, worker: LeanWorker) {
-        if let Ok(mut ws) = workers.try_lock() {
-            ws.push(worker);
-        } else {
-            tracing::warn!("Could not return worker to pool in Drop — worker leaked");
-        }
+        workers.lock().unwrap().push(worker);
     }
 
     /// Start a new proof and return a [`ProofHandle`] that holds the worker
@@ -211,7 +212,7 @@ impl LeanPool {
 
     /// Shut down the pool, killing all worker processes.
     pub async fn shutdown(&self) {
-        let mut workers = self.workers.lock().await;
+        let mut workers = self.workers.lock().unwrap();
         for worker in workers.iter_mut() {
             worker.shutdown().await;
         }
@@ -362,11 +363,9 @@ impl ProofHandleOwned {
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::Semaphore;
-
     #[test]
     fn semaphore_limits_concurrency() {
-        let sem = Semaphore::new(4);
+        let sem = tokio::sync::Semaphore::new(4);
         assert_eq!(sem.available_permits(), 4);
     }
 }

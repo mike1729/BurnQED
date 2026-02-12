@@ -538,7 +538,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `LLM_BASE` | `deepseek-ai/DeepSeek-Prover-V2-7B` | Base model for fine-tuning |
 | `SKIP_BASELINE` | 0 | Set to 1 to skip Phase B baseline |
 | `MODEL_PATH` | (none) | Local model dir for tokenizer in data prep |
-| `MATHLIB_COMMIT` | `v4.27.0` | Mathlib4 tag to trace |
+| `MATHLIB_COMMIT` | `v4.26.0` | Mathlib4 tag to trace (matches Pantograph lean-toolchain) |
 
 ### Experiment Outputs
 

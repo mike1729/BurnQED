@@ -24,8 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Known-good Mathlib4 commit compatible with Lean v4.27.0
-DEFAULT_MATHLIB_COMMIT = "v4.27.0"
+# Known-good Mathlib4 commit compatible with Lean v4.26.0 (matches Pantograph lean-toolchain)
+DEFAULT_MATHLIB_COMMIT = "v4.26.0"
 
 
 def trace_mathlib(commit: str, cache_dir: str):

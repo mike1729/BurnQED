@@ -81,7 +81,8 @@ if [ -f "$MINIF2F" ]; then
         --output "${BASELINES_DIR}/raw_minif2f.json" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
-        --max-theorems "$MAX_THEOREMS"
+        --max-theorems "$MAX_THEOREMS" \
+        --imports Mathlib
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
     echo "Run: python python/data/trace_mathlib.py --output-dir data/"
@@ -99,7 +100,8 @@ if [ -f "$THEOREM_INDEX" ]; then
         --output "${TRAJ_DIR}/baseline_raw.parquet" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
-        --max-theorems "$MAX_THEOREMS"
+        --max-theorems "$MAX_THEOREMS" \
+        --imports Mathlib
 
     echo ""
     echo "Full theorem search summary:"

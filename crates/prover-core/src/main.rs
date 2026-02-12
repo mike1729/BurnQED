@@ -55,6 +55,9 @@ enum Command {
         /// Maximum number of theorems to search (truncates the index).
         #[arg(long)]
         max_theorems: Option<usize>,
+        /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
+        #[arg(long, value_delimiter = ',')]
+        imports: Option<Vec<String>>,
     },
     /// Print statistics from a trajectory Parquet file.
     Summary {
@@ -94,6 +97,9 @@ enum Command {
         /// Maximum number of theorems to evaluate (truncates the index).
         #[arg(long)]
         max_theorems: Option<usize>,
+        /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
+        #[arg(long, value_delimiter = ',')]
+        imports: Option<Vec<String>>,
     },
     /// Compare evaluation results across iterations.
     Compare {
@@ -159,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
             temperature,
             concurrency,
             max_theorems,
+            imports,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -172,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
                 temperature,
                 concurrency,
                 max_theorems,
+                imports,
             })
             .await
         }
@@ -187,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
             num_workers,
             concurrency,
             max_theorems,
+            imports,
         } => {
             pipeline::run_eval(EvalArgs {
                 config,
@@ -199,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
                 num_workers,
                 concurrency,
                 max_theorems,
+                imports,
             })
             .await
         }

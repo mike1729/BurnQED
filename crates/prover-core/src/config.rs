@@ -34,6 +34,8 @@ pub struct LeanPoolOverrides {
     pub max_lifetime_secs: Option<u64>,
     /// Timeout in seconds for a single tactic application.
     pub tactic_timeout_secs: Option<u64>,
+    /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
+    pub imports: Option<Vec<String>>,
 }
 
 /// Load and deserialize a `SearchToml` from a TOML file.
@@ -46,10 +48,11 @@ pub fn load_search_toml(path: &Path) -> anyhow::Result<SearchToml> {
 
 /// Build a `LeanPoolConfig` from auto-discovery, TOML overrides, and CLI flags.
 ///
-/// Priority chain: `with_bundled_pantograph()` defaults < TOML values < CLI `--num-workers`.
+/// Priority chain: `with_bundled_pantograph()` defaults < TOML values < CLI flags.
 pub fn build_lean_pool_config(
     overrides: &LeanPoolOverrides,
     num_workers_cli: Option<usize>,
+    imports_cli: Option<&[String]>,
 ) -> anyhow::Result<LeanPoolConfig> {
     let mut config = LeanPoolConfig::with_bundled_pantograph()
         .ok_or_else(|| anyhow::anyhow!("Pantograph not found — run scripts/setup_pantograph.sh first"))?;
@@ -67,10 +70,16 @@ pub fn build_lean_pool_config(
     if let Some(n) = overrides.tactic_timeout_secs {
         config.tactic_timeout_secs = n;
     }
+    if let Some(ref imports) = overrides.imports {
+        config.imports = imports.clone();
+    }
 
-    // CLI override takes highest priority
+    // CLI overrides take highest priority
     if let Some(n) = num_workers_cli {
         config.num_workers = n;
+    }
+    if let Some(imports) = imports_cli {
+        config.imports = imports.to_vec();
     }
 
     Ok(config)
@@ -133,6 +142,7 @@ max_nodes = 100
             max_requests_per_worker: None,
             max_lifetime_secs: None,
             tactic_timeout_secs: None,
+            imports: None,
         };
 
         // This test only checks the override logic, not actual Pantograph discovery.

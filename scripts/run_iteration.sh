@@ -169,7 +169,8 @@ $PROVER search \
     --output "$TRAJ_OUTPUT" \
     --num-workers "$NUM_WORKERS" \
     --concurrency "$CONCURRENCY" \
-    --max-theorems "$MAX_THEOREMS"
+    --max-theorems "$MAX_THEOREMS" \
+    --imports Mathlib
 
 # ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
 if [ "$ITER" -eq 0 ]; then
@@ -185,7 +186,8 @@ if [ "$ITER" -eq 0 ]; then
         --output "$NOISY_OUTPUT" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
-        --max-theorems "$MAX_THEOREMS"
+        --max-theorems "$MAX_THEOREMS" \
+        --imports Mathlib
 fi
 
 # ── Step 4: Evaluation ────────────────────────────────────────────────────
@@ -209,7 +211,8 @@ $PROVER eval \
     --output "${EVAL_DIR}/iter_${ITER}.json" \
     --num-workers "$NUM_WORKERS" \
     --concurrency "$CONCURRENCY" \
-    --max-theorems "$MAX_THEOREMS"
+    --max-theorems "$MAX_THEOREMS" \
+    --imports Mathlib
 
 # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
 if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
@@ -223,7 +226,8 @@ if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
-        --max-theorems "$MAX_THEOREMS"
+        --max-theorems "$MAX_THEOREMS" \
+        --imports Mathlib
 fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────────────
