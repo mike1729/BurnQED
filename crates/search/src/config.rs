@@ -56,10 +56,7 @@ fn default_timeout() -> u64 {
     600
 }
 fn default_fallback_tactics() -> Vec<String> {
-    ["simp", "omega", "decide", "aesop", "norm_num", "ring", "intro", "tauto"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    Vec::new()
 }
 
 impl SearchConfig {
@@ -106,8 +103,7 @@ mod tests {
         assert!((cfg.alpha - 0.5).abs() < 1e-9);
         assert!((cfg.beta - 0.5).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 600);
-        assert_eq!(cfg.fallback_tactics.len(), 8);
-        assert_eq!(cfg.fallback_tactics[0], "simp");
+        assert!(cfg.fallback_tactics.is_empty());
     }
 
     #[test]

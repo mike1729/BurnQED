@@ -50,7 +50,6 @@ beam_width = 4
 alpha = 0.5
 beta = 0.5
 timeout_per_theorem = 45
-fallback_tactics = ["simp", "omega", "decide", "aesop", "norm_num", "ring", "intro", "tauto"]
 
 [lean_pool]
 num_workers = 8
