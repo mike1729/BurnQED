@@ -304,9 +304,13 @@ Every response is a single JSON object on one line.
 ### Key Commands
 
 ```jsonc
-// Start a new proof environment for a theorem
-{"cmd": "goal.start", "expr": "∀ (n : Nat), n + 0 = n"}
-// Response: {"stateId": 0, "goals": ["⊢ ∀ (n : Nat), n + 0 = n"]}
+// Start a new proof environment for a theorem (by expression)
+{"cmd": "goal.start", "payload": {"expr": "∀ (n : Nat), n + 0 = n"}}
+// Response: {"stateId": 0, "root": "_uniq.7"}
+
+// Start a proof by looking up a Mathlib theorem name
+{"cmd": "goal.start", "payload": {"copyFrom": "Nat.add_comm"}}
+// Response: {"stateId": 0, "root": "_uniq.42"}
 
 // Apply a tactic to a proof state
 {"cmd": "goal.tactic", "stateId": 0, "goalId": 0, "tactic": "intro n"}
@@ -366,7 +370,8 @@ A working async Lean 4 REPL client that can:
 6. Support concurrent proofs via `ProofHandleOwned` with `Arc<LeanPool>`
 7. Recycle workers after 1000 requests or 30 minutes
 8. Handle timeouts (30s) and crashes gracefully
-9. Pass 10 integration tests including concurrent multi-step branching proofs
+9. Start proofs by theorem name via Pantograph `copyFrom` (for Mathlib theorems)
+10. Pass 10 integration tests including concurrent multi-step branching proofs
 
 ### Phase 2 Deliverable (DONE)
 A working LLM inference crate that can:
@@ -409,20 +414,20 @@ A trait-based best-first search engine that can:
 2. Generate tactic candidates via `PolicyProvider` trait (sync, matches candle)
 3. Score states via `ValueScorer` trait (sync, optional — EBM comes in Phase 4)
 4. Verify tactics via `ProofEnvironment` / `TacticRunner` traits (async, matches Lean)
-5. Synthesize root node goals from theorem statement (`"⊢ {statement}"`)
+5. Synthesize root node goals from theorem statement (uses `⊢` as-is if present, prepends `"⊢ "` otherwise)
 6. Respect node budget, depth limit, and wall-clock timeout
 7. Build `SearchResult` with trajectory records for EBM training
 8. Bridge to real types via adapters (`Arc<LeanPool>`, `ProofHandleOwned`, `MutexPolicyProvider`)
 9. Instrument `SearchStats` (timing, pruning, frontier size) per search
-10. Pass 31 unit tests using mocks (no Lean, no LLM)
+10. Pass 35 unit tests using mocks (no Lean, no LLM)
 
 ### Phase 3 Architecture Notes
 
 - **Trait-based abstraction**: `ProofEnvironment`, `TacticRunner` (async) and `PolicyProvider`, `ValueScorer` (sync) allow testing with mocks.
-- **Root node synthesis**: `goal.start` returns empty goals, so search builds `"⊢ {statement}"` and uses `Goal::parse(0, &root_pp)`.
+- **Root node synthesis**: `goal.start` returns empty goals. Search uses the statement as root: if it contains `⊢` (Mathlib proof states), uses as-is; otherwise prepends `"⊢ "` (simple expressions).
 - **Arena indexing**: Nodes stored in `Vec<SearchNode>`, parent references by index. `ScoredNode` wraps `OrderedFloat<f64>` for `BinaryHeap`.
-- **Adapters**: `Arc<LeanPool>` implements `ProofEnvironment`, `ProofHandleOwned` implements `TacticRunner`, `MutexPolicyProvider` wraps `TacticGenerator` with `Mutex` for `Send + Sync`.
-- **No standalone `pool.run_tactic()`**: Search uses `ProofEnvironment::start_proof()` returning a `TacticRunner` that holds the worker for the proof's lifetime (ProofHandle pattern).
+- **Adapters**: `Arc<LeanPool>` implements `ProofEnvironment` (tries `copyFrom` by name, falls back to `expr`), `ProofHandleOwned` implements `TacticRunner`, `MutexPolicyProvider` wraps `TacticGenerator` with `Mutex` for `Send + Sync`.
+- **`ProofEnvironment::start_proof(name, statement)`**: Accepts both theorem name and statement. The adapter tries `copyFrom(name)` first (works for Mathlib theorems loaded in the environment), falling back to `expr(statement)` on `LeanMessage` error. This enables both `theorem_index.json` (proof states) and `test_theorems.json` (expressions) as input.
 
 ### Phase 3 Part 4+5: prover-core CLI + test data (DONE)
 

@@ -1541,10 +1541,14 @@ pub struct WorkerGuard<'a> { worker: Option<LeanWorker>, pool_workers: &'a Mutex
 pub struct WorkerGuardOwned { worker: Option<LeanWorker>, pool: Arc<LeanPool>, _permit: OwnedSemaphorePermit }
 
 impl LeanPool {
-    /// Start proof → ProofHandle (worker held for proof lifetime).
+    /// Start proof by expression → ProofHandle (worker held for proof lifetime).
     pub async fn start_proof(&self, expr: &str) -> Result<ProofHandle<'_>, LeanError>;
     /// Owned variant for tokio::spawn.
     pub async fn start_proof_owned(self: &Arc<Self>, expr: &str) -> Result<ProofHandleOwned, LeanError>;
+    /// Start proof by Mathlib theorem name (copyFrom) → ProofHandle.
+    pub async fn start_proof_by_name(&self, name: &str) -> Result<ProofHandle<'_>, LeanError>;
+    /// Owned variant for tokio::spawn.
+    pub async fn start_proof_by_name_owned(self: &Arc<Self>, name: &str) -> Result<ProofHandleOwned, LeanError>;
     /// Raw worker checkout for advanced use (e.g., multiple proofs on one worker).
     pub async fn checkout(&self) -> Result<WorkerGuard<'_>, LeanError>;
     pub async fn checkout_owned(self: &Arc<Self>) -> Result<WorkerGuardOwned, LeanError>;
