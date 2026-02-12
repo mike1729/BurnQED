@@ -333,6 +333,8 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             break;
         }
 
+        pb.set_message(task.name.clone());
+
         let pool = Arc::clone(&pool);
         let policy = Arc::clone(&policy);
         let value_fn = value_fn.clone();

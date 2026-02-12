@@ -44,13 +44,14 @@ with open('${SMOKE_THEOREMS}', 'w') as f:
 print(f'Using {len(subset[\"theorems\"])} theorems for smoke test')
 "
 
-# Small search config: 100 nodes, 30s timeout (instead of 600 nodes / 600s)
+# Small search config: 50 nodes, 4 candidates (instead of 600 nodes / 32 candidates)
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
 cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
-max_nodes = 100
+max_nodes = 50
 max_depth = 20
-beam_width = 8
+num_candidates = 4
+beam_width = 4
 alpha = 0.5
 beta = 0.5
 timeout_per_theorem = 60
@@ -64,7 +65,7 @@ TOML
 
 # ── Step 1: LLM-only search ──────────────────────────────────────────────
 echo ""
-echo "=== Step 1: LLM-only Search (3 theorems, 100 nodes) ==="
+echo "=== Step 1: LLM-only Search (3 theorems, 50 nodes) ==="
 LLM_TRAJ="${WORK_DIR}/llm_only.parquet"
 
 $PROVER search \
@@ -90,7 +91,7 @@ $PROVER train-ebm \
 
 # ── Step 3: Search with EBM ──────────────────────────────────────────────
 echo ""
-echo "=== Step 3: Search with EBM (3 theorems, 100 nodes) ==="
+echo "=== Step 3: Search with EBM (3 theorems, 50 nodes) ==="
 EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"
 
 $PROVER search \

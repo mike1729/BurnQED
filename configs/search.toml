@@ -1,6 +1,7 @@
 [search]
 max_nodes = 600
 max_depth = 50
+num_candidates = 32           # LLM tactic candidates per node expansion
 beam_width = 8                # Top-k by LLM log-prob before Lean + EBM
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight

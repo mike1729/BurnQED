@@ -201,7 +201,7 @@ impl SearchEngine {
                 continue;
             }
 
-            tracing::debug!(
+            tracing::info!(
                 node = node_idx,
                 state_id = node_state_id,
                 depth = node_depth,
