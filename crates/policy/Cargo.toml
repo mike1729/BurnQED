@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-cuda = ["candle-core/cuda"]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 candle-core = { workspace = true }
