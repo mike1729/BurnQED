@@ -110,11 +110,11 @@ ln -s /mnt/persistent/models/deepseek-prover-v2-7b models/deepseek-prover-v2-7b
 ### 5. Training Data
 
 ```bash
-# Option A: Full Mathlib trace (hours, requires 100GB+ disk)
+# Option A: Download pre-traced data (default, ~5 min)
 python python/data/trace_mathlib.py --output-dir data/
 
-# Option B: Pre-traced fallback (faster)
-python python/data/trace_mathlib.py --fallback --output-dir data/
+# Option B: Local LeanDojo trace (hours, requires 100GB+ disk)
+python python/data/trace_mathlib.py --trace --output-dir data/
 
 # Format for training
 python python/data/prepare_tactic_pairs.py \

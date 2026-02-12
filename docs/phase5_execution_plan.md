@@ -83,7 +83,7 @@
 - `extract_theorems()`: Filter to tactic-proof theorems, output `{name, statement, file_path}`
 - `extract_tactic_pairs()`: Extract `{state, tactic, theorem, depth}` per tactic step
 - `extract_minif2f()`: Separate miniF2F test/valid sets
-- `--fallback` mode: Download pre-traced LeanDojo benchmark data
+- Default mode: Download pre-traced LeanDojo benchmark data; `--trace` for local LeanDojo
 - `--skip-trace` mode: Load existing cached trace
 - Outputs: `theorem_index.json` (TheoremIndex format), `tactic_pairs/{train,val}.jsonl`, `minif2f_{test,valid}.json`
 

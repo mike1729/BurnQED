@@ -3,14 +3,14 @@
 #
 # Orchestrates the full data pipeline:
 #   1. Set up Python virtual environment
-#   2. Trace Mathlib4 with LeanDojo (or download pre-traced data with --fallback)
+#   2. Download pre-traced Mathlib data (or trace locally with --trace)
 #   3. Format tactic pairs for LLM training
 #   4. Validate all output files
 #
 # Usage:
-#   ./scripts/prepare_data.sh                     # Full trace (requires LeanDojo, hours)
-#   ./scripts/prepare_data.sh --fallback          # Download pre-traced data (~5 min)
-#   ./scripts/prepare_data.sh --fallback --force   # Re-run even if outputs exist
+#   ./scripts/prepare_data.sh                # Download pre-traced data (~5 min, default)
+#   ./scripts/prepare_data.sh --trace        # Local LeanDojo trace (requires LeanDojo, hours)
+#   ./scripts/prepare_data.sh --force        # Re-run even if outputs exist
 #
 # Environment variables:
 #   MODEL_PATH      Local model dir for tokenizer (optional, speeds up formatting)
@@ -23,10 +23,10 @@
 #   2  Python environment setup error
 #   3  Mathlib trace error
 #   4  Tactic pair formatting error
-
-# TODO add step to precompute embeddings cached in data/embeddings/ for faster retrieval during training
-# TODO 2 check leandojo traces to ensure we use the same lean/mathlib version
-# TODO 3 make download traces main option and add --trace option to do local trace (with leandojo) for more control and to support newer mathlib versions
+#
+# Note: Embedding precomputation is handled during EBM training (see run_baseline.sh
+# --save-embeddings flag). miniF2F extraction is handled automatically in both
+# download and trace modes.
 
 set -euo pipefail
 
@@ -41,14 +41,14 @@ DATA_DIR="${REPO_ROOT}/data"
 VENV_DIR="${REPO_ROOT}/.venv"
 REQUIREMENTS="${REPO_ROOT}/python/requirements.txt"
 
-FALLBACK=0
+TRACE=0
 FORCE=0
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
 for arg in "$@"; do
     case "$arg" in
-        --fallback)
-            FALLBACK=1
+        --trace)
+            TRACE=1
             ;;
         --force)
             FORCE=1
@@ -60,7 +60,7 @@ for arg in "$@"; do
             ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: ./scripts/prepare_data.sh [--fallback] [--force] [--help]"
+            echo "Usage: ./scripts/prepare_data.sh [--trace] [--force] [--help]"
             exit 1
             ;;
     esac
@@ -69,7 +69,7 @@ done
 echo "================================================================"
 echo "  BurnQED Data Preparation"
 echo "================================================================"
-echo "  Fallback mode:   $([ $FALLBACK -eq 1 ] && echo 'yes (download pre-traced)' || echo 'no (LeanDojo trace)')"
+echo "  Mode:            $([ $TRACE -eq 1 ] && echo 'LeanDojo trace (local)' || echo 'download pre-traced (default)')"
 echo "  Force re-run:    $([ $FORCE -eq 1 ] && echo 'yes' || echo 'no')"
 echo "  Mathlib commit:  ${MATHLIB_COMMIT}"
 echo "  Output dir:      ${DATA_DIR}"
@@ -109,14 +109,16 @@ echo "Using Python: $(which python)"
 echo "Python version: $(python --version)"
 
 # Install/upgrade requirements if needed
-if ! python -c "import lean_dojo" 2>/dev/null && [ $FALLBACK -eq 0 ]; then
-    echo "Installing Python dependencies..."
-    python -m pip install --upgrade pip -q
-    python -m pip install -r "$REQUIREMENTS" -q
-elif [ $FALLBACK -eq 1 ]; then
-    # Fallback only needs curl/tar (system) and json (stdlib), but
+if [ $TRACE -eq 1 ]; then
+    if ! python -c "import lean_dojo" 2>/dev/null; then
+        echo "Installing Python dependencies (including LeanDojo for --trace mode)..."
+        python -m pip install --upgrade pip -q
+        python -m pip install -r "$REQUIREMENTS" -q
+    fi
+else
+    # Download mode only needs curl/tar (system) and json (stdlib), but
     # prepare_tactic_pairs.py may need transformers for tokenizer
-    echo "Checking minimal dependencies for fallback mode..."
+    echo "Checking minimal dependencies for download mode..."
     python -m pip install --upgrade pip -q
     # Install only what's needed: transformers for tokenizer
     python -m pip install "transformers>=4.38.0" -q 2>/dev/null || true
@@ -150,17 +152,17 @@ if [ $TRACE_EXISTS -eq 1 ] && [ $FORCE -eq 0 ]; then
 else
     TRACE_ARGS=("--output-dir" "$DATA_DIR" "--mathlib-commit" "$MATHLIB_COMMIT")
 
-    if [ $FALLBACK -eq 1 ]; then
-        TRACE_ARGS+=("--fallback")
-        echo "Downloading pre-traced LeanDojo data..."
-    else
+    if [ $TRACE -eq 1 ]; then
+        TRACE_ARGS+=("--trace")
         echo "Tracing Mathlib4 at ${MATHLIB_COMMIT} (this may take hours)..."
+    else
+        echo "Downloading pre-traced LeanDojo data..."
     fi
 
     if ! python "${REPO_ROOT}/python/data/trace_mathlib.py" "${TRACE_ARGS[@]}"; then
         echo "ERROR: Mathlib trace failed."
-        if [ $FALLBACK -eq 0 ]; then
-            echo "Try: ./scripts/prepare_data.sh --fallback"
+        if [ $TRACE -eq 1 ]; then
+            echo "Try running without --trace to download pre-traced data instead."
         fi
         exit 3
     fi

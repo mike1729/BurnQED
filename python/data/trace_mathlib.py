@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Extract theorem statements and tactic-level training data from Mathlib4 using LeanDojo.
+"""Extract theorem statements and tactic-level training data from Mathlib4.
+
+By default, downloads pre-traced LeanDojo benchmark data from Zenodo (~5 min).
+Use --trace to run local LeanDojo tracing for more control or newer Mathlib versions.
 
 Usage:
-    python python/data/trace_mathlib.py --output-dir data/
-    python python/data/trace_mathlib.py --skip-trace --output-dir data/
-    python python/data/trace_mathlib.py --fallback --output-dir data/
+    python python/data/trace_mathlib.py --output-dir data/            # Download pre-traced (default)
+    python python/data/trace_mathlib.py --trace --output-dir data/    # Local LeanDojo trace (hours)
+    python python/data/trace_mathlib.py --trace --skip-trace --output-dir data/  # Load cached trace
 """
 
 import argparse
@@ -152,15 +155,16 @@ def extract_minif2f(traced_repo) -> tuple:
     return test_theorems, valid_theorems
 
 
-def download_fallback(output_dir: str):
-    """Download pre-traced data as fallback when LeanDojo tracing is unavailable.
+def download_pretrained(output_dir: str, val_fraction: float = 0.05):
+    """Download pre-traced LeanDojo benchmark data from Zenodo.
 
-    Uses LeanDojo's pre-traced benchmark data from Zenodo.
+    This is the default mode. Uses LeanDojo's pre-traced benchmark 4 dataset
+    (~5 min download vs hours of local tracing).
     """
     import subprocess
     import tempfile
 
-    logger.info("Downloading pre-traced LeanDojo data (fallback mode)...")
+    logger.info("Downloading pre-traced LeanDojo benchmark data...")
 
     release_url = (
         "https://zenodo.org/records/12740403/files/"
@@ -185,12 +189,12 @@ def download_fallback(output_dir: str):
 
         # Convert extracted data to our format
         benchmark_dir = Path(tmpdir)
-        convert_benchmark_to_our_format(benchmark_dir, output_path)
+        convert_benchmark_to_our_format(benchmark_dir, output_path, val_fraction)
 
-    logger.info("Fallback download complete.")
+    logger.info("Download complete.")
 
 
-def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
+def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path, val_fraction: float = 0.05):
     """Convert LeanDojo benchmark format to our TheoremIndex + tactic pairs format.
 
     LeanDojo benchmark entries have: url, commit, file_path, full_name, start, end,
@@ -199,10 +203,20 @@ def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
 
     We only process the ``random/`` split to avoid duplicates (``novel_premises/``
     contains the same theorems in a different split).
+
+    miniF2F entries (detected by file_path containing "minif2f" or "MiniF2F") are
+    separated into test/valid splits and excluded from the main theorem_index to
+    prevent evaluation data leaking into training.
+
+    Note: The Zenodo LeanDojo benchmark 4 dataset is traced against Lean v4.x /
+    Mathlib4. The exact version is baked into the archive — no version matching
+    is needed for download mode.
     """
     seen_names: set[str] = set()
     theorems = []
     tactic_pairs = []
+    minif2f_test = []
+    minif2f_valid = []
 
     # Prefer the random/ split; only fall back to other JSON files if needed.
     random_dir = None
@@ -228,7 +242,11 @@ def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
                 continue
 
             full_name = entry.get("full_name")
+            file_path = entry.get("file_path", "")
             traced = entry.get("traced_tactics", [])
+
+            # Detect miniF2F entries by file path
+            is_minif2f = "minif2f" in file_path.lower() or "MiniF2F" in file_path
 
             # Build theorem entry — derive statement from first tactic's state_before
             if full_name and full_name not in seen_names:
@@ -238,10 +256,18 @@ def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
                     statement = traced[0].get("state_before", "")
                 if statement:
                     seen_names.add(full_name)
-                    theorems.append({
+                    thm_entry = {
                         "name": full_name,
                         "statement": statement,
-                    })
+                    }
+
+                    if is_minif2f:
+                        if "test" in file_path.lower():
+                            minif2f_test.append(thm_entry)
+                        else:
+                            minif2f_valid.append(thm_entry)
+                    else:
+                        theorems.append(thm_entry)
 
             # Extract tactic pairs
             for i, tactic_info in enumerate(traced):
@@ -255,10 +281,28 @@ def convert_benchmark_to_our_format(benchmark_dir: Path, output_dir: Path):
 
     # Write outputs
     write_theorem_index(theorems, output_dir / "theorem_index.json")
-    write_tactic_pairs(tactic_pairs, output_dir, val_fraction=0.05)
+    write_tactic_pairs(tactic_pairs, output_dir, val_fraction=val_fraction)
+
+    # Write miniF2F splits if any entries were found
+    if minif2f_test:
+        path = output_dir / "minif2f_test.json"
+        with open(path, "w") as f:
+            json.dump({"theorems": minif2f_test}, f, indent=2, ensure_ascii=False)
+        logger.info("Wrote %d miniF2F test theorems to %s", len(minif2f_test), path)
+    else:
+        logger.warning("No miniF2F test entries found in benchmark data (this is expected for Mathlib-only datasets)")
+
+    if minif2f_valid:
+        path = output_dir / "minif2f_valid.json"
+        with open(path, "w") as f:
+            json.dump({"theorems": minif2f_valid}, f, indent=2, ensure_ascii=False)
+        logger.info("Wrote %d miniF2F valid theorems to %s", len(minif2f_valid), path)
+    else:
+        logger.warning("No miniF2F valid entries found in benchmark data (this is expected for Mathlib-only datasets)")
 
     logger.info(
-        "Converted: %d theorems, %d tactic pairs", len(theorems), len(tactic_pairs)
+        "Converted: %d theorems, %d tactic pairs, %d miniF2F test, %d miniF2F valid",
+        len(theorems), len(tactic_pairs), len(minif2f_test), len(minif2f_valid),
     )
 
 
@@ -341,6 +385,50 @@ def print_summary(theorems, tactic_pairs, minif2f_test, minif2f_valid, output_di
     print("=" * 60)
 
 
+def check_lean_version(mathlib_commit: str):
+    """Warn if Pantograph's Lean version doesn't match the Mathlib commit.
+
+    Reads vendor/Pantograph/lean-toolchain and compares the major.minor Lean
+    version against the Mathlib commit tag. Only produces a warning — version
+    mismatches may still work if Lean is backwards-compatible.
+    """
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent.parent  # python/data/ → repo root
+    toolchain_path = repo_root / "vendor" / "Pantograph" / "lean-toolchain"
+
+    if not toolchain_path.exists():
+        logger.debug("Pantograph lean-toolchain not found at %s, skipping version check", toolchain_path)
+        return
+
+    try:
+        toolchain_content = toolchain_path.read_text().strip()
+        # lean-toolchain contains something like "leanprover/lean4:v4.26.0"
+        if ":" in toolchain_content:
+            pantograph_version = toolchain_content.split(":")[-1].lstrip("v")
+        else:
+            pantograph_version = toolchain_content.lstrip("v")
+
+        # Extract major.minor from Mathlib commit tag (e.g. "v4.27.0" → "4.27")
+        mathlib_version = mathlib_commit.lstrip("v")
+
+        panto_parts = pantograph_version.split(".")[:2]
+        mathlib_parts = mathlib_version.split(".")[:2]
+
+        if panto_parts != mathlib_parts:
+            logger.warning(
+                "Lean version mismatch: Pantograph uses Lean %s but Mathlib commit '%s' "
+                "targets Lean %s. Traces may have compatibility issues.",
+                pantograph_version, mathlib_commit, mathlib_version,
+            )
+        else:
+            logger.info(
+                "Lean version check OK: Pantograph=%s, Mathlib=%s",
+                pantograph_version, mathlib_commit,
+            )
+    except Exception as e:
+        logger.debug("Could not check Lean version: %s", e)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract theorem statements and tactic training data from Mathlib4.",
@@ -369,12 +457,12 @@ def main():
     parser.add_argument(
         "--skip-trace",
         action="store_true",
-        help="Load existing cached trace instead of re-tracing",
+        help="Load existing cached trace instead of re-tracing (requires --trace)",
     )
     parser.add_argument(
-        "--fallback",
+        "--trace",
         action="store_true",
-        help="Skip LeanDojo tracing; download pre-traced data from releases",
+        help="Run local LeanDojo tracing instead of downloading pre-traced data",
     )
     parser.add_argument(
         "--seed",
@@ -386,18 +474,20 @@ def main():
 
     random.seed(args.seed)
 
-    # Fallback mode: download pre-traced data
-    if args.fallback:
-        download_fallback(args.output_dir)
+    # Default mode: download pre-traced data
+    if not args.trace:
+        download_pretrained(args.output_dir, val_fraction=args.val_fraction)
         return
 
-    # Normal mode: trace with LeanDojo
+    # Trace mode: run LeanDojo locally
+    check_lean_version(args.mathlib_commit)
+
     try:
         import lean_dojo  # noqa: F401
     except ImportError:
         logger.error(
             "lean_dojo not installed. Install with: pip install lean-dojo>=2.1.0\n"
-            "Or use --fallback to download pre-traced data."
+            "Or omit --trace to download pre-traced data instead."
         )
         sys.exit(1)
 

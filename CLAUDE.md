@@ -497,8 +497,9 @@ If a code change would make any code sample, type signature, or architectural de
 ### Quick Start
 
 ```bash
-# 1. Data preparation (CPU, ~30-60 min)
-./scripts/prepare_data.sh              # or: ./scripts/prepare_data.sh --fallback
+# 1. Data preparation (CPU, ~5 min download or hours with --trace)
+./scripts/prepare_data.sh              # Downloads pre-traced data (default)
+./scripts/prepare_data.sh --trace      # Local LeanDojo trace (optional)
 
 # 2. Cloud bootstrap (on GPU instance)
 bash scripts/setup_cloud.sh
