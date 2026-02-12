@@ -45,14 +45,14 @@ cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
 max_nodes = 100
 max_depth = 25
-num_candidates = 4
+num_candidates = 8
 beam_width = 8
 alpha = 0.5
 beta = 0.5
 timeout_per_theorem = 120
 
 [lean_pool]
-num_workers = 30
+num_workers = 16
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800
 tactic_timeout_secs = 30
