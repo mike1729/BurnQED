@@ -23,7 +23,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
-CONCURRENCY="${CONCURRENCY:-8}"
+CONCURRENCY="${CONCURRENCY:-2}"
 NUM_WORKERS="${NUM_WORKERS:-$CONCURRENCY}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-10000}"

@@ -121,8 +121,10 @@ impl PolicyProvider for MutexPolicyProvider {
             .map_err(SearchError::Policy);
         let gen_ms = gen_start.elapsed().as_millis() as u64;
 
-        if lock_wait_ms > 100 {
+        if lock_wait_ms > 5000 {
             tracing::warn!(lock_wait_ms, gen_ms, "High mutex contention on policy generator");
+        } else if lock_wait_ms > 100 {
+            tracing::debug!(lock_wait_ms, gen_ms, "Mutex wait on policy generator");
         }
         result
     }

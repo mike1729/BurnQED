@@ -20,7 +20,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAX_ITER=${MAX_ITER:-4}
 SKIP_BASELINE=${SKIP_BASELINE:-0}
-export CONCURRENCY="${CONCURRENCY:-8}"
+export CONCURRENCY="${CONCURRENCY:-2}"
 export NUM_WORKERS="${NUM_WORKERS:-$CONCURRENCY}"
 export MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 export EBM_STEPS="${EBM_STEPS:-10000}"
