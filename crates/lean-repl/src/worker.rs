@@ -212,6 +212,33 @@ impl LeanWorker {
         }
     }
 
+    /// Start a new proof by looking up a theorem name in the environment.
+    ///
+    /// Uses Pantograph's `copyFrom` feature to resolve a fully-qualified
+    /// theorem name (e.g. `"Nat.add_comm"`) against the loaded Lean environment.
+    pub async fn start_proof_by_name(&mut self, name: &str) -> Result<ProofState, LeanError> {
+        let request = PantographRequest::GoalStartCopyFrom {
+            copy_from: name.to_string(),
+        };
+        let json = request
+            .to_json()
+            .map_err(|e| LeanError::Protocol(format!("Serialization error: {e}")))?;
+
+        let response_line = self.send_line(&json).await?;
+        let response = PantographResponse::parse_goal_start(response_line.trim())?;
+
+        match response {
+            PantographResponse::GoalStarted(result) => Ok(ProofState {
+                state_id: result.state_id,
+                goals: Vec::new(), // goal.start doesn't return goals
+            }),
+            PantographResponse::Error(e) => Err(LeanError::LeanMessage(e.desc)),
+            PantographResponse::TacticResult(_) => Err(LeanError::Protocol(
+                "Unexpected TacticResult from goal.start".into(),
+            )),
+        }
+    }
+
     /// Apply a tactic to a specific goal within a proof state.
     ///
     /// If `goal_id` is `None`, acts on the first goal.

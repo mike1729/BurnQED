@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum PantographRequest {
     /// Start a new proof environment for an expression.
     GoalStart { expr: String },
+    /// Start a new proof by looking up a theorem name in the environment.
+    GoalStartCopyFrom { copy_from: String },
     /// Apply a tactic to a goal within a proof state.
     GoalTactic {
         state_id: u64,
@@ -28,6 +30,13 @@ struct GoalStartPayload {
     expr: String,
 }
 
+/// Wire format for GoalStartCopyFrom payload.
+#[derive(Serialize)]
+struct GoalStartCopyFromPayload {
+    #[serde(rename = "copyFrom")]
+    copy_from: String,
+}
+
 /// Wire format for GoalTactic payload.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +56,14 @@ impl PantographRequest {
         match self {
             PantographRequest::GoalStart { expr } => {
                 let payload = serde_json::to_value(GoalStartPayload { expr: expr.clone() })?;
+                serde_json::to_string(&CommandWire {
+                    cmd: "goal.start",
+                    payload,
+                })
+            }
+            PantographRequest::GoalStartCopyFrom { copy_from } => {
+                let payload =
+                    serde_json::to_value(GoalStartCopyFromPayload { copy_from: copy_from.clone() })?;
                 serde_json::to_string(&CommandWire {
                     cmd: "goal.start",
                     payload,
@@ -215,6 +232,20 @@ mod tests {
 
         assert_eq!(parsed["cmd"], "goal.start");
         assert_eq!(parsed["payload"]["expr"], "forall (n : Nat), n = n");
+    }
+
+    #[test]
+    fn serialize_goal_start_copy_from() {
+        let req = PantographRequest::GoalStartCopyFrom {
+            copy_from: "Nat.add_comm".to_string(),
+        };
+        let json = req.to_json().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["cmd"], "goal.start");
+        assert_eq!(parsed["payload"]["copyFrom"], "Nat.add_comm");
+        // Must not have "expr" key
+        assert!(parsed["payload"].get("expr").is_none());
     }
 
     #[test]

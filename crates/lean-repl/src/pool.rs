@@ -133,6 +133,34 @@ impl LeanPool {
         })
     }
 
+    /// Start a new proof by looking up a theorem name, returning a [`ProofHandle`].
+    ///
+    /// Uses Pantograph's `copyFrom` to resolve a fully-qualified theorem name.
+    pub async fn start_proof_by_name(&self, name: &str) -> Result<ProofHandle<'_>, LeanError> {
+        let mut guard = self.checkout().await?;
+        let state = guard.worker().start_proof_by_name(name).await?;
+        Ok(ProofHandle {
+            guard,
+            initial_state: state,
+        })
+    }
+
+    /// Start a new proof by theorem name (owned variant for spawned tasks).
+    ///
+    /// Returns a [`ProofHandleOwned`] that is `'static` and can be sent
+    /// across `tokio::spawn` boundaries.
+    pub async fn start_proof_by_name_owned(
+        self: &Arc<Self>,
+        name: &str,
+    ) -> Result<ProofHandleOwned, LeanError> {
+        let mut guard = self.checkout_owned().await?;
+        let state = guard.worker().start_proof_by_name(name).await?;
+        Ok(ProofHandleOwned {
+            guard,
+            initial_state: state,
+        })
+    }
+
     /// Check out a worker for exclusive use across multiple operations.
     ///
     /// State IDs are scoped to a single Pantograph process. When running

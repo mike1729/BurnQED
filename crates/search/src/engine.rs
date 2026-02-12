@@ -37,10 +37,14 @@ pub enum SearchError {
 /// Proof environment that can start proofs and produce tactic runners.
 #[async_trait]
 pub trait ProofEnvironment: Send + Sync {
-    /// Start a new proof for the given Lean expression, returning a runner
-    /// that can apply tactics to the resulting proof state.
+    /// Start a new proof, returning a runner that can apply tactics.
+    ///
+    /// `name` is the fully-qualified theorem name (e.g. `"Nat.add_comm"`).
+    /// `statement` is a valid Lean expression or a pretty-printed proof state.
+    /// Implementations may try `copyFrom(name)` first, falling back to `expr(statement)`.
     async fn start_proof(
         &self,
+        name: &str,
         statement: &str,
     ) -> Result<Box<dyn TacticRunner + Send>, SearchError>;
 }
@@ -115,12 +119,18 @@ impl SearchEngine {
         let start_time = std::time::Instant::now();
         let mut stats = SearchStats::default();
 
-        let mut runner = env.start_proof(statement).await?;
+        let mut runner = env.start_proof(theorem_name, statement).await?;
         let initial_state = runner.initial_state().clone();
 
         // Build root node. goal.start returns empty goals, so we synthesize
         // the root state from the theorem statement.
-        let root_pp = format!("⊢ {statement}");
+        // If statement already contains '⊢' (e.g. from theorem_index proof states),
+        // use it as-is; otherwise prepend "⊢ " (e.g. for simple expressions like "True").
+        let root_pp = if statement.contains('⊢') {
+            statement.to_string()
+        } else {
+            format!("⊢ {statement}")
+        };
         let root_goals = vec![Goal::parse(0, &root_pp)];
         let root_terminal = root_goals.is_empty();
 

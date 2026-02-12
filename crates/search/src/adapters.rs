@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use lean_repl::{LeanPool, ProofHandleOwned, ProofState, TacticResult};
+use lean_repl::{LeanError, LeanPool, ProofHandleOwned, ProofState, TacticResult};
 use policy::{GeneratedTactic, TacticGenerator};
 
 use ebm::inference::EBMValueFn;
@@ -18,9 +18,26 @@ use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner,
 impl ProofEnvironment for Arc<LeanPool> {
     async fn start_proof(
         &self,
+        name: &str,
         statement: &str,
     ) -> Result<Box<dyn TacticRunner + Send>, SearchError> {
-        let handle = self.start_proof_owned(statement).await.map_err(SearchError::Lean)?;
+        // Try copyFrom(name) first — works for Mathlib theorems loaded in the environment.
+        match self.start_proof_by_name_owned(name).await {
+            Ok(handle) => return Ok(Box::new(handle)),
+            Err(LeanError::LeanMessage(msg)) => {
+                tracing::debug!(
+                    name = name,
+                    error = %msg,
+                    "copyFrom failed, falling back to expr"
+                );
+            }
+            Err(e) => return Err(SearchError::Lean(e)),
+        }
+        // Fallback: start proof from expression (works for simple type expressions).
+        let handle = self
+            .start_proof_owned(statement)
+            .await
+            .map_err(SearchError::Lean)?;
         Ok(Box::new(handle))
     }
 }

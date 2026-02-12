@@ -133,6 +133,7 @@ impl MockEnvironment {
 impl ProofEnvironment for MockEnvironment {
     async fn start_proof(
         &self,
+        _name: &str,
         _statement: &str,
     ) -> Result<Box<dyn TacticRunner + Send>, SearchError> {
         let initial = ProofState {
@@ -242,7 +243,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_environment_unknown_tactic() {
         let env = MockEnvironment::new();
-        let mut runner = env.start_proof("True").await.unwrap();
+        let mut runner = env.start_proof("test", "True").await.unwrap();
         let result = runner.apply_tactic(0, None, "nonexistent").await.unwrap();
         assert!(matches!(result, TacticResult::Failed { .. }));
     }
@@ -255,7 +256,7 @@ mod tests {
             "trivial",
             TacticResult::ProofComplete { state_id: 1 },
         );
-        let mut runner = env.start_proof("True").await.unwrap();
+        let mut runner = env.start_proof("test", "True").await.unwrap();
         let result = runner.apply_tactic(0, None, "trivial").await.unwrap();
         assert!(matches!(result, TacticResult::ProofComplete { state_id: 1 }));
     }
