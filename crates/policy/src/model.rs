@@ -134,6 +134,7 @@ impl TacticGenerator {
         let mut generated_tokens: Vec<u32> = Vec::new();
         let mut log_prob_sum = 0.0f64;
         let mut next_logits = logits;
+        let mut tokens_fed: usize = 0;
 
         let eos_id = self.tokenizer.eos_token_id();
         let newline_id = self.tokenizer.token_to_id("\n");
@@ -157,16 +158,26 @@ impl TacticGenerator {
                 break;
             }
 
-            // Stop on newline — tactics are single-line
+            // Newline handling: skip leading newlines (model often emits \n
+            // before the tactic), stop on newline after content starts
             if newline_id == Some(next_token) {
-                break;
+                if !generated_tokens.is_empty() {
+                    break;
+                }
+                // Leading newline — feed to model but don't record as tactic content
+                let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+                let pos = prompt_len + tokens_fed;
+                tokens_fed += 1;
+                next_logits = self.model.forward(&next_input, pos, &mut self.cache)?;
+                continue;
             }
 
             generated_tokens.push(next_token);
 
             // Feed next token
             let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
-            let pos = prompt_len + generated_tokens.len() - 1;
+            let pos = prompt_len + tokens_fed;
+            tokens_fed += 1;
             next_logits = self.model.forward(&next_input, pos, &mut self.cache)?;
         }
 
