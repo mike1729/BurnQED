@@ -141,16 +141,9 @@ impl TacticGenerator {
         let mut log_prob_sum = 0.0f64;
         let mut next_logits = logits;
         let mut tokens_fed: usize = 0;
-        let mut leading_newlines = 0u32;
         let mut stop_reason = "max_tokens";
 
         let eos_id = self.tokenizer.eos_token_id();
-        let newline_id = self.tokenizer.token_to_id("\n");
-
-        // Log top-3 tokens at first decode step
-        if let Err(e) = log_top_tokens(&next_logits, &self.tokenizer, 3) {
-            tracing::debug!(error = %e, "Failed to log top tokens");
-        }
 
         for _ in 0..self.config.max_tactic_tokens {
             let next_token = sample_top_p(
@@ -172,30 +165,6 @@ impl TacticGenerator {
                 break;
             }
 
-            // Newline handling: skip leading newlines (model often emits \n
-            // before the tactic), stop on newline after content starts.
-            // Check both the exact \n token ID and decoded text (catches merged
-            // tokens like "\n  " or "\ntheorem" from byte-level BPE).
-            let is_newline = newline_id == Some(next_token)
-                || self
-                    .tokenizer
-                    .decode(&[next_token])
-                    .map(|t| t.contains('\n'))
-                    .unwrap_or(false);
-            if is_newline {
-                if !generated_tokens.is_empty() {
-                    stop_reason = "newline";
-                    break;
-                }
-                // Leading newline — feed to model but don't record as tactic content
-                leading_newlines += 1;
-                let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
-                let pos = prompt_len + tokens_fed;
-                tokens_fed += 1;
-                next_logits = self.model.forward(&next_input, pos, &mut self.cache)?;
-                continue;
-            }
-
             generated_tokens.push(next_token);
 
             // Feed next token
@@ -208,11 +177,11 @@ impl TacticGenerator {
         let raw_text = self.tokenizer.decode(&generated_tokens)?;
         let text = extract_first_tactic(&raw_text);
 
-        tracing::debug!(
-            leading_newlines,
+        tracing::info!(
             content_tokens = generated_tokens.len(),
             stop_reason,
-            text = %text,
+            raw = %raw_text.escape_debug(),
+            extracted = %text,
             "Tactic generation complete"
         );
 
@@ -256,13 +225,11 @@ impl TacticGenerator {
 
         // 3. Sample N different first tokens from the shared logits
         let eos_id = self.tokenizer.eos_token_id();
-        let newline_id = self.tokenizer.token_to_id("\n");
         let eos_fallback = eos_id.unwrap_or(0);
 
         let mut sequences: Vec<Vec<u32>> = vec![Vec::new(); n];
         let mut log_probs: Vec<f64> = vec![0.0; n];
         let mut stopped: Vec<bool> = vec![false; n];
-        let mut has_content: Vec<bool> = vec![false; n];
         let mut stop_reasons: Vec<&str> = vec!["max_tokens"; n];
 
         // Compute log-probs from shared prefill logits
@@ -286,21 +253,6 @@ impl TacticGenerator {
                 continue;
             }
 
-            // Check newline (text-based)
-            let is_newline = newline_id == Some(token)
-                || self
-                    .tokenizer
-                    .decode(&[token])
-                    .map(|t| t.contains('\n'))
-                    .unwrap_or(false);
-            if is_newline {
-                // Leading newline — skip but feed the actual token to keep
-                // KV cache aligned. Don't record as content, don't stop.
-                first_tokens.push(token);
-                continue;
-            }
-
-            has_content[i] = true;
             sequences[i].push(token);
             first_tokens.push(token);
         }
@@ -347,27 +299,6 @@ impl TacticGenerator {
                     continue;
                 }
 
-                // Check newline (text-based)
-                let is_newline = newline_id == Some(token)
-                    || self
-                        .tokenizer
-                        .decode(&[token])
-                        .map(|t| t.contains('\n'))
-                        .unwrap_or(false);
-                if is_newline {
-                    if has_content[i] {
-                        // Newline after content → tactic complete
-                        stopped[i] = true;
-                        stop_reasons[i] = "newline";
-                        batch_input_vec.push(eos_fallback);
-                    } else {
-                        // Leading newline → skip, feed actual token for KV alignment
-                        batch_input_vec.push(token);
-                    }
-                    continue;
-                }
-
-                has_content[i] = true;
                 sequences[i].push(token);
                 batch_input_vec.push(token);
             }
@@ -379,12 +310,13 @@ impl TacticGenerator {
             let raw_text = self.tokenizer.decode(&sequences[i])?;
             let text = extract_first_tactic(&raw_text);
 
-            tracing::debug!(
+            tracing::info!(
                 candidate = i,
                 content_tokens = sequences[i].len(),
                 stop_reason = stop_reasons[i],
-                text = %text,
-                "Batch candidate complete"
+                raw = %raw_text.escape_debug(),
+                extracted = %text,
+                "Batch candidate"
             );
 
             if text.is_empty() {
@@ -396,6 +328,13 @@ impl TacticGenerator {
                 log_prob: log_probs[i],
                 tokens: sequences[i].clone(),
             });
+        }
+
+        if candidates.is_empty() {
+            tracing::warn!(
+                batch_size = n,
+                "All batch candidates were empty after extraction"
+            );
         }
 
         // Sort by log_prob descending
@@ -542,27 +481,6 @@ fn extract_first_tactic(raw: &str) -> String {
             }
         })
         .unwrap_or_default()
-}
-
-/// Log the top-k most probable tokens from a logits tensor.
-fn log_top_tokens(logits: &Tensor, tokenizer: &LeanTokenizer, k: usize) -> anyhow::Result<()> {
-    let logits = logits.squeeze(0)?;
-    let probs = candle_nn::ops::softmax(&logits, 0)?;
-    let probs_vec = probs.to_vec1::<f32>()?;
-    let mut indexed: Vec<(usize, f32)> = probs_vec.iter().copied().enumerate().collect();
-    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    for (i, (token_id, prob)) in indexed.iter().take(k).enumerate() {
-        let text = tokenizer.decode(&[*token_id as u32]).unwrap_or_default();
-        tracing::debug!(
-            rank = i,
-            token_id,
-            prob = %format!("{:.4}", prob),
-            text = %text.escape_debug(),
-            "Top token"
-        );
-    }
-    Ok(()
-    )
 }
 
 /// Find all `*.safetensors` files in a directory, sorted by name.
