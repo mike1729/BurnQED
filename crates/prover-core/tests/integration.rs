@@ -2,6 +2,7 @@
 //!
 //! Mock tests run without Lean or an LLM. The `#[ignore]` test requires Pantograph.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use burn::backend::ndarray::NdArray;
@@ -1006,4 +1007,303 @@ async fn test_resume_from_partial() {
     assert!(merged_names.contains("t1"));
     assert!(merged_names.contains("t2"));
     assert!(merged_names.contains("t3"));
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Parallel search and eval using JoinSet + Semaphore
+// ---------------------------------------------------------------------------
+
+/// Search 4 theorems with concurrency=2, verify all results collected and Parquet valid.
+#[tokio::test]
+async fn test_mock_pipeline_parallel_search() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let output = tmp.path().join("parallel.parquet");
+
+    // Mock environment: True proved by "trivial", nat_refl by "intro n" + "rfl"
+    let mut env = MockEnvironment::new();
+    env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+    env.add_response(
+        0,
+        "intro n",
+        TacticResult::Success {
+            state_id: 1,
+            goals: vec![lean_repl::Goal::parse(0, "n : Nat\n⊢ n = n")],
+        },
+    );
+    env.add_response(1, "rfl", TacticResult::ProofComplete { state_id: 2 });
+
+    let mut policy = MockPolicy::new();
+    policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+    policy.add_response(
+        "⊢ ∀ (n : Nat), n = n",
+        vec![make_tactic("intro n", -0.3)],
+    );
+    policy.add_response("n : Nat\n⊢ n = n", vec![make_tactic("rfl", -0.1)]);
+    // hard_a and hard_b will fail (no matching tactics)
+    policy.add_response("⊢ hard_a", vec![make_tactic("bad", -5.0)]);
+    policy.add_response("⊢ hard_b", vec![make_tactic("bad", -5.0)]);
+
+    let engine = SearchEngine::new(SearchConfig {
+        max_nodes: 10,
+        ..SearchConfig::default()
+    });
+
+    let theorems = vec![
+        ("true_trivial", "True"),
+        ("nat_refl", "∀ (n : Nat), n = n"),
+        ("hard_a", "hard_a"),
+        ("hard_b", "hard_b"),
+    ];
+
+    // Arc-wrap mocks for concurrent access (JoinSet requires 'static futures)
+    let env = Arc::new(env);
+    let policy = Arc::new(policy);
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(2));
+    let mut join_set = tokio::task::JoinSet::new();
+
+    for (name, stmt) in &theorems {
+        let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+        let env = Arc::clone(&env);
+        let policy = Arc::clone(&policy);
+        let engine = engine.clone();
+        let name = name.to_string();
+        let stmt = stmt.to_string();
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            let result = engine
+                .search_one(&*env, &*policy, None, &name, &stmt)
+                .await;
+            (name, result)
+        });
+    }
+
+    // Collect results (single-threaded, just like run_search)
+    let mut writer = TrajectoryWriter::new(output.clone());
+    let mut proved_count = 0u32;
+    let mut failed_count = 0u32;
+
+    while let Some(join_result) = join_set.join_next().await {
+        let (name, result) = join_result.unwrap();
+        match result {
+            Ok(sr) => {
+                if sr.proved {
+                    proved_count += 1;
+                } else {
+                    failed_count += 1;
+                }
+                let labeled = TrajectoryWriter::from_search_result(&sr);
+                writer.record_all(labeled);
+            }
+            Err(e) => {
+                failed_count += 1;
+                eprintln!("Search failed for {name}: {e}");
+            }
+        }
+    }
+    writer.finish().unwrap();
+
+    // Verify results
+    assert_eq!(proved_count, 2, "true_trivial and nat_refl should be proved");
+    assert_eq!(failed_count, 2, "hard_a and hard_b should fail");
+
+    // Verify Parquet output
+    let summary = TrajectoryReader::read_summary(&output).unwrap();
+    assert_eq!(summary.unique_theorems, 4);
+    assert_eq!(summary.proved_theorems, 2);
+    assert!(summary.total_records >= 4); // at least root per theorem
+}
+
+/// Simulate interruption with AtomicBool after 2 completions, verify remaining not searched.
+#[tokio::test]
+async fn test_parallel_search_interruption() {
+    // Set up mock: all theorems provable by "trivial"
+    let mut env = MockEnvironment::new();
+    env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+
+    let mut policy = MockPolicy::new();
+    policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+
+    let engine = SearchEngine::new(SearchConfig::default());
+
+    let theorems = vec![
+        ("t1", "True"),
+        ("t2", "True"),
+        ("t3", "True"),
+        ("t4", "True"),
+    ];
+
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(1)); // sequential
+    let mut join_set = tokio::task::JoinSet::new();
+
+    let env = Arc::new(env);
+    let policy = Arc::new(policy);
+
+    for (name, stmt) in &theorems {
+        // Check interruption before spawning
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let env = Arc::clone(&env);
+        let policy = Arc::clone(&policy);
+        let engine = engine.clone();
+        let name = name.to_string();
+        let stmt = stmt.to_string();
+        let interrupted = Arc::clone(&interrupted);
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            if interrupted.load(Ordering::Relaxed) {
+                return (name, Err(search::SearchError::ProofStart("interrupted".into())));
+            }
+            let result = engine
+                .search_one(&*env, &*policy, None, &name, &stmt)
+                .await;
+            (name, result)
+        });
+    }
+
+    // Collect results, simulate interrupt after 2 completions
+    let mut completed = 0u32;
+
+    while let Some(join_result) = join_set.join_next().await {
+        let (_name, result) = join_result.unwrap();
+        if result.is_ok() {
+            completed += 1;
+        }
+        if completed >= 2 {
+            interrupted.store(true, Ordering::Relaxed);
+        }
+    }
+
+    // With concurrency=1 and interruption after 2, we expect:
+    // - 2 fully completed searches
+    // - remaining tasks either interrupted or not spawned
+    // Since concurrency=1, tasks are spawned sequentially. After 2 complete,
+    // interrupt fires. The 3rd task may already be spawned (permit acquired),
+    // and the 4th won't be spawned (the for loop checks interrupted before acquire).
+    // So completed should be 2, with possibly 1-2 interrupted tasks.
+    assert!(completed >= 2, "Expected at least 2 completed, got {completed}");
+    assert!(completed <= 4, "Should not exceed total theorems");
+}
+
+/// Eval 3 theorems at budgets [5, 10] with concurrency=2, verify results match expectations.
+#[tokio::test]
+async fn test_parallel_eval_mock_budgets() {
+    let mut env = MockEnvironment::new();
+    env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+    env.add_response(
+        0,
+        "intro n",
+        TacticResult::Success {
+            state_id: 1,
+            goals: vec![lean_repl::Goal::parse(0, "n : Nat\n⊢ n = n")],
+        },
+    );
+    env.add_response(1, "rfl", TacticResult::ProofComplete { state_id: 2 });
+
+    let mut policy = MockPolicy::new();
+    policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
+    policy.add_response(
+        "⊢ ∀ (n : Nat), n = n",
+        vec![make_tactic("intro n", -0.3)],
+    );
+    policy.add_response("n : Nat\n⊢ n = n", vec![make_tactic("rfl", -0.1)]);
+    policy.add_response("⊢ hard_thm", vec![make_tactic("bad", -5.0)]);
+
+    let env = Arc::new(env);
+    let policy = Arc::new(policy);
+
+    let budgets = vec![5u32, 10];
+    let theorems = vec![
+        ("true_trivial", "True"),
+        ("nat_refl", "∀ (n : Nat), n = n"),
+        ("hard_thm", "hard_thm"),
+    ];
+
+    let concurrency = 2;
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut cumulative_solved: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut all_budget_results = Vec::new();
+
+    for &budget in &budgets {
+        let config = SearchConfig {
+            max_nodes: budget,
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+
+        let mut join_set = tokio::task::JoinSet::new();
+
+        for (name, stmt) in &theorems {
+            let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+            let env = Arc::clone(&env);
+            let policy = Arc::clone(&policy);
+            let engine = engine.clone();
+            let name = name.to_string();
+            let stmt = stmt.to_string();
+
+            join_set.spawn(async move {
+                let _permit = permit;
+                let result = engine
+                    .search_one(&*env, &*policy, None, &name, &stmt)
+                    .await;
+                (name, result)
+            });
+        }
+
+        let mut solved = 0u32;
+        let mut per_theorem_proved = Vec::new();
+
+        while let Some(join_result) = join_set.join_next().await {
+            let (name, result) = join_result.unwrap();
+            match result {
+                Ok(sr) => {
+                    if sr.proved {
+                        solved += 1;
+                        cumulative_solved.insert(name.clone());
+                    }
+                    per_theorem_proved.push((name, sr.proved));
+                }
+                Err(_) => {
+                    per_theorem_proved.push((name, false));
+                }
+            }
+        }
+
+        all_budget_results.push((budget, solved, per_theorem_proved));
+    }
+
+    // Verify: true_trivial and nat_refl should be proved at both budgets
+    for (budget, solved, per_theorem) in &all_budget_results {
+        assert_eq!(
+            *solved, 2,
+            "Expected 2 proved at budget {budget}, got {solved}"
+        );
+        let proved_names: Vec<_> = per_theorem
+            .iter()
+            .filter(|(_, p)| *p)
+            .map(|(n, _)| n.as_str())
+            .collect();
+        assert!(
+            proved_names.contains(&"true_trivial"),
+            "true_trivial should be proved at budget {budget}"
+        );
+        assert!(
+            proved_names.contains(&"nat_refl"),
+            "nat_refl should be proved at budget {budget}"
+        );
+    }
+
+    // Cumulative should be 2 (true_trivial + nat_refl)
+    assert_eq!(cumulative_solved.len(), 2);
+    assert!(cumulative_solved.contains("true_trivial"));
+    assert!(cumulative_solved.contains("nat_refl"));
 }

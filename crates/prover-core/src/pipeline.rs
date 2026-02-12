@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -41,6 +42,8 @@ pub struct SearchArgs {
     pub resume_from: Option<PathBuf>,
     /// Override sampling temperature for tactic generation.
     pub temperature: Option<f64>,
+    /// Number of theorems to search in parallel (default: 1 = sequential).
+    pub concurrency: usize,
 }
 
 /// Arguments for the `summary` subcommand (formerly `eval`).
@@ -69,6 +72,8 @@ pub struct EvalArgs {
     pub output: Option<PathBuf>,
     /// Optional CLI override for number of Lean workers.
     pub num_workers: Option<usize>,
+    /// Number of theorems to search in parallel (default: 1 = sequential).
+    pub concurrency: usize,
 }
 
 /// Arguments for the `compare` subcommand.
@@ -210,9 +215,20 @@ async fn load_policy_and_ebm(
     Ok((toml.search, LoadedPolicy { pool, policy, value_fn }))
 }
 
+/// Outcome of a single theorem search task, returned from spawned tasks.
+struct SearchOutcome {
+    name: String,
+    result: Result<trajectory::SearchResult, search::SearchError>,
+}
+
 /// Run proof search over a batch of theorems and write trajectory data to Parquet.
+///
+/// When `concurrency > 1`, multiple theorems are searched in parallel using a
+/// `JoinSet` bounded by a semaphore. Results flow back to the main loop for
+/// single-threaded `TrajectoryWriter` processing.
 pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let start = Instant::now();
+    let concurrency = args.concurrency.max(1);
 
     let (search_config, loaded) = load_policy_and_ebm(
         &args.config,
@@ -244,6 +260,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         if let Some(temp) = args.temperature {
             println!("  Temperature: {temp}");
         }
+        println!("  Concurrency: {concurrency}");
         loaded.pool.shutdown().await;
         return Ok(());
     }
@@ -279,7 +296,6 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let mut total_lean_ms: u64 = 0;
     let mut total_gen_ms: u64 = 0;
     let mut searched_count: u32 = 0;
-    let mut interrupted = false;
 
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
@@ -289,54 +305,95 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             .progress_chars("=> "),
     );
 
-    let scorer_ref: Option<&dyn search::ValueScorer> =
-        loaded.value_fn.as_ref().map(|v| v as &dyn search::ValueScorer);
+    // CTRL-C via AtomicBool — shared across spawned tasks
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let sig_flag = interrupted.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        sig_flag.store(true, Ordering::Relaxed);
+        tracing::warn!("Interrupted by CTRL-C, finishing in-flight searches");
+    });
+
+    // Arc-wrap shared state for concurrent access
+    let pool = loaded.pool; // Already Arc<LeanPool>
+    let policy = Arc::new(loaded.policy);
+    let value_fn: Option<Arc<EBMValueFn>> = loaded.value_fn.map(Arc::new);
+
+    // Spawn phase: submit theorems bounded by semaphore
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut join_set = tokio::task::JoinSet::new();
 
     for task in &theorems_to_search {
-        if interrupted {
+        if interrupted.load(Ordering::Relaxed) {
             break;
         }
 
-        pb.set_message(task.name.clone());
+        let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
 
-        let search_fut =
-            engine.search_one(&loaded.pool, &loaded.policy, scorer_ref, &task.name, &task.statement);
+        let pool = Arc::clone(&pool);
+        let policy = Arc::clone(&policy);
+        let value_fn = value_fn.clone();
+        let engine = engine.clone();
+        let name = task.name.clone();
+        let statement = task.statement.clone();
+        let interrupted = Arc::clone(&interrupted);
 
-        tokio::select! {
-            result = search_fut => {
-                match result {
-                    Ok(result) => {
-                        searched_count += 1;
-                        total_nodes += result.nodes_expanded as u64;
-                        total_lean_ms += result.stats.total_lean_time_ms;
-                        total_gen_ms += result.stats.total_generate_time_ms;
-
-                        if result.proved {
-                            proved_count += 1;
-                            tracing::info!(
-                                theorem = task.name,
-                                tactics = ?result.proof_tactics,
-                                nodes = result.nodes_expanded,
-                                time_ms = result.wall_time_ms,
-                                "Proved"
-                            );
-                        } else {
-                            failed_count += 1;
-                        }
-                        let labeled = TrajectoryWriter::from_search_result(&result);
-                        writer.record_all(labeled);
-                    }
-                    Err(e) => {
-                        failed_count += 1;
-                        tracing::warn!(theorem = task.name, error = %e, "Search failed, skipping");
-                    }
-                }
+        join_set.spawn(async move {
+            let _permit = permit; // held for task lifetime
+            if interrupted.load(Ordering::Relaxed) {
+                return SearchOutcome {
+                    name,
+                    result: Err(search::SearchError::ProofStart("interrupted".into())),
+                };
             }
-            _ = tokio::signal::ctrl_c(), if !interrupted => {
-                tracing::warn!("Interrupted by CTRL-C, finishing with partial results");
-                interrupted = true;
+            let scorer_ref: Option<&dyn search::ValueScorer> =
+                value_fn.as_deref().map(|v| v as &dyn search::ValueScorer);
+            let result = engine
+                .search_one(&pool, &*policy, scorer_ref, &name, &statement)
+                .await;
+            SearchOutcome { name, result }
+        });
+    }
+
+    // Collect phase: process results as they complete (single-threaded)
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(outcome) => match outcome.result {
+                Ok(result) => {
+                    searched_count += 1;
+                    total_nodes += result.nodes_expanded as u64;
+                    total_lean_ms += result.stats.total_lean_time_ms;
+                    total_gen_ms += result.stats.total_generate_time_ms;
+
+                    if result.proved {
+                        proved_count += 1;
+                        tracing::info!(
+                            theorem = outcome.name,
+                            tactics = ?result.proof_tactics,
+                            nodes = result.nodes_expanded,
+                            time_ms = result.wall_time_ms,
+                            "Proved"
+                        );
+                    } else {
+                        failed_count += 1;
+                    }
+                    let labeled = TrajectoryWriter::from_search_result(&result);
+                    writer.record_all(labeled);
+                }
+                Err(e) => {
+                    failed_count += 1;
+                    tracing::warn!(theorem = outcome.name, error = %e, "Search failed, skipping");
+                }
+            },
+            Err(e) => {
+                tracing::error!(error = %e, "Search task panicked");
             }
         }
+
+        pb.inc(1);
 
         // Periodic auto-save
         const AUTOSAVE_INTERVAL: u32 = 50;
@@ -344,8 +401,6 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             writer.flush_partial()?;
             tracing::info!(searched = searched_count, "Auto-saved checkpoint");
         }
-
-        pb.inc(1);
     }
 
     pb.finish_with_message("done");
@@ -368,13 +423,13 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     }
 
     // Shutdown pool
-    loaded.pool.shutdown().await;
+    pool.shutdown().await;
 
     // Print enhanced summary
     let elapsed = start.elapsed();
     let elapsed_secs = elapsed.as_secs_f64();
 
-    let partial_note = if interrupted {
+    let partial_note = if interrupted.load(Ordering::Relaxed) {
         " (Partial — interrupted by CTRL-C)"
     } else {
         ""
@@ -422,6 +477,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     if let Some(temp) = args.temperature {
         println!(" Temperature:        {temp}");
     }
+    if concurrency > 1 {
+        println!(" Concurrency:        {concurrency}");
+    }
     if args.resume_from.is_some() {
         println!(" Resumed from:       {} theorems already done", done_names.len());
     }
@@ -453,9 +511,23 @@ pub fn run_summary(args: SummaryArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Outcome of a single theorem eval task (best-of-N), returned from spawned tasks.
+struct EvalOutcome {
+    name: String,
+    best: TheoremResult,
+    times: Vec<f64>,
+    total_nodes: f64,
+}
+
 /// Evaluate a model at multiple search budgets, printing a formatted table
 /// and optionally writing JSON results.
+///
+/// Budgets are processed sequentially (cumulative_solved_set accumulates across
+/// budgets). Within each budget, theorem searches run in parallel bounded by
+/// the `concurrency` semaphore.
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
+    let concurrency = args.concurrency.max(1);
+
     let (base_config, loaded) = load_policy_and_ebm(
         &args.config,
         &args.model_path,
@@ -476,8 +548,11 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let mut budget_results = Vec::new();
     let mut cumulative_solved_set: HashSet<String> = HashSet::new();
 
-    let scorer_ref: Option<&dyn search::ValueScorer> =
-        loaded.value_fn.as_ref().map(|v| v as &dyn search::ValueScorer);
+    // Arc-wrap shared state for concurrent access
+    let pool = loaded.pool; // Already Arc<LeanPool>
+    let policy = Arc::new(loaded.policy);
+    let value_fn: Option<Arc<EBMValueFn>> = loaded.value_fn.map(Arc::new);
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
     for &budget in &budgets {
         tracing::info!(budget, "Evaluating at budget");
@@ -485,11 +560,6 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         let mut search_config = base_config.clone();
         search_config.max_nodes = budget;
         let engine = SearchEngine::new(search_config);
-
-        let mut per_theorem = Vec::new();
-        let mut solved = 0u32;
-        let mut times: Vec<f64> = Vec::new();
-        let mut total_nodes_sum: f64 = 0.0;
 
         let pb = ProgressBar::new(total as u64);
         pb.set_style(
@@ -501,58 +571,98 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 .progress_chars("=> "),
         );
 
-        for task in &index.theorems {
-            pb.set_message(task.name.clone());
-            let mut best: Option<TheoremResult> = None;
+        // Spawn phase: submit all theorems for this budget
+        let mut join_set = tokio::task::JoinSet::new();
+        let pass_n = args.pass_n;
 
-            for _ in 0..args.pass_n {
-                match engine
-                    .search_one(&loaded.pool, &loaded.policy, scorer_ref, &task.name, &task.statement)
-                    .await
-                {
-                    Ok(result) => {
-                        let time_secs = result.wall_time_ms as f64 / 1000.0;
-                        times.push(time_secs);
-                        total_nodes_sum += result.nodes_expanded as f64;
-                        let tr = TheoremResult {
-                            name: task.name.clone(),
-                            proved: result.proved,
-                            nodes_used: result.nodes_expanded,
-                            time_secs,
-                        };
-                        // Keep best: proved > unproved, then fewest nodes
-                        best = Some(match best {
-                            None => tr,
-                            Some(prev) if !prev.proved && tr.proved => tr,
-                            Some(prev) => prev,
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!(theorem = task.name, error = %e, "Eval search failed");
-                        if best.is_none() {
-                            best = Some(TheoremResult {
-                                name: task.name.clone(),
-                                proved: false,
-                                nodes_used: 0,
-                                time_secs: 0.0,
+        for task in &index.theorems {
+            let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+
+            let pool = Arc::clone(&pool);
+            let policy = Arc::clone(&policy);
+            let value_fn = value_fn.clone();
+            let engine = engine.clone();
+            let name = task.name.clone();
+            let statement = task.statement.clone();
+
+            join_set.spawn(async move {
+                let _permit = permit;
+                let mut best: Option<TheoremResult> = None;
+                let mut times = Vec::new();
+                let mut total_nodes = 0.0;
+
+                for _ in 0..pass_n {
+                    let scorer_ref: Option<&dyn search::ValueScorer> =
+                        value_fn.as_deref().map(|v| v as &dyn search::ValueScorer);
+                    match engine
+                        .search_one(&pool, &*policy, scorer_ref, &name, &statement)
+                        .await
+                    {
+                        Ok(result) => {
+                            let time_secs = result.wall_time_ms as f64 / 1000.0;
+                            times.push(time_secs);
+                            total_nodes += result.nodes_expanded as f64;
+                            let tr = TheoremResult {
+                                name: name.clone(),
+                                proved: result.proved,
+                                nodes_used: result.nodes_expanded,
+                                time_secs,
+                            };
+                            best = Some(match best {
+                                None => tr,
+                                Some(prev) if !prev.proved && tr.proved => tr,
+                                Some(prev) => prev,
                             });
+                        }
+                        Err(e) => {
+                            tracing::warn!(theorem = name, error = %e, "Eval search failed");
+                            if best.is_none() {
+                                best = Some(TheoremResult {
+                                    name: name.clone(),
+                                    proved: false,
+                                    nodes_used: 0,
+                                    time_secs: 0.0,
+                                });
+                            }
                         }
                     }
                 }
-            }
 
-            let best = best.unwrap_or_else(|| TheoremResult {
-                name: task.name.clone(),
-                proved: false,
-                nodes_used: 0,
-                time_secs: 0.0,
+                EvalOutcome {
+                    name,
+                    best: best.unwrap_or_else(|| TheoremResult {
+                        name: String::new(),
+                        proved: false,
+                        nodes_used: 0,
+                        time_secs: 0.0,
+                    }),
+                    times,
+                    total_nodes,
+                }
             });
-            if best.proved {
-                solved += 1;
-                cumulative_solved_set.insert(task.name.clone());
-            }
-            per_theorem.push(best);
+        }
 
+        // Collect phase: aggregate results
+        let mut per_theorem = Vec::new();
+        let mut solved = 0u32;
+        let mut all_times: Vec<f64> = Vec::new();
+        let mut total_nodes_sum: f64 = 0.0;
+
+        while let Some(join_result) = join_set.join_next().await {
+            match join_result {
+                Ok(outcome) => {
+                    if outcome.best.proved {
+                        solved += 1;
+                        cumulative_solved_set.insert(outcome.name);
+                    }
+                    all_times.extend(outcome.times);
+                    total_nodes_sum += outcome.total_nodes;
+                    per_theorem.push(outcome.best);
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Eval task panicked");
+                }
+            }
             pb.inc(1);
         }
 
@@ -563,10 +673,10 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         } else {
             0.0
         };
-        let n_attempts = times.len().max(1) as f64;
+        let n_attempts = all_times.len().max(1) as f64;
         let avg_nodes = total_nodes_sum / n_attempts;
-        let avg_time_secs = times.iter().sum::<f64>() / n_attempts;
-        let median_time_secs = median(&mut times);
+        let avg_time_secs = all_times.iter().sum::<f64>() / n_attempts;
+        let median_time_secs = median(&mut all_times);
 
         budget_results.push(BudgetResult {
             budget,
@@ -607,7 +717,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     );
 
     // Shutdown pool
-    loaded.pool.shutdown().await;
+    pool.shutdown().await;
 
     // Build and write IterationResult
     let result = IterationResult {

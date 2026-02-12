@@ -88,6 +88,7 @@ pub trait ValueScorer: Send + Sync {
 ///
 /// Expands nodes by priority (combined LLM + EBM score), generating
 /// tactic candidates and verifying them against Lean.
+#[derive(Clone)]
 pub struct SearchEngine {
     config: SearchConfig,
 }

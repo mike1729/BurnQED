@@ -91,12 +91,23 @@ impl PolicyProvider for MutexPolicyProvider {
         proof_state: &str,
         n: usize,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
+        let wait_start = std::time::Instant::now();
         let mut gen = self
             .generator
             .lock()
             .map_err(|e| SearchError::Policy(anyhow::anyhow!("{e}")))?;
-        gen.generate_candidates(proof_state, n)
-            .map_err(SearchError::Policy)
+        let lock_wait_ms = wait_start.elapsed().as_millis() as u64;
+
+        let gen_start = std::time::Instant::now();
+        let result = gen
+            .generate_candidates(proof_state, n)
+            .map_err(SearchError::Policy);
+        let gen_ms = gen_start.elapsed().as_millis() as u64;
+
+        if lock_wait_ms > 100 {
+            tracing::warn!(lock_wait_ms, gen_ms, "High mutex contention on policy generator");
+        }
+        result
     }
 }
 

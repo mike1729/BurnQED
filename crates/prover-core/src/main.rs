@@ -49,6 +49,9 @@ enum Command {
         /// Override sampling temperature for tactic generation.
         #[arg(long)]
         temperature: Option<f64>,
+        /// Number of theorems to search in parallel (default: 1 = sequential).
+        #[arg(long, default_value_t = 1)]
+        concurrency: usize,
     },
     /// Print statistics from a trajectory Parquet file.
     Summary {
@@ -82,6 +85,9 @@ enum Command {
         /// Override the number of Lean workers.
         #[arg(long)]
         num_workers: Option<usize>,
+        /// Number of theorems to search in parallel (default: 1 = sequential).
+        #[arg(long, default_value_t = 1)]
+        concurrency: usize,
     },
     /// Compare evaluation results across iterations.
     Compare {
@@ -145,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
             ebm_path,
             resume_from,
             temperature,
+            concurrency,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -156,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
                 ebm_path,
                 resume_from,
                 temperature,
+                concurrency,
             })
             .await
         }
@@ -169,6 +177,7 @@ async fn main() -> anyhow::Result<()> {
             pass_n,
             output,
             num_workers,
+            concurrency,
         } => {
             pipeline::run_eval(EvalArgs {
                 config,
@@ -179,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
                 pass_n,
                 output,
                 num_workers,
+                concurrency,
             })
             .await
         }

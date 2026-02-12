@@ -24,6 +24,10 @@
 #   3  Mathlib trace error
 #   4  Tactic pair formatting error
 
+# TODO add step to precompute embeddings cached in data/embeddings/ for faster retrieval during training
+# TODO 2 check leandojo traces to ensure we use the same lean/mathlib version
+# TODO 3 make download traces main option and add --trace option to do local trace (with leandojo) for more control and to support newer mathlib versions
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

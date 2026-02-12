@@ -580,3 +580,539 @@ async fn test_search_hard_arithmetic_with_backtracking() {
         result.total_states
     );
 }
+
+/// Build a per-theorem MockPolicy from tactic steps.
+///
+/// Each `(pattern, tactic)` pair is added as a contains-response.
+/// Patterns are checked in insertion order (first match wins), so callers
+/// must order them most-specific-first for multi-step proofs.
+fn build_bench_policy(steps: &[(&str, &str)]) -> MockPolicy {
+    let mut policy = MockPolicy::new();
+    for &(pattern, tactic) in steps {
+        policy.add_contains_response(pattern, vec![make_tactic(tactic, -0.3)]);
+    }
+    policy
+}
+
+/// Get light benchmark theorems (~50-100ms each, for contrast/warm-up).
+fn get_light_benchmarks() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)> {
+    vec![
+        ("true_1", "True", vec![("True", "trivial")]),
+        ("true_2", "True", vec![("True", "trivial")]),
+        (
+            "nat_refl",
+            "∀ (n : Nat), n = n",
+            vec![("∀", "intro n"), ("n = n", "rfl")],
+        ),
+        (
+            "false_imp",
+            "False → False",
+            vec![("False →", "intro h"), ("⊢ False", "exact h")],
+        ),
+    ]
+}
+
+/// Get involved benchmark theorems (~100-500ms each).
+///
+/// Includes omega with many variables, have-chain proofs, multi-goal logic,
+/// and `decide` on medium numbers — all Init-only (no Mathlib needed).
+fn get_involved_benchmarks() -> Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)>
+{
+    vec![
+        // -- Omega with increasing variable count (each omega ~10-50ms) --
+        (
+            "omega_4v",
+            "∀ (a b c d : Nat), a + b + c + d = d + c + b + a",
+            vec![("∀", "intro a b c d"), ("⊢", "omega")],
+        ),
+        (
+            "omega_5v",
+            "∀ (a b c d e : Nat), a + b + c + d + e = e + d + c + b + a",
+            vec![("∀", "intro a b c d e"), ("⊢", "omega")],
+        ),
+        (
+            "omega_6v",
+            "∀ (a b c d e f : Nat), a + b + c + d + e + f = f + e + d + c + b + a",
+            vec![("∀", "intro a b c d e f"), ("⊢", "omega")],
+        ),
+        (
+            "omega_ineq",
+            "∀ (a b c : Nat), a ≤ b → b ≤ c → a ≤ c",
+            vec![("∀", "intro a b c hab hbc"), ("⊢", "omega")],
+        ),
+        (
+            "omega_sub",
+            "∀ (a b : Nat), a ≤ b → b - a + a = b",
+            vec![("∀", "intro a b h"), ("⊢", "omega")],
+        ),
+        (
+            "omega_double",
+            "∀ (n : Nat), n + n = 2 * n",
+            vec![("∀", "intro n"), ("⊢", "omega")],
+        ),
+        (
+            "omega_complex",
+            "∀ (a b c : Nat), (a + b) + c = a + (b + c)",
+            vec![("∀", "intro a b c"), ("⊢", "omega")],
+        ),
+        // -- Have-chain omega: 5 steps (~200-400ms total) --
+        // Patterns ordered most-specific-first (hN before ⊢/∀).
+        (
+            "chain_5step",
+            "∀ (a b c d : Nat), a + b + c + d = d + c + b + a",
+            vec![
+                ("h3", "omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d"),
+            ],
+        ),
+        // -- Have-chain omega: 6 steps (~300-500ms total) --
+        (
+            "chain_6step",
+            "∀ (a b c d e : Nat), a + b + c + d + e = e + d + c + b + a",
+            vec![
+                ("h4", "omega"),
+                ("h3", "have h4 : d + (c + (b + a)) + e = e + (d + (c + (b + a))) := by omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d + e", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d e"),
+            ],
+        ),
+        // -- Multi-goal logic: 4 steps (constructor splits goals) --
+        (
+            "and_comm",
+            "∀ (p q : Prop), p ∧ q → q ∧ p",
+            vec![
+                ("p ∧ q → q ∧ p", "intro p q h"),
+                ("q ∧ p", "constructor"),
+                ("⊢ q", "exact h.2"),
+                ("⊢ p", "exact h.1"),
+            ],
+        ),
+        (
+            "eq_symm",
+            "∀ (a b : Nat), a = b → b = a",
+            vec![("a = b → b = a", "intro a b h"), ("b = a", "exact h.symm")],
+        ),
+        (
+            "modus_ponens",
+            "∀ (p q : Prop), (p → q) → p → q",
+            vec![
+                ("(p → q) → p → q", "intro p q f hp"),
+                ("hp", "exact f hp"),
+            ],
+        ),
+    ]
+}
+
+/// Get CPU-heavy benchmark theorems (~100-500ms each).
+///
+/// Longer have-chains with omega and omega with 7-8 variables create
+/// enough per-theorem wall time that parallelism shows clear benefit.
+/// `decide` on Nat is near-instant in Lean 4 (GMP-backed), so we rely
+/// on omega complexity and proof depth instead.
+fn get_heavy_cpu_benchmarks()
+    -> Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)>
+{
+    vec![
+        // -- omega with 7-8 variables (~30-200ms per omega call) --
+        (
+            "omega_7v",
+            "∀ (a b c d e f g : Nat), a + b + c + d + e + f + g = g + f + e + d + c + b + a",
+            vec![("∀", "intro a b c d e f g"), ("⊢", "omega")],
+        ),
+        (
+            "omega_8v",
+            "∀ (a b c d e f g h : Nat), a + b + c + d + e + f + g + h = h + g + f + e + d + c + b + a",
+            vec![("∀", "intro a b c d e f g h"), ("⊢", "omega")],
+        ),
+        // -- Have-chain omega: 8 steps (~300-500ms total) --
+        (
+            "chain_8step",
+            "∀ (a b c d e : Nat), a + b + c + d + e = e + d + c + b + a",
+            vec![
+                ("h6", "omega"),
+                ("h5", "have h6 : a + b + c + d + e = e + (d + (c + (b + a))) := by omega"),
+                ("h4", "have h5 : d + (c + (b + a)) + e = e + (d + (c + (b + a))) := by omega"),
+                ("h3", "have h4 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h2", "have h3 : a + b + c = c + (b + a) := by omega"),
+                ("h1", "have h2 : b + a + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d + e", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d e"),
+            ],
+        ),
+        // -- Have-chain omega: 10 steps (~400-700ms total) --
+        (
+            "chain_10step",
+            "∀ (a b c d e f : Nat), a + b + c + d + e + f = f + e + d + c + b + a",
+            vec![
+                ("h8", "omega"),
+                ("h7", "have h8 : a + b + c + d + e + f = f + (e + (d + (c + (b + a)))) := by omega"),
+                ("h6", "have h7 : e + (d + (c + (b + a))) + f = f + (e + (d + (c + (b + a)))) := by omega"),
+                ("h5", "have h6 : d + (c + (b + a)) + e = e + (d + (c + (b + a))) := by omega"),
+                ("h4", "have h5 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h3", "have h4 : b + a + c = c + (b + a) := by omega"),
+                ("h2", "have h3 : a + b = b + a := by omega"),
+                ("h1", "have h2 : a + b + c + d = d + c + b + a := by omega"),
+                ("⊢ a + b + c + d + e + f", "have h1 : a + b + c = c + b + a := by omega"),
+                ("∀", "intro a b c d e f"),
+            ],
+        ),
+        // -- Duplicated chain_5step/chain_6step for volume (same tactics, diff names) --
+        // Each ~120-230ms. Many medium theorems → better parallelism than few heavy ones.
+        (
+            "chain_5step_b",
+            "∀ (a b c d : Nat), a + b + c + d = d + c + b + a",
+            vec![
+                ("h3", "omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d"),
+            ],
+        ),
+        (
+            "chain_5step_c",
+            "∀ (a b c d : Nat), a + b + c + d = d + c + b + a",
+            vec![
+                ("h3", "omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d"),
+            ],
+        ),
+        (
+            "chain_6step_b",
+            "∀ (a b c d e : Nat), a + b + c + d + e = e + d + c + b + a",
+            vec![
+                ("h4", "omega"),
+                ("h3", "have h4 : d + (c + (b + a)) + e = e + (d + (c + (b + a))) := by omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d + e", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d e"),
+            ],
+        ),
+        (
+            "chain_6step_c",
+            "∀ (a b c d e : Nat), a + b + c + d + e = e + d + c + b + a",
+            vec![
+                ("h4", "omega"),
+                ("h3", "have h4 : d + (c + (b + a)) + e = e + (d + (c + (b + a))) := by omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d + e", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d e"),
+            ],
+        ),
+        (
+            "chain_5step_d",
+            "∀ (a b c d : Nat), a + b + c + d = d + c + b + a",
+            vec![
+                ("h3", "omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d"),
+            ],
+        ),
+        (
+            "chain_6step_d",
+            "∀ (a b c d e : Nat), a + b + c + d + e = e + d + c + b + a",
+            vec![
+                ("h4", "omega"),
+                ("h3", "have h4 : d + (c + (b + a)) + e = e + (d + (c + (b + a))) := by omega"),
+                ("h2", "have h3 : c + (b + a) + d = d + (c + (b + a)) := by omega"),
+                ("h1", "have h2 : a + b + c = c + (b + a) := by omega"),
+                ("⊢ a + b + c + d + e", "have h1 : a + b = b + a := by omega"),
+                ("∀", "intro a b c d e"),
+            ],
+        ),
+    ]
+}
+
+/// Benchmark: theorem-level parallelism (concurrency=1 vs concurrency=N).
+///
+/// Proves a batch of Init-only theorems sequentially and then in parallel
+/// using a shared `LeanPool`. Measures total wall time to see how much
+/// concurrency helps when multiple theorems compete for pool workers.
+///
+/// Each theorem gets its own `MockPolicy` (avoids pattern collision between
+/// theorems). The mix includes:
+/// - Light proofs (~50-100ms): trivial, rfl — baseline IPC cost
+/// - Involved proofs (~100-500ms): omega with 4-6 vars, have-chains, multi-goal
+/// - CPU-heavy chains (~300-1200ms): 8-10 step have-chains with omega
+///
+/// **Key finding:** With CPU-bound tactics (omega) and MockPolicy (zero LLM
+/// time), parallelism shows no speedup because Lean processes compete for CPU
+/// cores. Real benefit comes from overlapping LLM latency — see
+/// `bench_theorem_parallelism_with_llm_sim` for that scenario.
+///
+/// Run with: `cargo test -p search --test integration --release -- --ignored bench_theorem_parallelism --nocapture`
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore]
+async fn bench_theorem_parallelism() {
+    let num_workers = 8;
+    let config = get_lean_config(num_workers);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    let mut theorems = Vec::new();
+    theorems.extend(get_light_benchmarks());
+    theorems.extend(get_involved_benchmarks());
+    theorems.extend(get_heavy_cpu_benchmarks());
+
+    let engine = SearchEngine::new(SearchConfig {
+        timeout_per_theorem: 60,
+        ..SearchConfig::default()
+    });
+
+    println!("\n=== Theorem-Level Parallelism Benchmark ===");
+    println!("  Pool workers: {num_workers}");
+    println!("  Theorems: {}\n", theorems.len());
+
+    // --- Sequential: concurrency = 1 ---
+    println!("  --- Sequential (c=1) ---");
+    let seq_start = std::time::Instant::now();
+    let mut seq_proved = 0u32;
+    for (name, stmt, steps) in &theorems {
+        let policy = build_bench_policy(steps);
+        let thm_start = std::time::Instant::now();
+        let result = engine
+            .search_one(&pool, &policy, None, name, stmt)
+            .await;
+        let thm_ms = thm_start.elapsed().as_millis();
+        match &result {
+            Ok(sr) if sr.proved => {
+                seq_proved += 1;
+                println!(
+                    "    {name}: proved in {thm_ms}ms ({} steps, lean={}ms)",
+                    sr.proof_tactics.len(),
+                    sr.stats.total_lean_time_ms,
+                );
+            }
+            Ok(_) => println!("    {name}: NOT proved ({thm_ms}ms)"),
+            Err(e) => println!("    {name}: ERROR ({thm_ms}ms): {e}"),
+        }
+    }
+    let seq_ms = seq_start.elapsed().as_millis();
+    println!(
+        "\n  Sequential total: {seq_ms}ms  proved={seq_proved}/{}\n",
+        theorems.len()
+    );
+
+    // --- Parallel runs at different concurrency levels ---
+    for concurrency in [2, 4, 8] {
+        let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut join_set = tokio::task::JoinSet::new();
+
+        let par_start = std::time::Instant::now();
+
+        for (name, stmt, steps) in &theorems {
+            let permit = sem.clone().acquire_owned().await.unwrap();
+            let pool = Arc::clone(&pool);
+            let engine = engine.clone();
+            let name = name.to_string();
+            let stmt = stmt.to_string();
+            let steps: Vec<(String, String)> = steps
+                .iter()
+                .map(|(p, t)| (p.to_string(), t.to_string()))
+                .collect();
+
+            join_set.spawn(async move {
+                let _permit = permit;
+                let mut policy = MockPolicy::new();
+                for (pattern, tactic) in &steps {
+                    policy.add_contains_response(
+                        pattern,
+                        vec![make_tactic(tactic, -0.3)],
+                    );
+                }
+                let result = engine
+                    .search_one(&pool, &policy, None, &name, &stmt)
+                    .await;
+                (name, result)
+            });
+        }
+
+        let mut par_proved = 0u32;
+        while let Some(join_result) = join_set.join_next().await {
+            let (_name, result) = join_result.unwrap();
+            if let Ok(sr) = result {
+                if sr.proved {
+                    par_proved += 1;
+                }
+            }
+        }
+        let par_ms = par_start.elapsed().as_millis();
+
+        let speedup = if par_ms > 0 {
+            seq_ms as f64 / par_ms as f64
+        } else {
+            f64::INFINITY
+        };
+        println!(
+            "  Parallel (c={concurrency}): {par_ms}ms  proved={par_proved}/{}  speedup={speedup:.2}x",
+            theorems.len()
+        );
+    }
+
+    println!();
+    pool.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Simulated LLM latency wrapper
+// ---------------------------------------------------------------------------
+
+/// MockPolicy wrapper that simulates LLM inference latency.
+///
+/// Each `generate_candidates` call acquires a shared mutex (simulating the real
+/// `MutexPolicyProvider` around `TacticGenerator`) and sleeps for `delay_ms`.
+/// This models the real scenario where LLM inference is serial and slow.
+struct SlowMockPolicy {
+    inner: MockPolicy,
+    delay_ms: u64,
+    llm_mutex: Arc<std::sync::Mutex<()>>,
+}
+
+impl search::engine::PolicyProvider for SlowMockPolicy {
+    fn generate_candidates(
+        &self,
+        proof_state: &str,
+        n: usize,
+    ) -> Result<Vec<policy::GeneratedTactic>, search::engine::SearchError> {
+        let _lock = self.llm_mutex.lock().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(self.delay_ms));
+        self.inner.generate_candidates(proof_state, n)
+    }
+}
+
+/// Benchmark: theorem-level parallelism with simulated LLM latency.
+///
+/// Wraps each MockPolicy with a shared mutex + sleep to simulate real
+/// `MutexPolicyProvider` + LLM inference. While one theorem holds the LLM
+/// mutex, other theorems can run Lean tactics in parallel on their workers.
+///
+/// This directly models the real system where:
+/// - LLM inference (~100ms per call) is serialized by Arc<Mutex<TacticGenerator>>
+/// - Lean verification (~10-100ms per tactic) runs on separate workers
+/// - Theorem-level parallelism overlaps Lean work across theorems
+///
+/// Run with: `cargo test -p search --test integration --release -- --ignored bench_theorem_parallelism_with_llm_sim --nocapture`
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+#[ignore]
+async fn bench_theorem_parallelism_with_llm_sim() {
+    let num_workers = 8;
+    let config = get_lean_config(num_workers);
+    let pool = Arc::new(LeanPool::new(config).await.expect("Failed to create pool"));
+
+    // Use a subset of theorems (medium weight) to keep runtime reasonable
+    let theorems = get_involved_benchmarks();
+
+    let engine = SearchEngine::new(SearchConfig {
+        timeout_per_theorem: 60,
+        ..SearchConfig::default()
+    });
+
+    // Shared mutex simulating the real MutexPolicyProvider around TacticGenerator
+    let llm_mutex = Arc::new(std::sync::Mutex::new(()));
+
+    // Test with different simulated LLM latencies
+    for delay_ms in [20, 50, 100] {
+        println!("\n=== Simulated LLM Benchmark (delay={}ms) ===", delay_ms);
+        println!("  Pool workers: {num_workers}");
+        println!("  Theorems: {}", theorems.len());
+
+        // --- Sequential ---
+        let seq_start = std::time::Instant::now();
+        let mut seq_proved = 0u32;
+        for (name, stmt, steps) in &theorems {
+            let inner = build_bench_policy(steps);
+            let policy = SlowMockPolicy {
+                inner,
+                delay_ms,
+                llm_mutex: Arc::clone(&llm_mutex),
+            };
+            let result = engine
+                .search_one(&pool, &policy, None, name, stmt)
+                .await;
+            if let Ok(sr) = &result {
+                if sr.proved {
+                    seq_proved += 1;
+                }
+            }
+        }
+        let seq_ms = seq_start.elapsed().as_millis();
+        println!(
+            "  Sequential (c=1): {seq_ms}ms  proved={seq_proved}/{}",
+            theorems.len()
+        );
+
+        // --- Parallel ---
+        for concurrency in [2, 4, 8] {
+            let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+            let mut join_set = tokio::task::JoinSet::new();
+            let par_start = std::time::Instant::now();
+
+            for (name, stmt, steps) in &theorems {
+                let permit = sem.clone().acquire_owned().await.unwrap();
+                let pool = Arc::clone(&pool);
+                let engine = engine.clone();
+                let llm_mutex = Arc::clone(&llm_mutex);
+                let name = name.to_string();
+                let stmt = stmt.to_string();
+                let steps: Vec<(String, String)> = steps
+                    .iter()
+                    .map(|(p, t)| (p.to_string(), t.to_string()))
+                    .collect();
+
+                join_set.spawn(async move {
+                    let _permit = permit;
+                    let mut inner = MockPolicy::new();
+                    for (pattern, tactic) in &steps {
+                        inner.add_contains_response(
+                            pattern,
+                            vec![make_tactic(tactic, -0.3)],
+                        );
+                    }
+                    let policy = SlowMockPolicy {
+                        inner,
+                        delay_ms,
+                        llm_mutex,
+                    };
+                    let result = engine
+                        .search_one(&pool, &policy, None, &name, &stmt)
+                        .await;
+                    (name, result)
+                });
+            }
+
+            let mut par_proved = 0u32;
+            while let Some(join_result) = join_set.join_next().await {
+                let (_name, result) = join_result.unwrap();
+                if let Ok(sr) = result {
+                    if sr.proved {
+                        par_proved += 1;
+                    }
+                }
+            }
+            let par_ms = par_start.elapsed().as_millis();
+            let speedup = if par_ms > 0 {
+                seq_ms as f64 / par_ms as f64
+            } else {
+                f64::INFINITY
+            };
+            println!(
+                "  Parallel (c={concurrency}): {par_ms}ms  proved={par_proved}/{}  speedup={speedup:.2}x",
+                theorems.len()
+            );
+        }
+    }
+
+    println!();
+    pool.shutdown().await;
+}
