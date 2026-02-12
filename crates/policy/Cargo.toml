@@ -3,6 +3,10 @@ name = "policy"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+cuda = ["candle-core/cuda"]
+
 [dependencies]
 candle-core = { workspace = true }
 candle-nn = { workspace = true }

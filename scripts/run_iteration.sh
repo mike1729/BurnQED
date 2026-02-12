@@ -32,7 +32,10 @@ MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
 NUM_WORKERS="${NUM_WORKERS:-64}"
-PROVER="cargo run --release -p prover-core --"
+
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
 
 mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$CKPT_DIR" "$LLM_DIR" "$EBM_DIR"
 mkdir -p "${REPO_ROOT}/logs"

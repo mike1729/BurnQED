@@ -19,7 +19,10 @@ LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 NUM_WORKERS="${NUM_WORKERS:-64}"
-PROVER="cargo run --release -p prover-core --"
+
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
 
 echo "================================================================"
 echo "  Resume Search — Iteration ${ITER}"

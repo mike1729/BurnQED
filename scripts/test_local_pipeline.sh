@@ -59,12 +59,15 @@ fi
 
 mkdir -p "$WORK_DIR"
 
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+
 # Build release
 echo "=== Building prover-core (release) ==="
-cargo build --release -p prover-core
+cargo build --release -p prover-core $CUDA_FEATURES
 echo ""
 
-PROVER="cargo run --release -p prover-core --"
+PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
 
 # Search
 echo "=== Running search (3 theorems, budget=20) ==="

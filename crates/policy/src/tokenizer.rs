@@ -78,6 +78,11 @@ impl LeanTokenizer {
         self.eos_id
     }
 
+    /// Look up a token string and return its ID, if it exists in the vocabulary.
+    pub fn token_to_id(&self, token: &str) -> Option<u32> {
+        self.inner.token_to_id(token)
+    }
+
     /// Truncate a token sequence to at most `max_len` tokens.
     pub fn truncate(ids: &[u32], max_len: usize) -> Vec<u32> {
         if ids.len() <= max_len {

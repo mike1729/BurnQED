@@ -79,7 +79,9 @@ pip install -r "${REPO_ROOT}/python/requirements.txt"
 # ── Step 7: Build prover-core (release) ───────────────────────────────────
 echo ""
 echo "=== Step 7: Build prover-core ==="
-cargo build --release -p prover-core
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+cargo build --release -p prover-core $CUDA_FEATURES
 
 # ── Step 8: Download model weights ────────────────────────────────────────
 echo ""
@@ -124,7 +126,7 @@ with open('${SMOKE_THEOREMS}', 'w') as f:
 
 SMOKE_OUTPUT=$(mktemp /tmp/smoke_output.XXXXXX.parquet)
 
-cargo run --release -p prover-core -- search \
+cargo run --release -p prover-core $CUDA_FEATURES -- search \
     --model-path "$MODEL_DIR" \
     --theorems "$SMOKE_THEOREMS" \
     --output "$SMOKE_OUTPUT" && \

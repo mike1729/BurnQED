@@ -24,6 +24,9 @@ echo "Workers:    $NUM_WORKERS"
 echo "Config:     $CONFIG"
 echo ""
 
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+
 for tw in 1 2 4 8; do
     echo "=== tactic_workers=$tw ==="
     TMPOUT=$(mktemp "/tmp/bench_tw${tw}_XXXXXX.parquet")
@@ -36,7 +39,7 @@ for tw in 1 2 4 8; do
 
     START=$(date +%s%N)
 
-    RUST_LOG=search=debug cargo run --release -p prover-core -- search \
+    RUST_LOG=search=debug cargo run --release -p prover-core $CUDA_FEATURES -- search \
         --config "$TMPCFG" \
         --model-path "$MODEL_PATH" \
         --theorems "$THEOREMS" \

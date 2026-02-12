@@ -20,7 +20,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 WORK_DIR="${REPO_ROOT}/lean_start_output"
-PROVER="cargo run --release -p prover-core --"
+
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
 
 echo "================================================================"
 echo "  BurnQED Smoke Test"

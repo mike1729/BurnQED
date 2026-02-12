@@ -23,7 +23,10 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
-PROVER="cargo run --release -p prover-core --"
+
+# Auto-detect CUDA
+CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
+PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
 BASELINES_DIR="${REPO_ROOT}/baselines"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 

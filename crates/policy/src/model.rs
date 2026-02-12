@@ -136,6 +136,7 @@ impl TacticGenerator {
         let mut next_logits = logits;
 
         let eos_id = self.tokenizer.eos_token_id();
+        let newline_id = self.tokenizer.token_to_id("\n");
 
         for _ in 0..self.config.max_tactic_tokens {
             let next_token = sample_top_p(
@@ -156,6 +157,11 @@ impl TacticGenerator {
                 break;
             }
 
+            // Stop on newline — tactics are single-line
+            if newline_id == Some(next_token) {
+                break;
+            }
+
             generated_tokens.push(next_token);
 
             // Feed next token
@@ -165,9 +171,11 @@ impl TacticGenerator {
         }
 
         let text = self.tokenizer.decode(&generated_tokens)?;
+        // Safety net: only keep first line in case of multi-token newline leaks
+        let text = text.lines().next().unwrap_or("").trim().to_string();
 
         Ok(GeneratedTactic {
-            text: text.trim().to_string(),
+            text,
             log_prob: log_prob_sum,
             tokens: generated_tokens,
         })

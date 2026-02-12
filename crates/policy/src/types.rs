@@ -67,12 +67,20 @@ fn default_top_p() -> f64 {
     0.95
 }
 fn default_max_tactic_tokens() -> usize {
-    256
+    128
 }
 
 impl PolicyConfig {
     /// Create a config with the given model path and defaults.
+    ///
+    /// When compiled with the `cuda` feature, defaults to CUDA device 0.
+    /// Otherwise defaults to CPU.
     pub fn new(model_path: PathBuf) -> Self {
+        let device = if cfg!(feature = "cuda") {
+            DeviceConfig::Cuda { ordinal: 0 }
+        } else {
+            DeviceConfig::Cpu
+        };
         Self {
             model_path,
             max_seq_len: default_max_seq_len(),
@@ -80,7 +88,7 @@ impl PolicyConfig {
             temperature: default_temperature(),
             top_p: default_top_p(),
             max_tactic_tokens: default_max_tactic_tokens(),
-            device: DeviceConfig::default(),
+            device,
         }
     }
 }
@@ -143,7 +151,7 @@ mod tests {
         assert_eq!(cfg.num_candidates, 32);
         assert!((cfg.temperature - 0.6).abs() < 1e-9);
         assert!((cfg.top_p - 0.95).abs() < 1e-9);
-        assert_eq!(cfg.max_tactic_tokens, 256);
+        assert_eq!(cfg.max_tactic_tokens, 128);
     }
 
     #[test]
