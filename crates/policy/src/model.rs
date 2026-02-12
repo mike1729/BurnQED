@@ -118,9 +118,15 @@ impl TacticGenerator {
 
     /// Generate a single tactic for the given proof state.
     pub fn generate_one(&mut self, proof_state: &str) -> anyhow::Result<GeneratedTactic> {
-        let prompt = format_prompt(proof_state);
-        let mut tokens = self.tokenizer.encode_with_bos(&prompt)?;
+        let message = format_tactic_message(proof_state);
+        let mut tokens = self.tokenizer.encode_chat(&message)?;
         tokens = LeanTokenizer::truncate(&tokens, self.config.max_seq_len);
+
+        tracing::debug!(
+            prompt_tokens = tokens.len(),
+            proof_state_len = proof_state.len(),
+            "Starting tactic generation"
+        );
 
         // Reset cache for new generation
         self.cache.clear();
@@ -135,9 +141,16 @@ impl TacticGenerator {
         let mut log_prob_sum = 0.0f64;
         let mut next_logits = logits;
         let mut tokens_fed: usize = 0;
+        let mut leading_newlines = 0u32;
+        let mut stop_reason = "max_tokens";
 
         let eos_id = self.tokenizer.eos_token_id();
         let newline_id = self.tokenizer.token_to_id("\n");
+
+        // Log top-3 tokens at first decode step
+        if let Err(e) = log_top_tokens(&next_logits, &self.tokenizer, 3) {
+            tracing::debug!(error = %e, "Failed to log top tokens");
+        }
 
         for _ in 0..self.config.max_tactic_tokens {
             let next_token = sample_top_p(
@@ -155,6 +168,7 @@ impl TacticGenerator {
 
             // Check for EOS
             if eos_id == Some(next_token) {
+                stop_reason = "eos";
                 break;
             }
 
@@ -162,9 +176,11 @@ impl TacticGenerator {
             // before the tactic), stop on newline after content starts
             if newline_id == Some(next_token) {
                 if !generated_tokens.is_empty() {
+                    stop_reason = "newline";
                     break;
                 }
                 // Leading newline — feed to model but don't record as tactic content
+                leading_newlines += 1;
                 let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
                 let pos = prompt_len + tokens_fed;
                 tokens_fed += 1;
@@ -181,9 +197,16 @@ impl TacticGenerator {
             next_logits = self.model.forward(&next_input, pos, &mut self.cache)?;
         }
 
-        let text = self.tokenizer.decode(&generated_tokens)?;
-        // Safety net: only keep first line in case of multi-token newline leaks
-        let text = text.lines().next().unwrap_or("").trim().to_string();
+        let raw_text = self.tokenizer.decode(&generated_tokens)?;
+        let text = extract_first_tactic(&raw_text);
+
+        tracing::info!(
+            leading_newlines,
+            content_tokens = generated_tokens.len(),
+            stop_reason,
+            text = %text,
+            "Tactic generation complete"
+        );
 
         Ok(GeneratedTactic {
             text,
@@ -224,7 +247,8 @@ impl TacticGenerator {
     /// Uses a fresh cache (no KV caching) for each call to ensure deterministic output.
     /// The resulting `Embedding` has `dim == hidden_size` (4096 for DeepSeek-Prover-V2-7B).
     pub fn encode_only(&mut self, text: &str) -> anyhow::Result<Embedding> {
-        let tokens = self.tokenizer.encode(text)?;
+        let message = format_tactic_message(text);
+        let tokens = self.tokenizer.encode_chat(&message)?;
         let tokens = LeanTokenizer::truncate(&tokens, self.config.max_seq_len);
 
         if tokens.is_empty() {
@@ -263,11 +287,65 @@ impl TacticGenerator {
     }
 }
 
-/// Format a proof state into a prompt for the model.
+/// Format a proof state into a chat message for the model.
 ///
-/// Uses a simple structured format. The model will complete after `[PROOFSTEP]`.
-fn format_prompt(proof_state: &str) -> String {
-    format!("[GOAL]{proof_state}[PROOFSTEP]")
+/// Uses tactic-state comment format matching DeepSeek-Prover-V1.5/V2 training data.
+fn format_tactic_message(proof_state: &str) -> String {
+    format!(
+        "Complete the following Lean 4 code:\n\n\
+         ```lean4\n\
+         /- tactic state:\n\
+         {proof_state}\n\
+         -/\n\
+         ```"
+    )
+}
+
+/// Extract the first valid tactic from model output.
+///
+/// Handles:
+/// - Raw tactic text (`"intro h"`)
+/// - Code-fenced output (`` ```lean4\nintro h\n``` ``)
+/// - Comment lines (`"-- We introduce h\nintro h"`)
+fn extract_first_tactic(raw: &str) -> String {
+    let text = raw.trim();
+    // Strip code fence if present
+    let text = if text.starts_with("```") {
+        text.lines()
+            .skip(1) // skip ```lean4
+            .take_while(|l| !l.starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        text.to_string()
+    };
+    // Take the first non-empty, non-comment line
+    text.lines()
+        .map(|l| l.trim())
+        .find(|l| !l.is_empty() && !l.starts_with("--") && !l.starts_with("/-"))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Log the top-k most probable tokens from a logits tensor.
+fn log_top_tokens(logits: &Tensor, tokenizer: &LeanTokenizer, k: usize) -> anyhow::Result<()> {
+    let logits = logits.squeeze(0)?;
+    let probs = candle_nn::ops::softmax(&logits, 0)?;
+    let probs_vec = probs.to_vec1::<f32>()?;
+    let mut indexed: Vec<(usize, f32)> = probs_vec.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    for (i, (token_id, prob)) in indexed.iter().take(k).enumerate() {
+        let text = tokenizer.decode(&[*token_id as u32]).unwrap_or_default();
+        tracing::info!(
+            rank = i,
+            token_id,
+            prob = %format!("{:.4}", prob),
+            text = %text.escape_debug(),
+            "Top token"
+        );
+    }
+    Ok(()
+    )
 }
 
 /// Find all `*.safetensors` files in a directory, sorted by name.
@@ -352,18 +430,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_prompt() {
+    fn test_format_tactic_message() {
         let state = "n : Nat\n⊢ n + 0 = n";
-        let prompt = format_prompt(state);
-        assert!(prompt.starts_with("[GOAL]"));
-        assert!(prompt.contains(state));
-        assert!(prompt.ends_with("[PROOFSTEP]"));
+        let msg = format_tactic_message(state);
+        assert!(msg.contains("Complete the following Lean 4 code:"));
+        assert!(msg.contains("tactic state:"));
+        assert!(msg.contains(state));
+        assert!(msg.contains("```lean4"));
     }
 
     #[test]
-    fn test_format_prompt_empty() {
-        let prompt = format_prompt("");
-        assert_eq!(prompt, "[GOAL][PROOFSTEP]");
+    fn test_format_tactic_message_empty() {
+        let msg = format_tactic_message("");
+        assert!(msg.contains("tactic state:"));
+    }
+
+    #[test]
+    fn test_extract_first_tactic_raw() {
+        assert_eq!(extract_first_tactic("intro h"), "intro h");
+        assert_eq!(extract_first_tactic("  simp  "), "simp");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_code_fence() {
+        let raw = "```lean4\nintro h\nexact h\n```";
+        assert_eq!(extract_first_tactic(raw), "intro h");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_with_comments() {
+        let raw = "-- We introduce h\nintro h\nexact h";
+        assert_eq!(extract_first_tactic(raw), "intro h");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_empty() {
+        assert_eq!(extract_first_tactic(""), "");
+        assert_eq!(extract_first_tactic("  \n  "), "");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_block_comment() {
+        let raw = "/- some reasoning -/\nomega";
+        assert_eq!(extract_first_tactic(raw), "omega");
     }
 
     #[test]

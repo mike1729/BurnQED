@@ -78,6 +78,25 @@ impl LeanTokenizer {
         self.eos_id
     }
 
+    /// Encode a user message with chat template markers.
+    ///
+    /// Produces: `[BOS, <｜User｜>, ...message_tokens..., <｜Assistant｜>]`
+    /// Falls back to BOS-only encoding if chat tokens aren't in the vocabulary.
+    pub fn encode_chat(&self, message: &str) -> anyhow::Result<Vec<u32>> {
+        let mut ids = Vec::new();
+        if let Some(bos) = self.bos_id {
+            ids.push(bos);
+        }
+        if let Some(user_id) = self.inner.token_to_id("<｜User｜>") {
+            ids.push(user_id);
+        }
+        ids.extend(self.encode(message)?);
+        if let Some(asst_id) = self.inner.token_to_id("<｜Assistant｜>") {
+            ids.push(asst_id);
+        }
+        Ok(ids)
+    }
+
     /// Look up a token string and return its ID, if it exists in the vocabulary.
     pub fn token_to_id(&self, token: &str) -> Option<u32> {
         self.inner.token_to_id(token)

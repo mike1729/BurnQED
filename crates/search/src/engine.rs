@@ -211,8 +211,26 @@ impl SearchEngine {
 
             // Generate tactic candidates
             let gen_start = std::time::Instant::now();
-            let candidates = policy.generate_candidates(&goals_text, self.config.num_candidates)?;
+            let mut candidates = policy.generate_candidates(&goals_text, self.config.num_candidates)?;
             stats.total_generate_time_ms += gen_start.elapsed().as_millis() as u64;
+
+            // Inject fallback tactics when LLM returns nothing
+            if candidates.is_empty() && !self.config.fallback_tactics.is_empty() {
+                tracing::info!(
+                    node = node_idx,
+                    "LLM returned no candidates, using fallback tactics"
+                );
+                candidates = self
+                    .config
+                    .fallback_tactics
+                    .iter()
+                    .map(|t| GeneratedTactic {
+                        text: t.clone(),
+                        log_prob: -100.0,
+                        tokens: vec![],
+                    })
+                    .collect();
+            }
 
             for candidate in candidates {
                 stats.total_tactic_attempts += 1;
@@ -531,11 +549,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_empty_frontier() {
-        // Policy returns no tactics → frontier is empty after root
+        // Policy returns no tactics and fallbacks disabled → frontier is empty after root
         let env = MockEnvironment::new();
         let policy = MockPolicy::new(); // returns empty for all states
 
-        let engine = SearchEngine::new(SearchConfig::default());
+        let config = SearchConfig {
+            fallback_tactics: vec![], // disable fallbacks for this test
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
         let result = engine
             .search_one(&env, &policy, None, "impossible", "∀ x, x = x")
             .await
@@ -603,14 +625,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_policy_returns_no_candidates() {
-        // Policy returns Ok(vec![]) for all states. The search loop should skip
-        // expansion gracefully, increment nodes_expanded, and eventually exhaust
-        // the frontier (root has no children, so frontier empties after 1 expansion).
+        // Policy returns Ok(vec![]) for all states. With fallback_tactics disabled,
+        // the search loop should skip expansion gracefully, increment nodes_expanded,
+        // and eventually exhaust the frontier (root has no children).
         let env = MockEnvironment::new();
         let policy = MockPolicy::new(); // returns empty vec for all states
 
         let config = SearchConfig {
             max_nodes: 3,
+            fallback_tactics: vec![], // disable fallbacks for this test
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);

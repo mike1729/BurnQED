@@ -28,6 +28,10 @@ pub struct SearchConfig {
     /// Maximum wall-clock seconds per theorem.
     #[serde(default = "default_timeout")]
     pub timeout_per_theorem: u64,
+
+    /// Fallback tactics to try when the LLM generates no candidates.
+    #[serde(default = "default_fallback_tactics")]
+    pub fallback_tactics: Vec<String>,
 }
 
 fn default_max_nodes() -> u32 {
@@ -50,6 +54,12 @@ fn default_beta() -> f64 {
 }
 fn default_timeout() -> u64 {
     600
+}
+fn default_fallback_tactics() -> Vec<String> {
+    ["simp", "omega", "decide", "aesop", "norm_num", "ring", "intro", "tauto"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 impl SearchConfig {
@@ -77,6 +87,7 @@ impl Default for SearchConfig {
             alpha: default_alpha(),
             beta: default_beta(),
             timeout_per_theorem: default_timeout(),
+            fallback_tactics: default_fallback_tactics(),
         }
     }
 }
@@ -95,6 +106,8 @@ mod tests {
         assert!((cfg.alpha - 0.5).abs() < 1e-9);
         assert!((cfg.beta - 0.5).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 600);
+        assert_eq!(cfg.fallback_tactics.len(), 8);
+        assert_eq!(cfg.fallback_tactics[0], "simp");
     }
 
     #[test]
