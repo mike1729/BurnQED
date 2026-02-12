@@ -43,16 +43,16 @@ echo "Using all theorems from ${SMOKE_THEOREMS}"
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
 cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
-max_nodes = 30
-max_depth = 15
-num_candidates = 2
-beam_width = 4
+max_nodes = 100
+max_depth = 25
+num_candidates = 4
+beam_width = 8
 alpha = 0.5
 beta = 0.5
-timeout_per_theorem = 45
+timeout_per_theorem = 120
 
 [lean_pool]
-num_workers = 8
+num_workers = 30
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800
 tactic_timeout_secs = 30
