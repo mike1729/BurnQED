@@ -10,7 +10,8 @@
 #
 # Usage:
 #   ./scripts/run_baseline.sh [model_path]
-#   NUM_WORKERS=64 ./scripts/run_baseline.sh
+#   NUM_WORKERS=30 ./scripts/run_baseline.sh
+#   CONCURRENCY=16 ./scripts/run_baseline.sh
 #
 # Prerequisites:
 #   - Rust prover-core built (cargo build --release -p prover-core)
@@ -22,7 +23,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
-NUM_WORKERS="${NUM_WORKERS:-4}"
+NUM_WORKERS="${NUM_WORKERS:-30}"
+CONCURRENCY="${CONCURRENCY:-8}"
 
 # Auto-detect CUDA
 CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
@@ -37,6 +39,7 @@ echo "  Phase B: Baseline Raw Model Evaluation"
 echo "================================================================"
 echo "  Model:        ${MODEL_PATH}"
 echo "  Workers:      ${NUM_WORKERS}"
+echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Output dir:   ${BASELINES_DIR}"
 echo "================================================================"
 
@@ -54,7 +57,8 @@ $PROVER search \
     --model-path "$MODEL_PATH" \
     --theorems "$TEST_THEOREMS" \
     --output "${BASELINES_DIR}/raw_test_theorems.parquet" \
-    --num-workers "$NUM_WORKERS"
+    --num-workers "$NUM_WORKERS" \
+    --concurrency "$CONCURRENCY"
 
 echo ""
 echo "Pipeline validation summary:"
@@ -71,7 +75,8 @@ if [ -f "$MINIF2F" ]; then
         --theorems "$MINIF2F" \
         --budgets 100,300,600 \
         --output "${BASELINES_DIR}/raw_minif2f.json" \
-        --num-workers "$NUM_WORKERS"
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY"
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
     echo "Run: python python/data/trace_mathlib.py --output-dir data/"
@@ -87,7 +92,8 @@ if [ -f "$THEOREM_INDEX" ]; then
         --model-path "$MODEL_PATH" \
         --theorems "$THEOREM_INDEX" \
         --output "${TRAJ_DIR}/baseline_raw.parquet" \
-        --num-workers "$NUM_WORKERS"
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY"
 
     echo ""
     echo "Full theorem search summary:"

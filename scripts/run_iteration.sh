@@ -5,7 +5,8 @@
 #   ./scripts/run_iteration.sh <iteration_number>
 #   ./scripts/run_iteration.sh 0   # First iteration (base model fine-tune)
 #   ./scripts/run_iteration.sh 1   # Second iteration (adds trajectory data + EBM)
-#   NUM_WORKERS=64 ./scripts/run_iteration.sh 1
+#   NUM_WORKERS=30 ./scripts/run_iteration.sh 1
+#   CONCURRENCY=16 ./scripts/run_iteration.sh 1
 #
 # Prerequisites:
 #   - Rust prover-core built (cargo build --release -p prover-core)
@@ -31,7 +32,8 @@ THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
-NUM_WORKERS="${NUM_WORKERS:-64}"
+NUM_WORKERS="${NUM_WORKERS:-30}"
+CONCURRENCY="${CONCURRENCY:-8}"
 
 # Auto-detect CUDA
 CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
@@ -49,6 +51,7 @@ echo "  EBM output:     ${EBM_DIR}"
 echo "  Trajectory dir:  ${TRAJ_DIR}"
 echo "  Theorem index:   ${THEOREM_INDEX}"
 echo "  Workers:         ${NUM_WORKERS}"
+echo "  Concurrency:     ${CONCURRENCY}"
 echo "================================================================"
 
 # ── Step 1: LLM Fine-tuning ───────────────────────────────────────────────
@@ -160,7 +163,8 @@ $PROVER search \
     $EBM_FLAG \
     --theorems "$THEOREM_INDEX" \
     --output "$TRAJ_OUTPUT" \
-    --num-workers "$NUM_WORKERS"
+    --num-workers "$NUM_WORKERS" \
+    --concurrency "$CONCURRENCY"
 
 # ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
 if [ "$ITER" -eq 0 ]; then
@@ -174,7 +178,8 @@ if [ "$ITER" -eq 0 ]; then
         --temperature 1.2 \
         --theorems "$THEOREM_INDEX" \
         --output "$NOISY_OUTPUT" \
-        --num-workers "$NUM_WORKERS"
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY"
 fi
 
 # ── Step 4: Evaluation ────────────────────────────────────────────────────
@@ -196,7 +201,8 @@ $PROVER eval \
     --theorems "$EVAL_THEOREMS" \
     --budgets 100,300,600 \
     --output "${EVAL_DIR}/iter_${ITER}.json" \
-    --num-workers "$NUM_WORKERS"
+    --num-workers "$NUM_WORKERS" \
+    --concurrency "$CONCURRENCY"
 
 # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
 if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
@@ -208,7 +214,8 @@ if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         --theorems "$EVAL_THEOREMS" \
         --budgets 100,300,600 \
         --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
-        --num-workers "$NUM_WORKERS"
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY"
 fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────────────

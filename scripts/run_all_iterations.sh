@@ -20,7 +20,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MAX_ITER=${MAX_ITER:-4}
 SKIP_BASELINE=${SKIP_BASELINE:-0}
-export NUM_WORKERS="${NUM_WORKERS:-64}"
+export NUM_WORKERS="${NUM_WORKERS:-30}"
+export CONCURRENCY="${CONCURRENCY:-8}"
 
 mkdir -p "${REPO_ROOT}/logs"
 
@@ -28,6 +29,7 @@ echo "================================================================"
 echo "  BurnQED Expert Iteration Experiment"
 echo "  Running iterations 0 through ${MAX_ITER}"
 echo "  Workers: ${NUM_WORKERS}"
+echo "  Concurrency: ${CONCURRENCY}"
 echo "================================================================"
 
 # ── Phase B: Baseline ────────────────────────────────────────────────────
