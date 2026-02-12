@@ -126,6 +126,12 @@ pub struct Cache {
     device: Device,
 }
 
+/// Snapshot of KV cache state (cheap — tensors are reference-counted).
+#[derive(Debug, Clone)]
+pub struct CacheSnapshot {
+    kvs: Vec<Option<(Tensor, Tensor)>>,
+}
+
 fn calculate_default_inv_freq(cfg: &Config) -> Vec<f32> {
     let head_dim = cfg.hidden_size / cfg.num_attention_heads;
     (0..head_dim)
@@ -174,6 +180,34 @@ impl Cache {
         for kv in self.kvs.iter_mut() {
             *kv = None;
         }
+    }
+
+    /// Save current KV state for later restoration (cheap — tensor clone bumps refcount).
+    pub fn snapshot(&self) -> CacheSnapshot {
+        CacheSnapshot {
+            kvs: self.kvs.clone(),
+        }
+    }
+
+    /// Restore KV state from a snapshot.
+    pub fn restore(&mut self, snap: &CacheSnapshot) {
+        self.kvs = snap.kvs.clone();
+    }
+
+    /// Expand KV cache from batch_size=1 to batch_size=n by repeating along dim 0.
+    ///
+    /// KV tensors have shape `(batch, heads, seq_len, head_dim)`. This repeats
+    /// along the batch dimension so all N sequences in a batch share the same
+    /// prefilled prompt context.
+    pub fn expand_batch(&mut self, n: usize) -> Result<()> {
+        for kv in self.kvs.iter_mut() {
+            if let Some((k, v)) = kv {
+                // Shape: (1, heads, seq, dim) → (n, heads, seq, dim)
+                *k = k.repeat(&[n, 1, 1, 1])?;
+                *v = v.repeat(&[n, 1, 1, 1])?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -614,5 +648,91 @@ mod tests {
             EosToks::Multiple(ids) => assert_eq!(ids, vec![100001, 100002]),
             _ => panic!("expected Multiple"),
         }
+    }
+
+    /// Helper to build a minimal Config for cache tests.
+    fn test_config(num_layers: usize) -> Config {
+        Config {
+            hidden_size: 64,
+            intermediate_size: 128,
+            vocab_size: 100,
+            num_hidden_layers: num_layers,
+            num_attention_heads: 4,
+            num_key_value_heads: 4,
+            use_flash_attn: false,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10000.0,
+            bos_token_id: None,
+            eos_token_id: None,
+            max_position_embeddings: 128,
+            tie_word_embeddings: false,
+        }
+    }
+
+    #[test]
+    fn test_cache_expand_batch() {
+        let cfg = test_config(2);
+        let mut cache = Cache::new(true, DType::F32, &cfg, &Device::Cpu).unwrap();
+
+        // Simulate KV entries for 2 layers: batch=1, heads=4, seq=3, head_dim=16
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads; // 16
+        for kv in cache.kvs.iter_mut() {
+            let k = Tensor::zeros((1, 4, 3, head_dim), DType::F32, &Device::Cpu).unwrap();
+            let v = Tensor::ones((1, 4, 3, head_dim), DType::F32, &Device::Cpu).unwrap();
+            *kv = Some((k, v));
+        }
+
+        cache.expand_batch(4).unwrap();
+
+        for kv in &cache.kvs {
+            let (k, v) = kv.as_ref().unwrap();
+            assert_eq!(k.dims(), &[4, 4, 3, head_dim]);
+            assert_eq!(v.dims(), &[4, 4, 3, head_dim]);
+        }
+    }
+
+    #[test]
+    fn test_cache_expand_batch_skips_none() {
+        let cfg = test_config(3);
+        let mut cache = Cache::new(true, DType::F32, &cfg, &Device::Cpu).unwrap();
+
+        // Only populate first layer
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let k = Tensor::zeros((1, 4, 2, head_dim), DType::F32, &Device::Cpu).unwrap();
+        let v = Tensor::zeros((1, 4, 2, head_dim), DType::F32, &Device::Cpu).unwrap();
+        cache.kvs[0] = Some((k, v));
+
+        cache.expand_batch(3).unwrap();
+
+        // Layer 0 expanded
+        let (k, _v) = cache.kvs[0].as_ref().unwrap();
+        assert_eq!(k.dims()[0], 3);
+
+        // Layers 1, 2 still None
+        assert!(cache.kvs[1].is_none());
+        assert!(cache.kvs[2].is_none());
+    }
+
+    #[test]
+    fn test_cache_snapshot_restore() {
+        let cfg = test_config(2);
+        let mut cache = Cache::new(true, DType::F32, &cfg, &Device::Cpu).unwrap();
+
+        let head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        let k = Tensor::ones((1, 4, 2, head_dim), DType::F32, &Device::Cpu).unwrap();
+        let v = Tensor::ones((1, 4, 2, head_dim), DType::F32, &Device::Cpu).unwrap();
+        cache.kvs[0] = Some((k, v));
+
+        // Snapshot
+        let snap = cache.snapshot();
+
+        // Modify cache (clear it)
+        cache.clear();
+        assert!(cache.kvs[0].is_none());
+
+        // Restore
+        cache.restore(&snap);
+        let (k, _) = cache.kvs[0].as_ref().unwrap();
+        assert_eq!(k.dims(), &[1, 4, 2, head_dim]);
     }
 }

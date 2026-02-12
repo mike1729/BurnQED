@@ -173,8 +173,16 @@ impl TacticGenerator {
             }
 
             // Newline handling: skip leading newlines (model often emits \n
-            // before the tactic), stop on newline after content starts
-            if newline_id == Some(next_token) {
+            // before the tactic), stop on newline after content starts.
+            // Check both the exact \n token ID and decoded text (catches merged
+            // tokens like "\n  " or "\ntheorem" from byte-level BPE).
+            let is_newline = newline_id == Some(next_token)
+                || self
+                    .tokenizer
+                    .decode(&[next_token])
+                    .map(|t| t.contains('\n'))
+                    .unwrap_or(false);
+            if is_newline {
                 if !generated_tokens.is_empty() {
                     stop_reason = "newline";
                     break;
@@ -200,7 +208,7 @@ impl TacticGenerator {
         let raw_text = self.tokenizer.decode(&generated_tokens)?;
         let text = extract_first_tactic(&raw_text);
 
-        tracing::info!(
+        tracing::debug!(
             leading_newlines,
             content_tokens = generated_tokens.len(),
             stop_reason,
@@ -215,31 +223,218 @@ impl TacticGenerator {
         })
     }
 
+    /// Generate `n` candidate tactics in a single batched decode pass.
+    ///
+    /// Encodes the prompt once (batch=1), expands the KV cache to batch=N,
+    /// then decodes all N sequences simultaneously. Sequences that hit EOS or
+    /// a newline early are fed EOS for remaining steps (wasted compute is
+    /// negligible for small N and short tactic sequences).
+    fn generate_batch(
+        &mut self,
+        proof_state: &str,
+        n: usize,
+    ) -> anyhow::Result<Vec<GeneratedTactic>> {
+        let message = format_tactic_message(proof_state);
+        let tokens = self.tokenizer.encode_chat(&message)?;
+        let tokens = LeanTokenizer::truncate(&tokens, self.config.max_seq_len);
+        let prompt_len = tokens.len();
+
+        tracing::debug!(
+            prompt_tokens = prompt_len,
+            batch_size = n,
+            "Starting batched tactic generation"
+        );
+
+        // 1. Prefill (batch=1)
+        self.cache.clear();
+        let input = Tensor::new(tokens.as_slice(), &self.device)?.unsqueeze(0)?;
+        let logits = self.model.forward(&input, 0, &mut self.cache)?;
+        // logits shape: (1, vocab_size)
+
+        // 2. Expand cache from batch=1 to batch=N
+        self.cache.expand_batch(n)?;
+
+        // 3. Sample N different first tokens from the shared logits
+        let eos_id = self.tokenizer.eos_token_id();
+        let newline_id = self.tokenizer.token_to_id("\n");
+        let eos_fallback = eos_id.unwrap_or(0);
+
+        let mut sequences: Vec<Vec<u32>> = Vec::with_capacity(n);
+        let mut log_probs: Vec<f64> = vec![0.0; n];
+        let mut stopped: Vec<bool> = vec![false; n];
+        let mut stop_reasons: Vec<&str> = vec!["max_tokens"; n];
+
+        // Compute log-probs from shared prefill logits
+        let shared_log_probs =
+            candle_nn::ops::log_softmax(&logits, candle_core::D::Minus1)?;
+
+        // Sample N first tokens
+        let mut first_tokens: Vec<u32> = Vec::with_capacity(n);
+        for i in 0..n {
+            let token = sample_top_p(&logits, self.config.temperature, self.config.top_p)?;
+            let token_lp = shared_log_probs
+                .i((0, token as usize))?
+                .to_scalar::<f32>()? as f64;
+            log_probs[i] = token_lp;
+
+            // Check EOS
+            if eos_id == Some(token) {
+                stopped[i] = true;
+                stop_reasons[i] = "eos";
+                sequences.push(Vec::new());
+                first_tokens.push(eos_fallback);
+                continue;
+            }
+
+            // Check newline (text-based)
+            let is_newline = newline_id == Some(token)
+                || self
+                    .tokenizer
+                    .decode(&[token])
+                    .map(|t| t.contains('\n'))
+                    .unwrap_or(false);
+            if is_newline {
+                // Leading newline for first token — treat as empty (skip)
+                stopped[i] = true;
+                stop_reasons[i] = "newline";
+                sequences.push(Vec::new());
+                first_tokens.push(eos_fallback);
+                continue;
+            }
+
+            sequences.push(vec![token]);
+            first_tokens.push(token);
+        }
+
+        // 4. Batch decode loop
+        // Build (N, 1) input from first tokens
+        let mut batch_input_vec = first_tokens;
+
+        for step in 0..self.config.max_tactic_tokens.saturating_sub(1) {
+            if stopped.iter().all(|&s| s) {
+                break;
+            }
+
+            let input = Tensor::new(batch_input_vec.as_slice(), &self.device)?
+                .reshape((n, 1))?;
+            let logits =
+                self.model
+                    .forward(&input, prompt_len + step, &mut self.cache)?;
+            // logits shape: (N, vocab_size)
+
+            let all_log_probs =
+                candle_nn::ops::log_softmax(&logits, candle_core::D::Minus1)?;
+
+            batch_input_vec = Vec::with_capacity(n);
+            for i in 0..n {
+                if stopped[i] {
+                    batch_input_vec.push(eos_fallback);
+                    continue;
+                }
+
+                let seq_logits = logits.i(i)?.unsqueeze(0)?;
+                let token =
+                    sample_top_p(&seq_logits, self.config.temperature, self.config.top_p)?;
+
+                let token_lp = all_log_probs
+                    .i((i, token as usize))?
+                    .to_scalar::<f32>()? as f64;
+                log_probs[i] += token_lp;
+
+                // Check EOS
+                if eos_id == Some(token) {
+                    stopped[i] = true;
+                    stop_reasons[i] = "eos";
+                    batch_input_vec.push(eos_fallback);
+                    continue;
+                }
+
+                // Check newline (text-based)
+                let is_newline = newline_id == Some(token)
+                    || self
+                        .tokenizer
+                        .decode(&[token])
+                        .map(|t| t.contains('\n'))
+                        .unwrap_or(false);
+                if is_newline {
+                    stopped[i] = true;
+                    stop_reasons[i] = "newline";
+                    batch_input_vec.push(eos_fallback);
+                    continue;
+                }
+
+                sequences[i].push(token);
+                batch_input_vec.push(token);
+            }
+        }
+
+        // 5. Decode, extract tactics, build results
+        let mut candidates = Vec::with_capacity(n);
+        for i in 0..n {
+            let raw_text = self.tokenizer.decode(&sequences[i])?;
+            let text = extract_first_tactic(&raw_text);
+
+            tracing::debug!(
+                candidate = i,
+                content_tokens = sequences[i].len(),
+                stop_reason = stop_reasons[i],
+                text = %text,
+                "Batch candidate complete"
+            );
+
+            if text.is_empty() {
+                continue;
+            }
+
+            candidates.push(GeneratedTactic {
+                text,
+                log_prob: log_probs[i],
+                tokens: sequences[i].clone(),
+            });
+        }
+
+        // Sort by log_prob descending
+        candidates.sort_by(|a, b| {
+            b.log_prob
+                .partial_cmp(&a.log_prob)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(candidates)
+    }
+
     /// Generate `n` candidate tactics for a proof state, sorted by log-probability (descending).
+    ///
+    /// For `n > 1`, uses batched decoding (single prefill, N-way parallel decode).
+    /// For `n <= 1`, falls back to the simple sequential path.
     pub fn generate_candidates(
         &mut self,
         proof_state: &str,
         n: usize,
     ) -> anyhow::Result<Vec<GeneratedTactic>> {
-        let mut candidates = Vec::with_capacity(n);
-
-        for i in 0..n {
-            tracing::debug!(candidate = i, total = n, "Generating candidate");
-            match self.generate_one(proof_state) {
-                Ok(tactic) if tactic.text.is_empty() => {
-                    tracing::debug!(candidate = i, "Skipping empty tactic");
-                }
-                Ok(tactic) => candidates.push(tactic),
-                Err(e) => {
-                    tracing::warn!(candidate = i, error = %e, "Failed to generate candidate");
+        if n <= 1 {
+            // Single candidate — use simple path (no batch overhead)
+            let mut candidates = Vec::with_capacity(n);
+            for i in 0..n {
+                tracing::debug!(candidate = i, total = n, "Generating candidate");
+                match self.generate_one(proof_state) {
+                    Ok(tactic) if tactic.text.is_empty() => {
+                        tracing::debug!(candidate = i, "Skipping empty tactic");
+                    }
+                    Ok(tactic) => candidates.push(tactic),
+                    Err(e) => {
+                        tracing::warn!(
+                            candidate = i,
+                            error = %e,
+                            "Failed to generate candidate"
+                        );
+                    }
                 }
             }
+            return Ok(candidates);
         }
 
-        // Sort by log_prob descending (higher = more probable)
-        candidates.sort_by(|a, b| b.log_prob.partial_cmp(&a.log_prob).unwrap_or(std::cmp::Ordering::Equal));
-
-        Ok(candidates)
+        self.generate_batch(proof_state, n)
     }
 
     /// Run the model in encoder-only mode, returning mean-pooled hidden states.
@@ -353,7 +548,7 @@ fn log_top_tokens(logits: &Tensor, tokenizer: &LeanTokenizer, k: usize) -> anyho
     indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
     for (i, (token_id, prob)) in indexed.iter().take(k).enumerate() {
         let text = tokenizer.decode(&[*token_id as u32]).unwrap_or_default();
-        tracing::info!(
+        tracing::debug!(
             rank = i,
             token_id,
             prob = %format!("{:.4}", prob),
