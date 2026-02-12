@@ -373,22 +373,26 @@ A working LLM inference crate that can:
 1. Load DeepSeek-Prover-V2-7B (Llama architecture) from HuggingFace safetensors
 2. Deserialize the model's config.json (including YaRN rope_scaling fields)
 3. Run autoregressive tactic generation with temperature + top-p sampling
-4. Extract mean-pooled hidden states via `encode_only()` for the EBM
-5. Manage KV cache for efficient generation, fresh cache for deterministic encoding
-6. Handle multi-shard safetensors loading
-7. Pass 21 unit tests (types, tokenizer, llama config, sampling, prompt formatting)
-8. 10 integration tests ready (require MODEL_PATH env var)
+4. Batched candidate generation: single prefill, N-way parallel decode via KV cache expansion
+5. Extract mean-pooled hidden states via `encode_only()` for the EBM
+6. Manage KV cache for efficient generation, fresh cache for deterministic encoding
+7. Handle multi-shard safetensors loading
+8. Extract first tactic from code-fenced model output (strips fences, declarations, comments)
+9. Pass 34 unit tests (types, tokenizer, llama config, sampling, prompt formatting, cache ops, extraction)
+10. 10 integration tests ready (require MODEL_PATH env var)
 
 ### Phase 2 Architecture Notes
 
 - **Forked llama.rs**: Copied from candle-transformers 0.8.4 with modifications:
   - Private `Llama` fields (accessed only through methods)
   - Added `forward_hidden_states()` returning `(batch, seq_len, hidden_size)` before lm_head
+  - Added `Cache::snapshot()`, `Cache::restore()`, `Cache::expand_batch(n)` for batched generation
   - `DeepSeekConfig` deserializes model's config.json with YaRN fields, converts to runtime `Config` with `rope_scaling: None`
   - Inlined `with_tracing` wrappers (Linear, RmsNorm) to avoid depending on candle-transformers internals
   - Removed flash-attn support (Windows/CPU only)
 - **YaRN RoPE ignored**: Standard RoPE used. YaRN is backwards-compatible within original 4096 context, and our sequences are ≤2048 tokens.
-- **Prompt format**: `[GOAL]{proof_state}[PROOFSTEP]` — simple structured format for DeepSeek-Prover-V2.
+- **Prompt format**: Chat format via `encode_chat()` wrapping `format_tactic_message()` — tactic-state comment block in a lean4 code fence, matching DeepSeek-Prover-V2 training data.
+- **Generation stopping**: EOS token or max_tactic_tokens only. No newline-based stopping — model outputs code-fenced multi-line completions; `extract_first_tactic()` handles parsing.
 - **f32 on CPU, bf16 on CUDA**: CPU doesn't support bf16 well in candle.
 
 ### Phase 3 Deliverable (DONE)
@@ -430,7 +434,7 @@ A trait-based best-first search engine that can:
 - EBM integration: `--ebm-path` loads `EnergyHeadConfig` + checkpoint, shares `TacticGenerator` via `Arc<Mutex>` for both policy and EBM encoding
 
 **Test data:**
-- `data/test_theorems.json`: 12 Init-only theorems (True, False→False, nat_refl, and_comm, etc.)
+- `data/test_theorems.json`: 16 Init-only theorems (True, False→False, nat_refl, and_comm, eq_trans, etc.)
 
 ### Phase 4 Deliverable (DONE)
 
@@ -518,7 +522,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
 | `scripts/run_all_iterations.sh` | Full experiment: baseline + iters 0-4 + final analysis | Yes |
 | `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
-| `scripts/lean_start.sh` | Smoke test: 3 theorems, 100-node budget, EBM train+search (~2-3 min on A100) | Yes |
+| `scripts/lean_start.sh` | Smoke test: 16 theorems, 100-node budget, 8 candidates, EBM train+search | Yes |
 
 ### Environment Variables
 
