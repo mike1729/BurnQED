@@ -1,5 +1,5 @@
 [search]
-max_nodes = 200
+max_nodes = 100
 max_depth = 50
 num_candidates = 32           # Batched decode: 32 candidates ≈ same GPU time as 4.
                               # Each worker stays busy ~16s verifying, overlapping GPU work.
