@@ -97,6 +97,7 @@ if [ -f "$MINIF2F" ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 16 \
         --imports Mathlib
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
