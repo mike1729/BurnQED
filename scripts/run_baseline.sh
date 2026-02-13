@@ -84,7 +84,7 @@ $PROVER summary --input "${BASELINES_DIR}/raw_test_theorems.parquet"
 
 # ── B2. miniF2F benchmark evaluation ────────────────────────────────────
 echo ""
-echo "=== B2: miniF2F Evaluation (budgets 100, 300, 600) ==="
+echo "=== B2: miniF2F Evaluation (budget 600) ==="
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 
 if [ -f "$MINIF2F" ]; then
@@ -92,7 +92,7 @@ if [ -f "$MINIF2F" ]; then
         --config "$SEARCH_CONFIG" \
         --server-url "$SGLANG_URL" \
         --theorems "$MINIF2F" \
-        --budgets 100,300,600 \
+        --budgets 600 \
         --output "${BASELINES_DIR}/raw_minif2f.json" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
