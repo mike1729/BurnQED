@@ -1,8 +1,8 @@
 [search]
 max_nodes = 100
 max_depth = 50
-num_candidates = 32           # Batched decode: 32 candidates ≈ same GPU time as 4.
-                              # Each worker stays busy ~16s verifying, overlapping GPU work.
+num_candidates = 8            # Dedup yields 2-4 unique from 8 at T=0.6. Batched decode
+                              # scales ~linearly in N, so 32 wastes GPU time for no gain.
 beam_width = 8                # Top-k by LLM log-prob before Lean + EBM
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
