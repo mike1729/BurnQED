@@ -19,7 +19,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
-MODEL_PATH="${MODEL_PATH:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 WORK_DIR="${REPO_ROOT}/lean_start_output"
 
 PROVER="cargo run --release -p prover-core --"
@@ -79,7 +78,8 @@ EBM_DIR="${WORK_DIR}/ebm_checkpoint"
 
 $PROVER train-ebm \
     --trajectories "$LLM_TRAJ" \
-    --llm-path "$MODEL_PATH" \
+    --server-url "$SGLANG_URL" \
+    --hidden-size "${HIDDEN_SIZE:-4096}" \
     --output-dir "$EBM_DIR" \
     --steps 200
 

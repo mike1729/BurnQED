@@ -140,7 +140,8 @@ if [ "$ITER" -gt 0 ]; then
     # shellcheck disable=SC2086
     $PROVER train-ebm \
         --trajectories "${TRAJ_FILES[@]}" \
-        --llm-path "$LLM_DIR" \
+        --server-url "$SGLANG_URL" \
+        --hidden-size "${HIDDEN_SIZE:-4096}" \
         --output-dir "$EBM_DIR" \
         --steps "$EBM_STEPS" \
         --save-embeddings "$EMBEDDINGS_SAVE" \

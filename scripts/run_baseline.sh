@@ -22,7 +22,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
-MODEL_PATH="${MODEL_PATH:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
@@ -38,7 +37,6 @@ echo "================================================================"
 echo "  Phase B: Baseline Raw Model Evaluation"
 echo "================================================================"
 echo "  SGLang:       ${SGLANG_URL}"
-echo "  Model (EBM):  ${MODEL_PATH}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Max theorems: ${MAX_THEOREMS}"
@@ -119,7 +117,8 @@ mkdir -p "$BASELINE_EBM_DIR"
 if [ -f "${TRAJ_DIR}/baseline_raw.parquet" ]; then
     $PROVER train-ebm \
         --trajectories "${TRAJ_DIR}/baseline_raw.parquet" \
-        --llm-path "$MODEL_PATH" \
+        --server-url "$SGLANG_URL" \
+        --hidden-size "${HIDDEN_SIZE:-4096}" \
         --output-dir "$BASELINE_EBM_DIR" \
         --steps "$EBM_STEPS" \
         --save-embeddings "${BASELINE_EBM_DIR}/embeddings.parquet"

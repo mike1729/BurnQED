@@ -16,7 +16,7 @@ use crate::training::trainer::resume_from_checkpoint;
 ///
 /// Wraps an `EnergyHead` and an encoder function to score proof states.
 /// The `encode_fn` maps proof state strings to `Vec<f32>` embeddings,
-/// decoupling this module from the candle encoder.
+/// decoupling this module from the LLM encoder.
 ///
 /// Convention: **higher score = more provable** (negated energy).
 pub struct EBMScorer<B: Backend> {

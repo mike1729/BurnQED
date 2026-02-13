@@ -1,9 +1,9 @@
-//! Tensor bridge: utilities to convert between candle encoder output
+//! Tensor bridge: utilities to convert between LLM encoder output
 //! (`Vec<f32>`) and burn tensors.
 //!
-//! This module is the boundary between the candle (encoder) and burn (EBM)
-//! frameworks. The candle encoder produces `Vec<f32>` embeddings; burn
-//! needs `Tensor<B, 2>` inputs for the EnergyHead.
+//! This module is the boundary between the LLM encoder and burn (EBM)
+//! frameworks. The encoder produces `Vec<f32>` embeddings; burn needs
+//! `Tensor<B, 2>` inputs for the EnergyHead.
 
 use burn::prelude::*;
 use burn::tensor::TensorData;

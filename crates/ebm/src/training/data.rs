@@ -3,7 +3,7 @@
 //! Reads trajectory Parquet files via the `trajectory` crate and constructs
 //! contrastive samples for training. Does NOT tokenize or encode — provides
 //! raw proof state strings. The training loop calls `encoder.encode_only()`
-//! on each string (the encoder lives in candle, not burn).
+//! on each string (the encoder lives outside burn, accessed via a closure).
 
 use rand::seq::SliceRandom;
 use rand::Rng;

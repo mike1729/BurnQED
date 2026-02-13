@@ -78,7 +78,7 @@ pub fn lr_schedule(base_lr: f64, warmup_steps: usize, total_steps: usize, step: 
 ///
 /// Trains the energy head using contrastive (InfoNCE) + depth regression loss.
 /// The `encode_fn` closure maps proof state strings to embedding vectors,
-/// decoupling this module from the candle encoder.
+/// decoupling this module from the LLM encoder.
 ///
 /// # Arguments
 /// - `config`: training hyperparameters

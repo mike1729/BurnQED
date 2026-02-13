@@ -173,9 +173,7 @@ accelerate config default 2>/dev/null || python -m accelerate config default 2>/
 # ── Step 7: Build prover-core (release) ───────────────────────────────────
 echo ""
 echo "=== Step 7: Build prover-core ==="
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-cargo build --release -p prover-core $CUDA_FEATURES
+cargo build --release -p prover-core
 
 # ── Step 8: Download model weights ────────────────────────────────────────
 echo ""

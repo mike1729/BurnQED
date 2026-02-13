@@ -1,9 +1,7 @@
-//! SGLang HTTP client for remote LLM inference.
+//! SGLang HTTP client for LLM inference.
 //!
-//! Provides [`SglangClient`] as an alternative to in-process candle inference,
-//! achieving 50-100x higher throughput via SGLang's continuous batching and
-//! PagedAttention. Supports both tactic generation and hidden-state extraction
-//! for EBM scoring.
+//! Provides [`SglangClient`] for high-throughput tactic generation and
+//! hidden-state extraction via SGLang's continuous batching and PagedAttention.
 //!
 //! # Server Setup
 //!
@@ -20,7 +18,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::model::{extract_first_tactic, format_tactic_message};
+use crate::prompt::{extract_first_tactic, format_tactic_message};
 use crate::types::{Embedding, GeneratedTactic};
 
 /// Configuration for connecting to an SGLang server.
@@ -315,8 +313,8 @@ impl SglangClient {
 
     /// Format a proof state into the full chat prompt for SGLang.
     ///
-    /// Produces the same prompt as candle's `encode_chat(format_tactic_message(state))`,
-    /// using DeepSeek special token markers as text.
+    /// Uses DeepSeek special token markers as text to produce the chat-formatted
+    /// prompt matching the model's training data.
     fn format_prompt(&self, proof_state: &str) -> String {
         let message = format_tactic_message(proof_state);
         // DeepSeek-Prover-V2 chat template:

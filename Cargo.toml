@@ -17,16 +17,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# LLM inference (candle)
-candle-core = "0.8"
-candle-nn = "0.8"
-candle-transformers = "0.8"
-
 # EBM training + inference (burn)
 burn = { version = "0.16", features = ["train", "autodiff", "metrics", "dataset", "ndarray"] }
-
-# Tokenization
-tokenizers = "0.21"
 
 # Data I/O
 arrow = { version = "53", features = ["prettyprint"] }

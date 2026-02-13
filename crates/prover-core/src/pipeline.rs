@@ -14,7 +14,7 @@ use ebm::{
     ContrastiveSampler, EBMScorer, EBMTrainingConfig, EBMValueFn, EmbeddingCache, EnergyHeadConfig,
 };
 use lean_repl::LeanPool;
-use policy::{InferenceHandle, PolicyConfig, SglangConfig, SglangClient, TacticGenerator};
+use policy::{InferenceHandle, SglangClient, SglangConfig};
 use search::{InferencePolicyProvider, SearchConfig, SearchEngine};
 use trajectory::{TheoremIndex, TrajectoryReader, TrajectoryWriter};
 
@@ -102,8 +102,10 @@ pub struct TrainEbmArgs {
     pub trajectories: Vec<PathBuf>,
     /// Directory for saving checkpoints.
     pub output_dir: PathBuf,
-    /// Path to the HuggingFace LLM model directory (for encoding).
-    pub llm_path: PathBuf,
+    /// URL of the SGLang inference server (for encoding).
+    pub server_url: String,
+    /// Hidden size of the LLM (embedding dimension). Default: 4096 for DeepSeek-Prover-V2-7B.
+    pub hidden_size: usize,
     /// Resume training from a checkpoint directory.
     pub resume_from: Option<PathBuf>,
     /// Total training steps.
@@ -899,22 +901,19 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
 
 /// Train the Energy-Based Model from trajectory data.
 pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
+    let hidden_size = args.hidden_size;
+
     tracing::info!(
         trajectories = args.trajectories.len(),
         steps = args.steps,
         lr = args.lr,
         batch_size = args.batch_size,
         k_negatives = args.k_negatives,
+        hidden_size,
         "Starting EBM training"
     );
 
-    // 1. Load LLM encoder
-    tracing::info!(model = %args.llm_path.display(), "Loading LLM encoder");
-    let policy_config = PolicyConfig::new(args.llm_path);
-    let generator = TacticGenerator::load(&policy_config)?;
-    let hidden_size = generator.hidden_size();
-
-    // 2. Create or resume energy head
+    // 1. Create or resume energy head
     let head_config = EnergyHeadConfig::new(hidden_size);
     let device: <TrainingBackend as burn::prelude::Backend>::Device = Default::default();
     let model = if let Some(ref resume_path) = args.resume_from {
@@ -925,7 +924,7 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         head_config.init::<TrainingBackend>(&device)
     };
 
-    // 3. Load trajectory data
+    // 2. Load trajectory data
     tracing::info!("Loading trajectory data from {} file(s)", args.trajectories.len());
     let sampler = match ContrastiveSampler::from_parquet(&args.trajectories, args.k_negatives) {
         Ok(s) => s,
@@ -948,32 +947,41 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         "Trajectory data loaded"
     );
 
-    // 4. Build embedding cache (precompute or load from disk)
+    // 3. Build embedding cache (precompute via SGLang or load from disk)
     let cache = if let Some(ref cache_path) = args.embeddings_cache {
         tracing::info!(path = %cache_path.display(), "Loading embedding cache from disk");
         EmbeddingCache::load(cache_path)?
     } else {
-        tracing::info!("Precomputing embeddings for all unique states");
-        let gen = std::sync::Mutex::new(generator);
+        tracing::info!(url = %args.server_url, "Precomputing embeddings via SGLang");
+        let handle = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let config = SglangConfig {
+                    server_url: args.server_url.clone(),
+                    temperature: 0.0,
+                    top_p: 1.0,
+                    max_tactic_tokens: 1,
+                    hidden_size,
+                };
+                let client = SglangClient::new(config).await?;
+                Ok::<_, anyhow::Error>(InferenceHandle::new(client))
+            })
+        })?;
         let raw_encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
-            let mut g = gen
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Generator lock poisoned: {e}"))?;
-            let embedding = g.encode_only(state)?;
+            let embedding = handle.encode_blocking(state)?;
             Ok(embedding.data)
         };
         EmbeddingCache::precompute(&sampler, &raw_encode_fn, hidden_size)
     };
 
-    // 4b. Optionally save cache for reuse
+    // 3b. Optionally save cache for reuse
     if let Some(ref save_path) = args.save_embeddings {
         cache.save(save_path)?;
     }
 
-    // 5. Create encode_fn from cache (O(1) lookups)
+    // 4. Create encode_fn from cache (O(1) lookups)
     let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> { cache.get_or_err(state) };
 
-    // 6. Build training config
+    // 5. Build training config
     let output_dir_str = args.output_dir.to_string_lossy().to_string();
     let training_config = EBMTrainingConfig::new()
         .with_lr(args.lr)
@@ -982,10 +990,10 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .with_k_negatives(args.k_negatives)
         .with_checkpoint_dir(output_dir_str.clone());
 
-    // 7. Train
+    // 6. Train
     let _trained = ebm::train(&training_config, model, &encode_fn, &sampler, &device)?;
 
-    // 8. Save EnergyHeadConfig alongside checkpoint
+    // 7. Save EnergyHeadConfig alongside checkpoint
     std::fs::create_dir_all(&args.output_dir)?;
     let config_path = args.output_dir.join("energy_head_config.json");
     let config_json = serde_json::to_string_pretty(&head_config)?;

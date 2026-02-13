@@ -33,7 +33,7 @@ pub struct EnergyHeadConfig {
 
 /// Energy head: spectral-normed MLP mapping encoder output to scalar energy.
 ///
-/// The only trainable component in the EBM — the 7B encoder is frozen in candle.
+/// The only trainable component in the EBM — the 7B encoder is frozen.
 /// Lower energy = more provable state (by convention).
 #[derive(Module, Debug)]
 pub struct EnergyHead<B: Backend> {

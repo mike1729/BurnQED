@@ -121,9 +121,12 @@ enum Command {
         /// Directory for saving checkpoints.
         #[arg(long, default_value = "checkpoints/ebm")]
         output_dir: PathBuf,
-        /// Path to the HuggingFace LLM model directory (for encoding).
+        /// URL of the SGLang inference server (for embedding precomputation).
         #[arg(long)]
-        llm_path: PathBuf,
+        server_url: String,
+        /// Hidden size of the LLM (embedding dimension). Default: 4096 for DeepSeek-Prover-V2-7B.
+        #[arg(long, default_value_t = 4096)]
+        hidden_size: usize,
         /// Resume training from a checkpoint directory.
         #[arg(long)]
         resume_from: Option<PathBuf>,
@@ -139,7 +142,7 @@ enum Command {
         /// Number of negative samples per positive.
         #[arg(long, default_value_t = 4)]
         k_negatives: usize,
-        /// Path to precomputed embedding cache (Parquet). If omitted, precomputes from LLM.
+        /// Path to precomputed embedding cache (Parquet). If omitted, precomputes from SGLang.
         #[arg(long)]
         embeddings_cache: Option<PathBuf>,
         /// Save precomputed embeddings to this path for reuse.
@@ -226,7 +229,8 @@ async fn main() -> anyhow::Result<()> {
         Command::TrainEbm {
             trajectories,
             output_dir,
-            llm_path,
+            server_url,
+            hidden_size,
             resume_from,
             steps,
             lr,
@@ -237,7 +241,8 @@ async fn main() -> anyhow::Result<()> {
         } => pipeline::run_train_ebm(TrainEbmArgs {
             trajectories,
             output_dir,
-            llm_path,
+            server_url,
+            hidden_size,
             resume_from,
             steps,
             lr,

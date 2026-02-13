@@ -66,7 +66,7 @@ pub trait TacticRunner: Send {
 
 /// LLM policy that generates tactic candidates for a proof state.
 ///
-/// Sync trait — matches candle's synchronous inference API.
+/// Sync trait for compatibility with blocking inference calls.
 pub trait PolicyProvider: Send + Sync {
     /// Generate up to `n` candidate tactics for the given proof state text.
     fn generate_candidates(

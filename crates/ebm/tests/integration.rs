@@ -227,7 +227,7 @@ fn test_bridge_to_energy_head_pipeline() {
         .with_dropout(0.0)
         .init::<TestBackend>(&device);
 
-    // Simulate candle encoder output: Vec<Vec<f32>>
+    // Simulate LLM encoder output: Vec<Vec<f32>>
     let embeddings: Vec<Vec<f32>> = (0..8)
         .map(|i| {
             (0..32)

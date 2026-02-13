@@ -1,22 +1,13 @@
 [package]
 name = "policy"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
-[features]
-default = []
-cuda = ["candle-core/cuda", "candle-nn/cuda"]
-
 [dependencies]
-candle-core = { workspace = true }
-candle-nn = { workspace = true }
-candle-transformers = { workspace = true }
-tokenizers = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rand = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt"] }
 reqwest = { workspace = true }
 url = { workspace = true }
