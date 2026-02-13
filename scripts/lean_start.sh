@@ -2,7 +2,7 @@
 # End-to-end smoke test for the full pipeline (~3-5 min on A100).
 #
 # Validates that all components work together:
-#   1. LLM-only search on all test theorems (light node budget)
+#   1. LLM-only search on 6 smoke-test theorems (minimal node budget)
 #   2. Train EBM from trajectory (200 steps, skipped if insufficient data)
 #   3. Search with EBM (skipped if EBM training was skipped)
 #   4. Compare solve rates
@@ -38,9 +38,9 @@ echo "================================================================"
 mkdir -p "$WORK_DIR"
 
 # ── Step 0: Create inputs ──────────────────────────────────────────────
-# Use all test theorems (16 theorems of varying difficulty)
-SMOKE_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
-echo "Using all theorems from ${SMOKE_THEOREMS}"
+# 6 theorems: trivial to moderate, enough to exercise the full pipeline
+SMOKE_THEOREMS="${REPO_ROOT}/data/smoke_theorems.json"
+echo "Using ${SMOKE_THEOREMS}"
 
 # Light search config for smoke test: 4 nodes, 4 candidates, 60s timeout
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
@@ -62,7 +62,7 @@ TOML
 
 # ── Step 1: LLM-only search ──────────────────────────────────────────────
 echo ""
-echo "=== Step 1: LLM-only Search (16 theorems, 100 nodes) ==="
+echo "=== Step 1: LLM-only Search (6 theorems, 4 nodes) ==="
 LLM_TRAJ="${WORK_DIR}/llm_only.parquet"
 
 $PROVER search \
@@ -92,7 +92,7 @@ EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"
 
 if [ -f "${EBM_DIR}/final.mpk" ]; then
     echo ""
-    echo "=== Step 3: Search with EBM (16 theorems, 100 nodes) ==="
+    echo "=== Step 3: Search with EBM (6 theorems, 4 nodes) ==="
 
     $PROVER search \
         --config "$SMOKE_CONFIG" \
