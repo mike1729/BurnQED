@@ -32,6 +32,7 @@ MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-2000}"
 
 PROVER="cargo run --release -p prover-core --"
+SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 BASELINES_DIR="${REPO_ROOT}/baselines"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 
@@ -41,6 +42,7 @@ echo "================================================================"
 echo "  Phase B: Baseline Raw Model Evaluation"
 echo "================================================================"
 echo "  SGLang:       ${SGLANG_URL}"
+echo "  Config:       ${SEARCH_CONFIG}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Max theorems: ${MAX_THEOREMS}"
@@ -59,6 +61,7 @@ if [ ! -f "$TEST_THEOREMS" ]; then
 fi
 
 $PROVER search \
+    --config "$SEARCH_CONFIG" \
     --server-url "$SGLANG_URL" \
     --theorems "$TEST_THEOREMS" \
     --output "${BASELINES_DIR}/raw_test_theorems.parquet" \
@@ -76,6 +79,7 @@ MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 
 if [ -f "$MINIF2F" ]; then
     $PROVER eval \
+        --config "$SEARCH_CONFIG" \
         --server-url "$SGLANG_URL" \
         --theorems "$MINIF2F" \
         --budgets 100,300,600 \
@@ -83,7 +87,6 @@ if [ -f "$MINIF2F" ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
-        --num-candidates 16 \
         --imports Mathlib
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
@@ -97,6 +100,7 @@ THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 
 if [ -f "$THEOREM_INDEX" ]; then
     $PROVER search \
+        --config "$SEARCH_CONFIG" \
         --server-url "$SGLANG_URL" \
         --theorems "$THEOREM_INDEX" \
         --output "${TRAJ_DIR}/baseline_raw.parquet" \
