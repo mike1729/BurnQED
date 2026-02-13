@@ -513,7 +513,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
 | `scripts/run_all_iterations.sh` | Full experiment: baseline + iters 0-4 + final analysis | Yes |
 | `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
-| `scripts/lean_start.sh` | Smoke test: 16 theorems, 100-node budget, 4 candidates, EBM train+search | Yes |
+| `scripts/smoke_test.sh` | Smoke test: 6 theorems, 4-node budget, 4 candidates, EBM train+search | Yes |
 
 ### Throughput Tuning
 

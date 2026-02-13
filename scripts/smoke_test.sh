@@ -3,12 +3,12 @@
 #
 # Validates that all components work together:
 #   1. LLM-only search on 6 smoke-test theorems (minimal node budget)
-#   2. Train EBM from trajectory (200 steps, skipped if insufficient data)
+#   2. Train EBM from trajectory (100 steps, skipped if insufficient data)
 #   3. Search with EBM (skipped if EBM training was skipped)
 #   4. Compare solve rates
 #
 # Usage:
-#   SGLANG_URL=http://localhost:30000 ./scripts/lean_start.sh
+#   SGLANG_URL=http://localhost:30000 ./scripts/smoke_test.sh
 #
 # Prerequisites:
 #   - SGLang server running (./scripts/start_sglang.sh)
@@ -22,7 +22,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$(dirname "$0")/_lib.sh"
 
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
-WORK_DIR="${REPO_ROOT}/lean_start_output"
+WORK_DIR="${REPO_ROOT}/smoke_test_output"
 
 PROVER="cargo run --release -p prover-core --"
 
@@ -77,7 +77,7 @@ $PROVER summary --input "$LLM_TRAJ"
 
 # ── Step 2: Train EBM ────────────────────────────────────────────────────
 echo ""
-echo "=== Step 2: Train EBM (200 steps) ==="
+echo "=== Step 2: Train EBM (100 steps) ==="
 EBM_DIR="${WORK_DIR}/ebm_checkpoint"
 
 $PROVER train-ebm \
@@ -85,7 +85,7 @@ $PROVER train-ebm \
     --server-url "$SGLANG_URL" \
     --hidden-size "${HIDDEN_SIZE:-4096}" \
     --output-dir "$EBM_DIR" \
-    --steps 200
+    --steps 100
 
 # ── Step 3: Search with EBM (if trained) ────────────────────────────────
 EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"

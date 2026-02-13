@@ -204,7 +204,7 @@ fi
 echo ""
 echo "=== Step 9: Smoke test ==="
 echo "To run a quick end-to-end smoke test:"
-echo "  ./scripts/lean_start.sh"
+echo "  ./scripts/smoke_test.sh"
 
 echo ""
 echo "================================================================"

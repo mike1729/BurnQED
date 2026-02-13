@@ -73,7 +73,7 @@ cd BurnQED
 cargo build --release -p prover-core
 
 # Smoke test (~2-3 min on A100: LLM search → train EBM → search with EBM → compare)
-./scripts/lean_start.sh /path/to/deepseek-prover-v2-7b
+./scripts/smoke_test.sh
 ```
 
 For cloud GPU setup (installs Rust, elan, Python deps, builds everything):
