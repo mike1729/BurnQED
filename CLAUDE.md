@@ -539,7 +539,7 @@ Cross-prompt batching (different proof states in one GPU batch) is not feasible 
 
 | Parameter | Value | Reason |
 |-----------|-------|--------|
-| `num_candidates` | 8 | 2-4 unique after dedup; ~5s GPU time. Sweet spot for diversity vs cost. |
+| `num_candidates` | 4 | 2-3 unique after dedup at T=0.6; ~2.5s GPU time. |
 | `num_workers` | 6 | Enough to overlap Lean verification with GPU generation |
 | `concurrency` | 6 | Match workers — each needs one active search |
 | `max_nodes` | 100 | At 4% prove rate, proofs found within 2 nodes. 100 ≈ 3 expansions with backtrack. |

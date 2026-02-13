@@ -45,7 +45,7 @@ cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
 max_nodes = 100
 max_depth = 25
-num_candidates = 8
+num_candidates = 4
 beam_width = 8
 alpha = 0.5
 beta = 0.5
