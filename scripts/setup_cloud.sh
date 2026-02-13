@@ -11,15 +11,90 @@
 #
 #   # Or via SSH:
 #   ssh gpu-instance 'cd BurnQED && bash scripts/setup_cloud.sh'
+#
+#   # With persistent storage (model weights pre-placed):
+#   PERSIST_DIR=/home/michal/burnqed-data bash scripts/setup_cloud.sh
+#
+# Persistent Storage:
+#   Set PERSIST_DIR to a mounted persistent volume (e.g., NFS, EBS).
+#   The script will create symlinks from the repo to $PERSIST_DIR for:
+#     models/, trajectories/, checkpoints/, baselines/, eval_results/, data/, logs/
+#   Model weights should be pre-placed at $PERSIST_DIR/models/deepseek-prover-v2-7b/
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+PERSIST_DIR="${PERSIST_DIR:-}"
+
 echo "================================================================"
 echo "  BurnQED Cloud Setup"
 echo "================================================================"
+
+# ── Step 0: Persistent storage symlinks ─────────────────────────────────
+if [ -n "$PERSIST_DIR" ]; then
+    echo ""
+    echo "=== Step 0: Persistent storage symlinks ==="
+    echo "  Persist dir: ${PERSIST_DIR}"
+
+    if [ ! -d "$PERSIST_DIR" ]; then
+        echo "Creating persistent directory: ${PERSIST_DIR}"
+        mkdir -p "$PERSIST_DIR"
+    fi
+
+    # Directories to symlink to persistent storage
+    PERSIST_DIRS=(models trajectories checkpoints baselines eval_results data logs)
+
+    for dir in "${PERSIST_DIRS[@]}"; do
+        persist_path="${PERSIST_DIR}/${dir}"
+        repo_path="${REPO_ROOT}/${dir}"
+
+        # Create the persistent directory if it doesn't exist
+        mkdir -p "$persist_path"
+
+        if [ -L "$repo_path" ]; then
+            # Already a symlink — verify it points to the right place
+            current_target=$(readlink -f "$repo_path")
+            expected_target=$(readlink -f "$persist_path")
+            if [ "$current_target" = "$expected_target" ]; then
+                echo "  ${dir}/ → already linked"
+            else
+                echo "  ${dir}/ → re-linking (was: ${current_target})"
+                rm "$repo_path"
+                ln -s "$persist_path" "$repo_path"
+            fi
+        elif [ -d "$repo_path" ]; then
+            # Real directory exists — move contents to persistent, then symlink
+            if [ -n "$(ls -A "$repo_path" 2>/dev/null)" ]; then
+                echo "  ${dir}/ → migrating contents to persistent storage"
+                cp -a "$repo_path"/* "$persist_path"/ 2>/dev/null || true
+            fi
+            rm -rf "$repo_path"
+            ln -s "$persist_path" "$repo_path"
+            echo "  ${dir}/ → linked"
+        else
+            # Nothing exists yet — just create the symlink
+            ln -s "$persist_path" "$repo_path"
+            echo "  ${dir}/ → linked (new)"
+        fi
+    done
+
+    # Check if model weights are pre-placed
+    MODEL_CHECK="${PERSIST_DIR}/models/deepseek-prover-v2-7b"
+    if [ -d "$MODEL_CHECK" ] && [ -n "$(ls -A "$MODEL_CHECK"/*.safetensors 2>/dev/null)" ]; then
+        echo ""
+        echo "  Model weights found at ${MODEL_CHECK}"
+    else
+        echo ""
+        echo "  WARNING: Model weights not found at ${MODEL_CHECK}"
+        echo "  Place them there before running baseline/iteration scripts."
+    fi
+else
+    echo ""
+    echo "  (No PERSIST_DIR set — using local storage)"
+    echo "  Tip: Set PERSIST_DIR=/path/to/mount for persistent storage"
+fi
 
 # ── Step 1: System packages ───────────────────────────────────────────────
 echo ""
