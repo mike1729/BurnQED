@@ -68,6 +68,7 @@ struct SamplingParams {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 struct GenerateResponse {
     text: String,
     meta_info: MetaInfo,
@@ -184,7 +185,9 @@ impl SglangClient {
         let prompt = self.format_prompt(proof_state);
         let url = self.base_url.join("/generate")?;
 
-        let mut responses = Vec::with_capacity(n);
+        // Collect (text, log_prob) pairs — parse as Value to handle SGLang's
+        // varying logprob formats (tuple third element can be string, null, or map).
+        let mut responses: Vec<(String, f64)> = Vec::with_capacity(n);
         for i in 0..n {
             let request = GenerateRequest {
                 text: prompt.clone(),
@@ -200,8 +203,26 @@ impl SglangClient {
 
             let resp = self.post_with_retry(&url, &request).await?;
             let body = resp.bytes().await?;
-            match serde_json::from_slice::<GenerateResponse>(&body) {
-                Ok(gen) => responses.push(gen),
+            match serde_json::from_slice::<serde_json::Value>(&body) {
+                Ok(val) => {
+                    let text = val.get("text")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    // Sum logprobs from meta_info.output_token_logprobs: [[lp, id, ...], ...]
+                    let log_prob = val.get("meta_info")
+                        .and_then(|m| m.get("output_token_logprobs"))
+                        .and_then(|lps| lps.as_array())
+                        .map(|lps| {
+                            lps.iter()
+                                .filter_map(|entry| entry.as_array()?.first()?.as_f64())
+                                .sum::<f64>()
+                        })
+                        .unwrap_or(0.0);
+
+                    responses.push((text, log_prob));
+                }
                 Err(e) => {
                     let preview: String = String::from_utf8_lossy(&body).chars().take(200).collect();
                     tracing::warn!(
@@ -215,16 +236,9 @@ impl SglangClient {
         }
 
         let mut tactics = Vec::new();
-        for (i, gen) in responses.iter().enumerate() {
-            let raw_text = &gen.text;
+        for (i, (raw_text, log_prob)) in responses.iter().enumerate() {
             let tactic_text = extract_first_tactic(raw_text);
-
-            let log_prob = gen
-                .meta_info
-                .output_token_logprobs
-                .as_ref()
-                .map(|lps| lps.iter().map(|lp| lp.0).sum())
-                .unwrap_or(0.0);
+            let log_prob = *log_prob;
 
             if tactic_text.is_empty() {
                 tracing::debug!(
