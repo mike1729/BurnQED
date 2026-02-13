@@ -169,6 +169,27 @@ else
     echo "Trace complete."
 fi
 
+# ── Step 2b: Download miniF2F ─────────────────────────────────────────────
+echo ""
+echo "=== Step 2b: Download miniF2F ==="
+
+MINIF2F_TEST="${DATA_DIR}/minif2f_test.json"
+MINIF2F_VALID="${DATA_DIR}/minif2f_valid.json"
+
+if [ -f "$MINIF2F_TEST" ] && [ -f "$MINIF2F_VALID" ] && [ $FORCE -eq 0 ]; then
+    echo "miniF2F files already exist (use --force to re-download)"
+else
+    MINIF2F_ARGS=("--output-dir" "$DATA_DIR")
+    if [ $FORCE -eq 1 ]; then
+        MINIF2F_ARGS+=("--force")
+    fi
+    if python "${REPO_ROOT}/python/data/download_minif2f.py" "${MINIF2F_ARGS[@]}"; then
+        echo "miniF2F download complete."
+    else
+        echo "WARNING: miniF2F download failed (evaluation will use theorem_index.json instead)"
+    fi
+fi
+
 # ── Step 3: Format tactic pairs ────────────────────────────────────────────
 echo ""
 echo "=== Step 3: Format tactic pairs ==="

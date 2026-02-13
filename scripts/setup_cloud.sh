@@ -166,6 +166,10 @@ source "${REPO_ROOT}/.venv/bin/activate"
 pip install --upgrade pip
 pip install -r "${REPO_ROOT}/python/requirements.txt"
 
+# Configure accelerate for single-GPU (needed for LLM fine-tuning)
+echo "Configuring accelerate for single GPU..."
+accelerate config default 2>/dev/null || python -m accelerate config default 2>/dev/null || true
+
 # ── Step 7: Build prover-core (release) ───────────────────────────────────
 echo ""
 echo "=== Step 7: Build prover-core ==="
