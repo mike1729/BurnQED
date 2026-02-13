@@ -15,7 +15,7 @@ noise_temperature = 1.2
 noise_fraction = 0.3          # 30% of theorems get the high-T run
 
 [lean_pool]
-num_workers = 30
+num_workers = 16
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
 tactic_timeout_secs = 30
