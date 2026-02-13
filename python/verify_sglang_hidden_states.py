@@ -11,18 +11,20 @@ What to check:
     3. Log-prob format for tactic ranking
     4. Whether HTTP server supports return_hidden_states (Issue #6528)
 """
+import sys
 import numpy as np
 
 
-MODEL = "deepseek-ai/DeepSeek-Prover-V2-7B"
+DEFAULT_MODEL = "deepseek-ai/DeepSeek-Prover-V2-7B"
 
 
 def main():
     import sglang as sgl
 
-    print(f"Loading {MODEL}...")
+    model_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MODEL
+    print(f"Loading {model_path}...")
     engine = sgl.Engine(
-        model_path=MODEL,
+        model_path=model_path,
         enable_return_hidden_states=True,
     )
 
