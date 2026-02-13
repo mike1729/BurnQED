@@ -172,35 +172,47 @@ impl SglangClient {
     }
 
     /// Generate N tactic candidates for a proof state.
+    ///
+    /// Sends N sequential requests with `n=1` each. SGLang's native `n>1` response
+    /// format is unreliable, and sequential requests are negligibly slower since the
+    /// GPU inference time dominates over localhost HTTP roundtrips.
     pub async fn generate_candidates(
         &self,
         proof_state: &str,
         n: usize,
     ) -> anyhow::Result<Vec<GeneratedTactic>> {
         let prompt = self.format_prompt(proof_state);
-
-        let request = GenerateRequest {
-            text: prompt,
-            sampling_params: SamplingParams {
-                max_new_tokens: self.config.max_tactic_tokens,
-                temperature: Some(self.config.temperature),
-                top_p: Some(self.config.top_p),
-                n: Some(n),
-            },
-            return_logprob: true,
-            return_hidden_states: false,
-        };
-
         let url = self.base_url.join("/generate")?;
-        let resp = self.post_with_retry(&url, &request).await?;
 
-        // SGLang returns a single object for n=1, or an array for n>1
-        let responses: Vec<GenerateResponse> = if n == 1 {
-            let single: GenerateResponse = resp.json().await?;
-            vec![single]
-        } else {
-            resp.json().await?
-        };
+        let mut responses = Vec::with_capacity(n);
+        for i in 0..n {
+            let request = GenerateRequest {
+                text: prompt.clone(),
+                sampling_params: SamplingParams {
+                    max_new_tokens: self.config.max_tactic_tokens,
+                    temperature: Some(self.config.temperature),
+                    top_p: Some(self.config.top_p),
+                    n: None,
+                },
+                return_logprob: true,
+                return_hidden_states: false,
+            };
+
+            let resp = self.post_with_retry(&url, &request).await?;
+            let body = resp.bytes().await?;
+            match serde_json::from_slice::<GenerateResponse>(&body) {
+                Ok(gen) => responses.push(gen),
+                Err(e) => {
+                    let preview: String = String::from_utf8_lossy(&body).chars().take(200).collect();
+                    tracing::warn!(
+                        candidate = i,
+                        error = %e,
+                        body_preview = %preview,
+                        "Failed to decode SGLang response, skipping candidate"
+                    );
+                }
+            }
+        }
 
         let mut tactics = Vec::new();
         for (i, gen) in responses.iter().enumerate() {
