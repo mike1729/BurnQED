@@ -118,6 +118,7 @@ if [ -f "$THEOREM_INDEX" ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 8 \
         --imports Mathlib
 
     echo ""
