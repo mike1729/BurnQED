@@ -22,6 +22,8 @@ PREV=$((ITER - 1))
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$(dirname "$0")/_lib.sh"
 LLM_BASE="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
 LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
@@ -33,6 +35,7 @@ MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+ensure_sglang "$SGLANG_URL"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
@@ -213,6 +216,7 @@ $PROVER eval \
     --num-workers "$NUM_WORKERS" \
     --concurrency "$CONCURRENCY" \
     --max-theorems "$MAX_THEOREMS" \
+    --num-candidates 16 \
     --imports Mathlib
 
 # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
@@ -228,6 +232,7 @@ if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 16 \
         --imports Mathlib
 fi
 

@@ -9,10 +9,6 @@ pub struct SearchConfig {
     #[serde(default = "default_max_depth")]
     pub max_depth: u32,
 
-    /// Top-k candidates by LLM log-prob before Lean + EBM scoring.
-    #[serde(default = "default_beam_width")]
-    pub beam_width: usize,
-
     /// Number of candidate tactics to generate per expansion.
     #[serde(default = "default_num_candidates")]
     pub num_candidates: usize,
@@ -39,9 +35,6 @@ fn default_max_nodes() -> u32 {
 }
 fn default_max_depth() -> u32 {
     50
-}
-fn default_beam_width() -> usize {
-    8
 }
 fn default_num_candidates() -> usize {
     32
@@ -79,7 +72,6 @@ impl Default for SearchConfig {
         Self {
             max_nodes: default_max_nodes(),
             max_depth: default_max_depth(),
-            beam_width: default_beam_width(),
             num_candidates: default_num_candidates(),
             alpha: default_alpha(),
             beta: default_beta(),
@@ -98,7 +90,6 @@ mod tests {
         let cfg = SearchConfig::default();
         assert_eq!(cfg.max_nodes, 600);
         assert_eq!(cfg.max_depth, 50);
-        assert_eq!(cfg.beam_width, 8);
         assert_eq!(cfg.num_candidates, 32);
         assert!((cfg.alpha - 0.5).abs() < 1e-9);
         assert!((cfg.beta - 0.5).abs() < 1e-9);
@@ -125,7 +116,6 @@ mod tests {
         let toml_str = r#"
             max_nodes = 200
             max_depth = 30
-            beam_width = 16
             num_candidates = 64
             alpha = 0.3
             beta = 0.7
@@ -134,7 +124,6 @@ mod tests {
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.max_nodes, 200);
         assert_eq!(cfg.max_depth, 30);
-        assert_eq!(cfg.beam_width, 16);
         assert_eq!(cfg.num_candidates, 64);
         assert!((cfg.alpha - 0.3).abs() < 1e-9);
         assert!((cfg.beta - 0.7).abs() < 1e-9);

@@ -21,11 +21,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$(dirname "$0")/_lib.sh"
+
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+ensure_sglang "$SGLANG_URL"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
-EBM_STEPS="${EBM_STEPS:-10000}"
+EBM_STEPS="${EBM_STEPS:-2000}"
 
 PROVER="cargo run --release -p prover-core --"
 BASELINES_DIR="${REPO_ROOT}/baselines"
@@ -79,6 +83,7 @@ if [ -f "$MINIF2F" ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 16 \
         --imports Mathlib
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."

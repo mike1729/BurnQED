@@ -44,6 +44,8 @@ pub struct SearchArgs {
     pub temperature: Option<f64>,
     /// Override maximum tokens per generated tactic.
     pub max_tactic_tokens: Option<usize>,
+    /// Override number of candidate tactics per expansion.
+    pub num_candidates: Option<usize>,
     /// Number of theorems to search in parallel (default: 1 = sequential).
     pub concurrency: usize,
     /// Maximum number of theorems to search (truncates the index).
@@ -84,6 +86,8 @@ pub struct EvalArgs {
     pub max_theorems: Option<usize>,
     /// Override maximum tokens per generated tactic.
     pub max_tactic_tokens: Option<usize>,
+    /// Override number of candidate tactics per expansion.
+    pub num_candidates: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
 }
@@ -263,7 +267,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let start = Instant::now();
     let concurrency = args.concurrency.max(1);
 
-    let (search_config, loaded) = load_policy_and_ebm(
+    let (mut search_config, loaded) = load_policy_and_ebm(
         &args.config,
         &args.server_url,
         args.ebm_path.as_deref(),
@@ -273,6 +277,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         args.imports.as_deref(),
     )
     .await?;
+
+    // Apply CLI override for num_candidates
+    if let Some(n) = args.num_candidates {
+        search_config.num_candidates = n;
+    }
 
     // Load theorem index
     let mut index = TheoremIndex::from_json(&args.theorems)?;
@@ -577,7 +586,7 @@ struct EvalOutcome {
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let concurrency = args.concurrency.max(1);
 
-    let (base_config, loaded) = load_policy_and_ebm(
+    let (mut base_config, loaded) = load_policy_and_ebm(
         &args.config,
         &args.server_url,
         args.ebm_path.as_deref(),
@@ -587,6 +596,11 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         args.imports.as_deref(),
     )
     .await?;
+
+    // Apply CLI override for num_candidates
+    if let Some(n) = args.num_candidates {
+        base_config.num_candidates = n;
+    }
 
     let mut index = TheoremIndex::from_json(&args.theorems)?;
     if let Some(max) = args.max_theorems {

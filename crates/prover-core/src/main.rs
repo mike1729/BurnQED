@@ -52,6 +52,9 @@ enum Command {
         /// Override maximum tokens per generated tactic.
         #[arg(long)]
         max_tactic_tokens: Option<usize>,
+        /// Override number of candidate tactics per expansion.
+        #[arg(long)]
+        num_candidates: Option<usize>,
         /// Number of theorems to search in parallel (default: 1 = sequential).
         #[arg(long, default_value_t = 1)]
         concurrency: usize,
@@ -103,6 +106,9 @@ enum Command {
         /// Override maximum tokens per generated tactic.
         #[arg(long)]
         max_tactic_tokens: Option<usize>,
+        /// Override number of candidate tactics per expansion.
+        #[arg(long)]
+        num_candidates: Option<usize>,
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
@@ -173,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
             resume_from,
             temperature,
             max_tactic_tokens,
+            num_candidates,
             concurrency,
             max_theorems,
             imports,
@@ -188,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
                 resume_from,
                 temperature,
                 max_tactic_tokens,
+                num_candidates,
                 concurrency,
                 max_theorems,
                 imports,
@@ -207,6 +215,7 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
             max_theorems,
             max_tactic_tokens,
+            num_candidates,
             imports,
         } => {
             pipeline::run_eval(EvalArgs {
@@ -221,6 +230,7 @@ async fn main() -> anyhow::Result<()> {
                 concurrency,
                 max_theorems,
                 max_tactic_tokens,
+                num_candidates,
                 imports,
             })
             .await

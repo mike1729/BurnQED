@@ -1,8 +1,7 @@
 #!/bin/bash
 # Launch SGLang inference server for DeepSeek-Prover-V2-7B.
 #
-# The server provides ~50-100x faster inference than in-process candle,
-# supporting both tactic generation and hidden-state extraction for EBM.
+# Supports both tactic generation and hidden-state extraction for EBM.
 #
 # Usage:
 #   ./scripts/start_sglang.sh [model_path]
@@ -13,7 +12,8 @@
 
 set -euo pipefail
 
-MODEL_PATH="${1:-deepseek-ai/DeepSeek-Prover-V2-7B}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 PORT="${PORT:-30000}"
 TP="${TP:-1}"
 

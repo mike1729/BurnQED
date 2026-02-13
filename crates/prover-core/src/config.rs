@@ -95,7 +95,6 @@ mod tests {
 [search]
 max_nodes = 200
 max_depth = 30
-beam_width = 16
 num_candidates = 64
 alpha = 0.3
 beta = 0.7

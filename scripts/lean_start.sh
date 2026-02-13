@@ -18,10 +18,15 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$(dirname "$0")/_lib.sh"
+
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 WORK_DIR="${REPO_ROOT}/lean_start_output"
 
 PROVER="cargo run --release -p prover-core --"
+
+ensure_sglang "$SGLANG_URL"
 
 echo "================================================================"
 echo "  BurnQED Smoke Test"
@@ -44,7 +49,6 @@ cat > "$SMOKE_CONFIG" << 'TOML'
 max_nodes = 100
 max_depth = 25
 num_candidates = 4
-beam_width = 8
 alpha = 0.5
 beta = 0.5
 timeout_per_theorem = 120

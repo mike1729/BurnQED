@@ -77,9 +77,7 @@ echo "================================================================"
 echo "  Phase F: Final Cross-Iteration Comparison"
 echo "================================================================"
 
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
+PROVER="cargo run --release -p prover-core --"
 EVAL_DIR="${REPO_ROOT}/eval_results"
 BASELINES_DIR="${REPO_ROOT}/baselines"
 

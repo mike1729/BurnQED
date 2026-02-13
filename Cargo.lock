@@ -4034,7 +4034,7 @@ dependencies = [
 
 [[package]]
 name = "policy"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -4139,7 +4139,7 @@ dependencies = [
 
 [[package]]
 name = "prover-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "burn",
@@ -4806,7 +4806,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "search"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",

@@ -167,9 +167,9 @@ Lean 4 theorem prover combining LLM policy (tactic generation) with Energy-Based
 ## Architecture Overview
 
 ```
-DeepSeek-Prover-V2-7B (candle, frozen)
+DeepSeek-Prover-V2-7B (SGLang server)
 ├── Policy head: autoregressive tactic generation (LM head)
-└── Mean-pool hidden states → detached Vec<f32>
+└── Mean-pool hidden states → Vec<f32> via /encode endpoint
                                     │
                                     ▼
                     Energy Head (burn-rs, trainable)
@@ -188,11 +188,11 @@ These were decided after two external review rounds. Do not revisit without expl
 
 1. **Shared 7B backbone**, not separate 1.3B encoder. DeepSeek-Prover-V2-7B serves both policy and value via `encode_only()`. Saves 3GB VRAM, one tokenizer, Lean-native representations. `EncoderBackend` enum allows switching to dedicated encoder via config.
 
-2. **No ONNX import.** candle loads HuggingFace safetensors directly. No Python encoder export.
+2. **SGLang inference server.** LLM inference delegated to SGLang for GPU-optimized generation and hidden-state extraction. No in-process model loading.
 
 3. **SpectralNorm Option C** for our code (random reinit per forward, 5 power iterations). Simpler than persisting u/v. Switch to Param+detach for upstream PR only.
 
-4. **Single optimizer for EBM.** Only energy head trains in burn-rs. 7B encoder frozen in candle. No per-parameter-group optimizer.
+4. **Single optimizer for EBM.** Only energy head trains in burn-rs. 7B encoder frozen (served by SGLang). No per-parameter-group optimizer.
 
 5. **No "skip easy" EBM bypass.** Always score with EBM when available. LLMs are confidently wrong on formal math.
 
@@ -260,11 +260,9 @@ thiserror = "2"
 
 # Full workspace (pinned — do not upgrade without testing):
 burn = "0.16"
-candle-core = "0.8"
-candle-transformers = "0.8"
 arrow = "53"
 parquet = "53"
-tokenizers = "0.21"
+reqwest = "0.12"
 ```
 
 ## Pantograph Protocol Reference
@@ -349,7 +347,7 @@ The `⊢` symbol separates hypotheses from the goal. This is the string you'll t
 
 - [x] **Phase 0: Setup** — Cargo workspace, all crate stubs compile
 - [x] **Phase 1: Lean REPL** — Pantograph client with worker pool, ProofHandle pattern, and recycling
-- [x] **Phase 2: LLM in candle** — TacticGenerator with generate, encode_only, forked Llama
+- [x] **Phase 2: LLM policy** — SGLang HTTP client, InferencePolicyProvider, hidden-state extraction
 - [x] **Phase 3: Search + trajectory + CLI** — Search engine, trajectory Parquet I/O, prover-core CLI
 - [x] **Phase 4: EBM** — EnergyHead, training loop, inference, CLI integration
 - [x] **Phase 5: Expert iteration** — eval/compare/resume CLI, Python training pipeline, shell orchestration, cloud deployment
@@ -374,31 +372,21 @@ A working async Lean 4 REPL client that can:
 10. Pass 10 integration tests including concurrent multi-step branching proofs
 
 ### Phase 2 Deliverable (DONE)
-A working LLM inference crate that can:
-1. Load DeepSeek-Prover-V2-7B (Llama architecture) from HuggingFace safetensors
-2. Deserialize the model's config.json (including YaRN rope_scaling fields)
-3. Run autoregressive tactic generation with temperature + top-p sampling
-4. Batched candidate generation: single prefill, N-way parallel decode via KV cache expansion
-5. Extract mean-pooled hidden states via `encode_only()` for the EBM
-6. Manage KV cache for efficient generation, fresh cache for deterministic encoding
-7. Handle multi-shard safetensors loading
-8. Extract first tactic from code-fenced model output (strips fences, declarations, comments)
-9. Pass 34 unit tests (types, tokenizer, llama config, sampling, prompt formatting, cache ops, extraction)
-10. 10 integration tests ready (require MODEL_PATH env var)
+A working LLM policy crate that can:
+1. Connect to an SGLang inference server via HTTP
+2. Generate tactic candidates with temperature + top-p sampling
+3. Extract mean-pooled hidden states via `/encode` endpoint for the EBM
+4. Parse generated tactics from model output (strips code fences, declarations, comments)
+5. Provide `InferencePolicyProvider` implementing the search `PolicyProvider` trait
+6. Share `InferenceHandle` between policy and EBM encoding
 
 ### Phase 2 Architecture Notes
 
-- **Forked llama.rs**: Copied from candle-transformers 0.8.4 with modifications:
-  - Private `Llama` fields (accessed only through methods)
-  - Added `forward_hidden_states()` returning `(batch, seq_len, hidden_size)` before lm_head
-  - Added `Cache::snapshot()`, `Cache::restore()`, `Cache::expand_batch(n)` for batched generation
-  - `DeepSeekConfig` deserializes model's config.json with YaRN fields, converts to runtime `Config` with `rope_scaling: None`
-  - Inlined `with_tracing` wrappers (Linear, RmsNorm) to avoid depending on candle-transformers internals
-  - Removed flash-attn support (Windows/CPU only)
-- **YaRN RoPE ignored**: Standard RoPE used. YaRN is backwards-compatible within original 4096 context, and our sequences are ≤2048 tokens.
-- **Prompt format**: Chat format via `encode_chat()` wrapping `format_tactic_message()` — tactic-state comment block in a lean4 code fence, matching DeepSeek-Prover-V2 training data.
-- **Generation stopping**: EOS token or max_tactic_tokens only. No newline-based stopping — model outputs code-fenced multi-line completions; `extract_first_tactic()` handles parsing.
-- **f32 on CPU, bf16 on CUDA**: CPU doesn't support bf16 well in candle.
+- **SGLang HTTP client**: `SglangClient` connects to an SGLang server running DeepSeek-Prover-V2-7B. Supports `/generate` for tactic generation and `/encode` for hidden-state extraction.
+- **InferenceHandle**: Thread-safe wrapper around `SglangClient` providing `generate_candidates()` and `encode_blocking()` methods.
+- **InferencePolicyProvider**: Implements `search::PolicyProvider` trait, bridging async SGLang calls to the sync trait interface via `tokio::task::block_in_place`.
+- **Prompt format**: Chat format matching DeepSeek-Prover-V2 training data — tactic-state in a lean4 code fence.
+- **Generation stopping**: EOS token or max_tactic_tokens only. `extract_first_tactic()` handles parsing.
 
 ### Phase 3 Deliverable (DONE)
 
@@ -411,7 +399,7 @@ A working LLM inference crate that can:
 **Search crate (Parts 2 & 3):**
 A trait-based best-first search engine that can:
 1. Search for proofs using priority queue (combined LLM + EBM score)
-2. Generate tactic candidates via `PolicyProvider` trait (sync, matches candle)
+2. Generate tactic candidates via `PolicyProvider` trait (sync)
 3. Score states via `ValueScorer` trait (sync, optional — EBM comes in Phase 4)
 4. Verify tactics via `ProofEnvironment` / `TacticRunner` traits (async, matches Lean)
 5. Synthesize root node goals from theorem statement (uses `⊢` as-is if present, prepends `"⊢ "` otherwise)
@@ -426,7 +414,7 @@ A trait-based best-first search engine that can:
 - **Trait-based abstraction**: `ProofEnvironment`, `TacticRunner` (async) and `PolicyProvider`, `ValueScorer` (sync) allow testing with mocks.
 - **Root node synthesis**: `goal.start` returns empty goals. Search uses the statement as root: if it contains `⊢` (Mathlib proof states), uses as-is; otherwise prepends `"⊢ "` (simple expressions).
 - **Arena indexing**: Nodes stored in `Vec<SearchNode>`, parent references by index. `ScoredNode` wraps `OrderedFloat<f64>` for `BinaryHeap`.
-- **Adapters**: `Arc<LeanPool>` implements `ProofEnvironment` (tries `copyFrom` by name, falls back to `expr`), `ProofHandleOwned` implements `TacticRunner`, `MutexPolicyProvider` wraps `TacticGenerator` with `Mutex` for `Send + Sync`.
+- **Adapters**: `Arc<LeanPool>` implements `ProofEnvironment` (tries `copyFrom` by name, falls back to `expr`), `ProofHandleOwned` implements `TacticRunner`, `InferencePolicyProvider` wraps `InferenceHandle` for `Send + Sync`.
 - **`ProofEnvironment::start_proof(name, statement)`**: Accepts both theorem name and statement. The adapter tries `copyFrom(name)` first (works for Mathlib theorems loaded in the environment), falling back to `expr(statement)` on `LeanMessage` error. This enables both `theorem_index.json` (proof states) and `test_theorems.json` (expressions) as input.
 
 ### Phase 3 Part 4+5: prover-core CLI + test data (DONE)
@@ -436,7 +424,7 @@ A trait-based best-first search engine that can:
 - `pipeline.rs`: `run_search()` (async, CTRL-C handling, EBM loading, `--dry-run`), `run_eval()` (sync), `run_train_ebm()` (sync, trains EBM from Parquet)
 - `main.rs`: clap CLI with `search` (incl. `--dry-run`, `--ebm-path`), `eval`, `train-ebm` subcommands
 - Priority chain for config: `with_bundled_pantograph()` defaults < TOML values < `--num-workers` CLI flag
-- EBM integration: `--ebm-path` loads `EnergyHeadConfig` + checkpoint, shares `TacticGenerator` via `Arc<Mutex>` for both policy and EBM encoding
+- EBM integration: `--ebm-path` loads `EnergyHeadConfig` + checkpoint, shares `InferenceHandle` for both policy and EBM encoding
 
 **Test data:**
 - `data/test_theorems.json`: 16 Init-only theorems (True, False→False, nat_refl, and_comm, eq_trans, etc.)
@@ -462,22 +450,21 @@ A trait-based best-first search engine that can:
 
 **CLI Integration (`crates/prover-core/`):**
 - `train-ebm` subcommand with `--embeddings-cache`, `--save-embeddings`, `--resume-from`
-- `search --ebm-path` loads EBM scorer, shares `TacticGenerator` via `Arc<Mutex>` for both policy and EBM encoding
+- `search --ebm-path` loads EBM scorer, shares `InferenceHandle` for both policy and EBM encoding
 
 **Test Coverage:**
-- 41 unit tests + 30 integration tests (ebm: 32+9, prover-core: 3+8+4 TinyLlama)
+- 41 unit tests + integration tests (ebm: 32+9, prover-core: 6+13)
 
 ### Cross-Crate Integration
 
-- **Running search**: `cargo run -p prover-core -- search --model-path ... --theorems ... --output ...`
-- **Search with EBM**: `cargo run -p prover-core -- search --ebm-path checkpoints/ebm ...` — loads `energy_head_config.json` + `final.mpk` from the checkpoint dir, shares the `TacticGenerator` between policy and EBM encode closure via `Arc<Mutex<TacticGenerator>>`
-- **Dry-run validation**: `cargo run -p prover-core -- search --dry-run --model-path ... --theorems ...` — loads model, pool, theorems, verifies setup, exits without searching
+- **Running search**: `cargo run -p prover-core -- search --server-url http://localhost:30000 --theorems ... --output ...`
+- **Search with EBM**: `cargo run -p prover-core -- search --server-url ... --ebm-path checkpoints/ebm --theorems ... --output ...` — loads `energy_head_config.json` + `final.mpk` from the checkpoint dir, shares `InferenceHandle` for both policy and EBM encoding
+- **Dry-run validation**: `cargo run -p prover-core -- search --dry-run --server-url ... --theorems ...` — connects to SGLang, starts Lean pool, loads theorems, verifies setup, exits without searching
 - **CTRL-C handling**: Graceful interruption during search loop. Partial results are written to Parquet with an enhanced summary noting the interruption.
 - **Reading trajectories**: `TrajectoryReader::read_all(path)` returns `Vec<TrajectoryRecord>`
 - **Label logic**: `TrajectoryWriter::from_search_result()` — proved theorems get Positive labels on the proof path (root→QED), Negative on dead ends. Unproved theorems are all Negative.
 - **SearchStats**: Each `SearchResult` includes `stats: SearchStats` with per-search timing (Lean time, generation time), node counts (expanded, pruned, terminal), and peak frontier size.
-- **Parquet → EBM training**: `cargo run -p prover-core -- train-ebm --trajectories ... --llm-path ...` reads trajectory Parquet files, creates `ContrastiveSampler`, trains EBM via `ebm::train()`, saves checkpoint + `energy_head_config.json`.
-- **MutexPolicyProvider sharing**: `new_shared(Arc<Mutex<TacticGenerator>>)` and `shared_generator()` methods allow the same generator to be used for both policy and EBM encoding.
+- **Parquet → EBM training**: `cargo run -p prover-core -- train-ebm --trajectories ... --server-url ...` reads trajectory Parquet files, creates `ContrastiveSampler`, trains EBM via `ebm::train()`, saves checkpoint + `energy_head_config.json`.
 
 ## Testing Policy
 
@@ -486,8 +473,7 @@ A trait-based best-first search engine that can:
 - `cargo test -p lean-repl -- --ignored --test-threads=1` — ~60-90s (10 tests, spawns Pantograph)
 - `cargo test -p search -- --ignored --test-threads=1` — ~60s (11 tests, spawns Pantograph)
 - `cargo test -p prover-core -- --ignored --test-threads=1` — ~15s (1 test, spawns Pantograph)
-- `cargo test -p prover-core --test integration_llm -- --ignored --test-threads=1` — ~10-35min per test (4 tests, require TinyLlama model weights)
-- `cargo test -p policy -- --ignored --test-threads=1` — requires MODEL_PATH env var, ~30-60s
+- `cargo test -p policy -- --ignored --test-threads=1` — requires running SGLang server, ~30-60s
 
 All integration tests that use Pantograph **must** run with `--test-threads=1` to avoid resource contention.
 
@@ -527,7 +513,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
 | `scripts/run_all_iterations.sh` | Full experiment: baseline + iters 0-4 + final analysis | Yes |
 | `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
-| `scripts/lean_start.sh` | Smoke test: 16 theorems, 100-node budget, 32 candidates, EBM train+search | Yes |
+| `scripts/lean_start.sh` | Smoke test: 16 theorems, 100-node budget, 4 candidates, EBM train+search | Yes |
 
 ### Throughput Tuning
 
@@ -544,7 +530,7 @@ Cross-prompt batching (different proof states in one GPU batch) is not feasible 
 | `concurrency` | 6 | Match workers — each needs one active search |
 | `max_nodes` | 100 | At 4% prove rate, proofs found within 2 nodes. 100 ≈ 3 expansions with backtrack. |
 
-The generation service (`policy::spawn_generation_service`) processes requests FIFO via an mpsc channel, eliminating mutex contention entirely. Workers queue requests while the GPU is busy; the 64-slot channel buffer absorbs bursts.
+The SGLang server handles request batching and scheduling internally. Multiple concurrent search workers can issue generation/encode requests in parallel.
 
 ### Environment Variables
 
@@ -588,7 +574,7 @@ checkpoints/
 ├── ebm/baseline                    # Baseline EBM (raw model encoder)
 └── ebm/iter_1 ... iter_4           # Fine-tuned EBM weights + config + embeddings cache
 
-models/llm/iter_0 ... iter_4        # Merged safetensors for candle
+models/llm/iter_0 ... iter_4        # Merged safetensors for SGLang
 logs/iter_0.log ... iter_4.log      # Per-iteration logs
 ```
 

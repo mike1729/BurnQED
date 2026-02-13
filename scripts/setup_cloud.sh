@@ -165,6 +165,7 @@ fi
 source "${REPO_ROOT}/.venv/bin/activate"
 pip install --upgrade pip
 pip install -r "${REPO_ROOT}/python/requirements.txt"
+pip install "sglang[all]"
 
 # Configure accelerate for single-GPU (needed for LLM fine-tuning)
 echo "Configuring accelerate for single GPU..."
@@ -202,28 +203,8 @@ fi
 # ── Step 9: Smoke test ────────────────────────────────────────────────────
 echo ""
 echo "=== Step 9: Smoke test ==="
-echo "Running search on 2 easy theorems..."
-
-# Create a minimal test file
-SMOKE_THEOREMS=$(mktemp /tmp/smoke_theorems.XXXXXX.json)
-python3 -c "
-import json
-with open('${REPO_ROOT}/data/test_theorems.json') as f:
-    data = json.load(f)
-# Take first 2 theorems
-subset = {'theorems': data['theorems'][:2]}
-with open('${SMOKE_THEOREMS}', 'w') as f:
-    json.dump(subset, f)
-"
-
-SMOKE_OUTPUT=$(mktemp /tmp/smoke_output.XXXXXX.parquet)
-
-echo "NOTE: Smoke test requires SGLang server running."
-echo "Start with: ./scripts/start_sglang.sh $MODEL_DIR"
-echo "Then test:  cargo run --release -p prover-core -- search --server-url http://localhost:30000 --theorems $SMOKE_THEOREMS --output $SMOKE_OUTPUT"
-echo "Skipping automated smoke test (requires SGLang server)."
-
-rm -f "$SMOKE_THEOREMS" "$SMOKE_OUTPUT"
+echo "To run a quick end-to-end smoke test:"
+echo "  ./scripts/lean_start.sh"
 
 echo ""
 echo "================================================================"
@@ -231,7 +212,8 @@ echo "  Cloud setup complete!"
 echo ""
 echo "  Next steps:"
 echo "    1. Download model weights (if not done above)"
-echo "    2. Prepare training data: ./scripts/prepare_data.sh"
-echo "    3. Run baseline evaluation: ./scripts/run_baseline.sh"
-echo "    4. Run first iteration: ./scripts/run_iteration.sh 0"
+echo "    2. Start SGLang server: ./scripts/start_sglang.sh"
+echo "    3. Prepare training data: ./scripts/prepare_data.sh"
+echo "    4. Run baseline evaluation: ./scripts/run_baseline.sh"
+echo "    5. Run first iteration: ./scripts/run_iteration.sh 0"
 echo "================================================================"
