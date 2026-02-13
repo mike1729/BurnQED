@@ -107,11 +107,13 @@ pub struct SglangClient {
      "sampling_params": {
        "temperature": 0.6, "top_p": 0.95,
        "max_new_tokens": 128, "n": 4,
-       "return_logprob": true, "logprob_start_len": -1
      }
+     "return_logprob": true
    }
    ```
-3. Parse response: extract text + compute `log_prob` from `meta_info.output_token_logprobs`
+   **Note:** `return_logprob` is a **top-level field**, not inside `sampling_params`.
+3. Parse response: each candidate has `meta_info.output_token_logprobs` — a list of
+   `(logprob, token_id, None)` tuples. Compute `log_prob = sum(entry[0] for entry)`.
 4. Apply `extract_first_tactic()` on each, deduplicate, sort by log_prob descending
 
 **`encode(&self, text: &str) -> Result<Embedding>`:**
@@ -124,8 +126,11 @@ pub struct SglangClient {
      "return_hidden_states": true
    }
    ```
-3. Parse `meta_info.hidden_states` — **shape TBD from verification script**
-4. Mean-pool across prompt tokens → `Embedding { data: Vec<f32>, dim: 4096 }`
+   **Note:** `return_hidden_states` is a **top-level field**, not inside `sampling_params`.
+   Server must be launched with `--enable-return-hidden-states`.
+3. Parse `meta_info.hidden_states` — shape `(1, num_tokens, 4096)`.
+   Index `[0]` to remove batch dim → `(num_tokens, 4096)`.
+4. Mean-pool across axis 0 → `Embedding { data: Vec<f32>, dim: 4096 }`
 
 **`health_check(&self) -> Result<()>`:**
 - Called at startup when `--server-url` is provided
@@ -212,7 +217,8 @@ PORT="${PORT:-30000}"
 TP="${TENSOR_PARALLEL:-1}"
 python -m sglang.launch_server \
     --model-path "$MODEL_PATH" --port "$PORT" --tp "$TP" \
-    --trust-remote-code --mem-fraction-static 0.85
+    --trust-remote-code --mem-fraction-static 0.85 \
+    --enable-return-hidden-states
 ```
 
 ### Step 9: Update shell scripts for `SGLANG_URL`
@@ -245,6 +251,23 @@ fi
 | `scripts/start_sglang.sh` | **New** | Server launch script |
 | `scripts/run_baseline.sh` | Modify | SGLANG_URL env var support |
 | `scripts/lean_start.sh` | Modify | SGLANG_URL env var support |
+
+## Verified API (from python/verify_sglang_hidden_states.py)
+
+Tested with SGLang 0.5.8 + DeepSeek-Prover-V2-7B on GPU.
+
+| Feature | Status | Details |
+|---------|--------|---------|
+| Hidden states (offline Engine) | **Works** | Shape `(1, num_tokens, 4096)`. Squeeze `[0]`, mean-pool axis=0 → `(4096,)` |
+| Mean-pooled embedding | **Works** | Norm ~18, matches expected range |
+| Multi-candidate generation | **Works** | `n=4` in sampling_params, returns 4 completions |
+| Log probabilities | **Works** | `return_logprob=True` top-level kwarg. `output_token_logprobs`: list of `(logprob, token_id, None)` tuples |
+| HTTP server hidden states | **Not tested** | Requires separate server launch with `--enable-return-hidden-states` |
+
+**Key API notes:**
+- `return_logprob` and `return_hidden_states` are **top-level kwargs** on `engine.generate()`, NOT inside `sampling_params`
+- Server requires `--enable-return-hidden-states` flag at launch (or `enable_return_hidden_states=True` for offline Engine)
+- Hidden states include a batch dimension: always index `[0]` before processing
 
 ## Edge Cases & Risks
 
