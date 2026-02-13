@@ -42,6 +42,8 @@ pub struct SearchArgs {
     pub resume_from: Option<PathBuf>,
     /// Override sampling temperature for tactic generation.
     pub temperature: Option<f64>,
+    /// Override maximum tokens per generated tactic.
+    pub max_tactic_tokens: Option<usize>,
     /// Number of theorems to search in parallel (default: 1 = sequential).
     pub concurrency: usize,
     /// Maximum number of theorems to search (truncates the index).
@@ -80,6 +82,8 @@ pub struct EvalArgs {
     pub concurrency: usize,
     /// Maximum number of theorems to evaluate (truncates the index).
     pub max_theorems: Option<usize>,
+    /// Override maximum tokens per generated tactic.
+    pub max_tactic_tokens: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
 }
@@ -137,6 +141,7 @@ async fn load_policy_and_ebm(
     ebm_path: Option<&Path>,
     num_workers: Option<usize>,
     temperature: Option<f64>,
+    max_tactic_tokens: Option<usize>,
     imports: Option<&[String]>,
 ) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
@@ -155,6 +160,9 @@ async fn load_policy_and_ebm(
     let mut policy_config = PolicyConfig::new(model_path.to_path_buf());
     if let Some(temp) = temperature {
         policy_config.temperature = temp;
+    }
+    if let Some(mtt) = max_tactic_tokens {
+        policy_config.max_tactic_tokens = mtt;
     }
     let generator = TacticGenerator::load(&policy_config)?;
 
@@ -243,6 +251,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         args.ebm_path.as_deref(),
         args.num_workers,
         args.temperature,
+        args.max_tactic_tokens,
         args.imports.as_deref(),
     )
     .await?;
@@ -555,6 +564,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         args.ebm_path.as_deref(),
         args.num_workers,
         None,
+        args.max_tactic_tokens,
         args.imports.as_deref(),
     )
     .await?;

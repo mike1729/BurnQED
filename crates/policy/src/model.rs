@@ -167,6 +167,12 @@ impl TacticGenerator {
 
             generated_tokens.push(next_token);
 
+            // Stop if candidate enters a repetitive loop
+            if detect_repetition(&generated_tokens, 3, 8, 3) {
+                stop_reason = "repetition";
+                break;
+            }
+
             // Feed next token
             let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             let pos = prompt_len + tokens_fed;
@@ -300,6 +306,15 @@ impl TacticGenerator {
                 }
 
                 sequences[i].push(token);
+
+                // Stop candidate if it enters a repetitive loop
+                if detect_repetition(&sequences[i], 3, 8, 3) {
+                    stopped[i] = true;
+                    stop_reasons[i] = "repetition";
+                    batch_input_vec.push(eos_fallback);
+                    continue;
+                }
+
                 batch_input_vec.push(token);
             }
         }
@@ -436,6 +451,29 @@ impl TacticGenerator {
     pub fn encode_batch(&mut self, texts: &[&str]) -> anyhow::Result<Vec<Embedding>> {
         texts.iter().map(|t| self.encode_only(t)).collect()
     }
+}
+
+/// Check if the last `pattern_len * min_repeats` tokens consist of
+/// the same pattern repeated `min_repeats` times.
+/// Checks pattern lengths from `min_pattern` to `max_pattern`.
+fn detect_repetition(
+    tokens: &[u32],
+    min_pattern: usize,
+    max_pattern: usize,
+    min_repeats: usize,
+) -> bool {
+    for pattern_len in min_pattern..=max_pattern {
+        let required = pattern_len * min_repeats;
+        if tokens.len() < required {
+            continue;
+        }
+        let tail = &tokens[tokens.len() - required..];
+        let pattern = &tail[..pattern_len];
+        if (1..min_repeats).all(|i| &tail[i * pattern_len..(i + 1) * pattern_len] == pattern) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Format a proof state into a chat message for the model.
@@ -654,6 +692,40 @@ mod tests {
         // Model only generates the declaration with no tactic body
         let raw = "theorem foo : True := by";
         assert_eq!(extract_first_tactic(raw), "");
+    }
+
+    #[test]
+    fn test_detect_repetition_short_pattern() {
+        // Pattern [1,2,3] repeated 3 times
+        let tokens = vec![99, 1, 2, 3, 1, 2, 3, 1, 2, 3];
+        assert!(detect_repetition(&tokens, 3, 8, 3));
+    }
+
+    #[test]
+    fn test_detect_repetition_no_repeat() {
+        let tokens = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        assert!(!detect_repetition(&tokens, 3, 8, 3));
+    }
+
+    #[test]
+    fn test_detect_repetition_too_few_repeats() {
+        // Pattern [1,2,3] repeated only 2 times (need 3)
+        let tokens = vec![1, 2, 3, 1, 2, 3];
+        assert!(!detect_repetition(&tokens, 3, 8, 3));
+    }
+
+    #[test]
+    fn test_detect_repetition_single_token() {
+        // Same token 3 times (pattern_len=1 is below min_pattern=3)
+        let tokens = vec![5, 5, 5];
+        assert!(!detect_repetition(&tokens, 3, 8, 3));
+    }
+
+    #[test]
+    fn test_detect_repetition_longer_pattern() {
+        // Pattern of 6 tokens repeated 3 times
+        let tokens = vec![0, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4, 5, 6];
+        assert!(detect_repetition(&tokens, 3, 8, 3));
     }
 
     #[test]

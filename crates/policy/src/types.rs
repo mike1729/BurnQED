@@ -46,7 +46,8 @@ pub struct PolicyConfig {
     /// Top-p (nucleus) sampling threshold. Defaults to 0.95.
     #[serde(default = "default_top_p")]
     pub top_p: f64,
-    /// Maximum tokens to generate per tactic. Defaults to 48.
+    /// Maximum tokens to generate per tactic. Defaults to 128.
+    /// Repetition detection stops most candidates well before this limit.
     #[serde(default = "default_max_tactic_tokens")]
     pub max_tactic_tokens: usize,
     /// Device to run inference on.
@@ -67,7 +68,7 @@ fn default_top_p() -> f64 {
     0.95
 }
 fn default_max_tactic_tokens() -> usize {
-    48
+    128
 }
 
 impl PolicyConfig {
@@ -151,7 +152,7 @@ mod tests {
         assert_eq!(cfg.num_candidates, 32);
         assert!((cfg.temperature - 0.6).abs() < 1e-9);
         assert!((cfg.top_p - 0.95).abs() < 1e-9);
-        assert_eq!(cfg.max_tactic_tokens, 48);
+        assert_eq!(cfg.max_tactic_tokens, 128);
     }
 
     #[test]
