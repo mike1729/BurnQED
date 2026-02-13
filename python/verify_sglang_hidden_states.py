@@ -21,7 +21,10 @@ def main():
     import sglang as sgl
 
     print(f"Loading {MODEL}...")
-    engine = sgl.Engine(model_path=MODEL)
+    engine = sgl.Engine(
+        model_path=MODEL,
+        enable_return_hidden_states=True,
+    )
 
     # --- Test 1: Hidden states shape ---
     print("\n=== Test 1: Hidden states from offline Engine ===")
