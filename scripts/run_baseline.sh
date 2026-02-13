@@ -52,7 +52,7 @@ echo "================================================================"
 
 # ── B1. Pipeline validation on test_theorems.json ────────────────────────
 echo ""
-echo "=== B1: Pipeline Validation (test_theorems.json) ==="
+echo "=== B1: Pipeline Validation (test_theorems.json, 10 nodes) ==="
 TEST_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
 
 if [ ! -f "$TEST_THEOREMS" ]; then
@@ -60,8 +60,18 @@ if [ ! -f "$TEST_THEOREMS" ]; then
     exit 1
 fi
 
+# Light config just for validation — 10 nodes, 60s timeout
+B1_CONFIG="${BASELINES_DIR}/b1_validation.toml"
+cat > "$B1_CONFIG" << 'TOML'
+[search]
+max_nodes = 10
+max_depth = 5
+num_candidates = 4
+timeout_per_theorem = 60
+TOML
+
 $PROVER search \
-    --config "$SEARCH_CONFIG" \
+    --config "$B1_CONFIG" \
     --server-url "$SGLANG_URL" \
     --theorems "$TEST_THEOREMS" \
     --output "${BASELINES_DIR}/raw_test_theorems.parquet" \
