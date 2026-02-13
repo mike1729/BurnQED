@@ -13,9 +13,11 @@
 
 pub mod llama;
 pub mod model;
+pub mod service;
 pub mod tokenizer;
 pub mod types;
 
 pub use model::TacticGenerator;
+pub use service::{spawn_generation_service, GenerationServiceHandle};
 pub use tokenizer::LeanTokenizer;
 pub use types::{DeviceConfig, Embedding, GeneratedTactic, PolicyConfig};

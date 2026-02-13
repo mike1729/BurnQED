@@ -527,13 +527,42 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
 | `scripts/run_all_iterations.sh` | Full experiment: baseline + iters 0-4 + final analysis | Yes |
 | `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
-| `scripts/lean_start.sh` | Smoke test: 16 theorems, 100-node budget, 8 candidates, EBM train+search | Yes |
+| `scripts/lean_start.sh` | Smoke test: 16 theorems, 100-node budget, 32 candidates, EBM train+search | Yes |
+
+### Throughput Tuning (Golden Formula)
+
+Cross-prompt batching (different proof states in one GPU batch) is not feasible without padding, attention masking, and ragged KV cache management. Instead, we maximize **within-prompt candidate batching** (many tactics per proof state) and balance GPU generation time against Lean verification time.
+
+**Formula:** `num_candidates × verify_time ≈ (num_workers - 1) × generation_time`
+
+With estimated values (A100):
+- Generation time for 32 candidates: ~3.0s (batched decode amortizes prefill)
+- Average Lean tactic verification: ~0.5s
+
+```
+32 × 0.5s = 16s   (time one worker is busy verifying)
+16s ≈ (W-1) × 3.0s
+W ≈ 6.3
+```
+
+**Recommended defaults** (set in `configs/search.toml` and scripts):
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `num_candidates` | 32 | Amortizes GPU call over 8× more tactics |
+| `num_workers` | 6 | Saturates GPU; more just adds idle wait |
+| `concurrency` | 6 | Match workers — each needs one active search |
+
+Expected throughput: ~10 tactics/s (vs ~1.6 with old 4-candidate / 16-worker config).
+
+The generation service (`policy::spawn_generation_service`) processes requests FIFO via an mpsc channel, eliminating mutex contention entirely. Workers queue requests while the GPU is busy; the 64-slot channel buffer absorbs bursts.
 
 ### Environment Variables
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `NUM_WORKERS` | 64 | Number of Lean worker processes |
+| `NUM_WORKERS` | 6 | Number of Lean worker processes |
+| `CONCURRENCY` | 6 | Number of theorems searched in parallel |
 | `MAX_ITER` | 4 | Maximum iteration number (0-indexed) |
 | `LLM_BASE` | `deepseek-ai/DeepSeek-Prover-V2-7B` | Base model for fine-tuning |
 | `SKIP_BASELINE` | 0 | Set to 1 to skip Phase B baseline |

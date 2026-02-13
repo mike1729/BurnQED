@@ -1,7 +1,8 @@
 [search]
 max_nodes = 200
 max_depth = 50
-num_candidates = 4            # Dedup yields 1-3 unique from 4; 32 wastes ~80% generation time
+num_candidates = 32           # Batched decode: 32 candidates ≈ same GPU time as 4.
+                              # Each worker stays busy ~16s verifying, overlapping GPU work.
 beam_width = 8                # Top-k by LLM log-prob before Lean + EBM
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
@@ -15,7 +16,7 @@ noise_temperature = 1.2
 noise_fraction = 0.3          # 30% of theorems get the high-T run
 
 [lean_pool]
-num_workers = 16
+num_workers = 6               # Matched to concurrency; see golden formula in CLAUDE.md
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
 tactic_timeout_secs = 30

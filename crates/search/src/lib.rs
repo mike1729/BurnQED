@@ -19,7 +19,7 @@ pub mod engine;
 pub mod mocks;
 pub mod node;
 
-pub use adapters::MutexPolicyProvider;
+pub use adapters::{MutexPolicyProvider, ServicePolicyProvider};
 pub use config::SearchConfig;
 pub use engine::{
     PolicyProvider, ProofEnvironment, SearchEngine, SearchError, TacticRunner, ValueScorer,

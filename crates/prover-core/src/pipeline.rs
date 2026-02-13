@@ -15,7 +15,7 @@ use ebm::{
 };
 use lean_repl::LeanPool;
 use policy::{PolicyConfig, TacticGenerator};
-use search::{MutexPolicyProvider, SearchConfig, SearchEngine};
+use search::{SearchConfig, SearchEngine, ServicePolicyProvider};
 use trajectory::{TheoremIndex, TrajectoryReader, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
@@ -124,7 +124,7 @@ type TrainingBackend = Autodiff<NdArray<f32>>;
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
-    policy: MutexPolicyProvider,
+    policy: ServicePolicyProvider,
     value_fn: Option<EBMValueFn>,
 }
 
@@ -158,8 +158,12 @@ async fn load_policy_and_ebm(
     }
     let generator = TacticGenerator::load(&policy_config)?;
 
-    // 4. Set up policy + optional EBM scorer
-    let (policy, value_fn) = if let Some(ebm_dir) = ebm_path {
+    // 4. Spawn generation service (replaces Arc<Mutex<TacticGenerator>>)
+    let service_handle = policy::spawn_generation_service(generator);
+    let policy = ServicePolicyProvider::new(service_handle.clone());
+
+    // 5. Optional EBM scorer
+    let value_fn = if let Some(ebm_dir) = ebm_path {
         tracing::info!(path = %ebm_dir.display(), "Loading EBM scorer");
 
         // Load EnergyHeadConfig from JSON alongside checkpoint
@@ -174,17 +178,15 @@ async fn load_policy_and_ebm(
             anyhow::anyhow!("Failed to parse EnergyHeadConfig: {e}")
         })?;
 
-        // Share the generator between policy and EBM encode closure
-        let shared_gen = Arc::new(std::sync::Mutex::new(generator));
-        let policy = MutexPolicyProvider::new_shared(shared_gen.clone());
-
-        // Create encode_fn closure with embedding cache to avoid redundant 7B forward passes
-        let encode_gen = shared_gen.clone();
+        // Create encode_fn closure using the service handle + embedding cache.
+        // The cache avoids redundant 7B forward passes on repeated proof states.
+        // Only microsecond holds for HashMap lookup/insert — no contention risk.
+        let encode_handle = service_handle.clone();
         let embedding_cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>> =
             Arc::new(std::sync::Mutex::new(HashMap::new()));
         let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
             Box::new(move |state: &str| {
-                // Fast path: check cache first (avoids generator lock entirely)
+                // Fast path: check cache first
                 {
                     let cache = embedding_cache
                         .lock()
@@ -193,11 +195,8 @@ async fn load_policy_and_ebm(
                         return Ok(cached.clone());
                     }
                 }
-                // Cache miss: compute embedding via 7B forward pass
-                let mut gen = encode_gen
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("Generator lock poisoned: {e}"))?;
-                let embedding = gen.encode_only(state)?;
+                // Cache miss: compute embedding via service channel
+                let embedding = encode_handle.encode_blocking(state)?;
                 let data = embedding.data;
                 // Insert into cache
                 embedding_cache
@@ -215,10 +214,9 @@ async fn load_policy_and_ebm(
         let value_fn = EBMValueFn::new(scorer);
 
         tracing::info!("EBM scorer loaded successfully");
-        (policy, Some(value_fn))
+        Some(value_fn)
     } else {
-        let policy = MutexPolicyProvider::new(generator);
-        (policy, None)
+        None
     };
 
     Ok((toml.search, LoadedPolicy { pool, policy, value_fn }))

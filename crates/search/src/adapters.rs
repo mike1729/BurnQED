@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use lean_repl::{LeanError, LeanPool, ProofHandleOwned, ProofState, TacticResult};
-use policy::{GeneratedTactic, TacticGenerator};
+use policy::{GeneratedTactic, GenerationServiceHandle, TacticGenerator};
 
 use ebm::inference::EBMValueFn;
 
@@ -127,6 +127,43 @@ impl PolicyProvider for MutexPolicyProvider {
             tracing::debug!(lock_wait_ms, gen_ms, "Mutex wait on policy generator");
         }
         result
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ServicePolicyProvider — channel-based, no mutex contention
+// ---------------------------------------------------------------------------
+
+/// Policy provider backed by the generation service (channel-based, no mutex).
+///
+/// Preferred over `MutexPolicyProvider` for concurrent search, as it eliminates
+/// mutex contention by routing all generation requests through a dedicated
+/// service task via an mpsc channel.
+pub struct ServicePolicyProvider {
+    handle: GenerationServiceHandle,
+}
+
+impl ServicePolicyProvider {
+    /// Create a new `ServicePolicyProvider` from a service handle.
+    pub fn new(handle: GenerationServiceHandle) -> Self {
+        Self { handle }
+    }
+
+    /// Get a clone of the service handle (for EBM encode closures, etc.).
+    pub fn handle(&self) -> GenerationServiceHandle {
+        self.handle.clone()
+    }
+}
+
+impl PolicyProvider for ServicePolicyProvider {
+    fn generate_candidates(
+        &self,
+        proof_state: &str,
+        n: usize,
+    ) -> Result<Vec<GeneratedTactic>, SearchError> {
+        self.handle
+            .generate_candidates_blocking(proof_state, n)
+            .map_err(SearchError::Policy)
     }
 }
 
