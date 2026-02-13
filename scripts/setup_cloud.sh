@@ -110,13 +110,28 @@ fi
 # ── Step 2: Rust ──────────────────────────────────────────────────────────
 echo ""
 echo "=== Step 2: Rust ==="
-if ! command -v rustc &>/dev/null; then
-    echo "Installing Rust via rustup..."
+MIN_CARGO_VERSION="1.85"
+
+needs_rust_install() {
+    if ! command -v cargo &>/dev/null; then
+        return 0
+    fi
+    local ver
+    ver=$(cargo --version | grep -oP '\d+\.\d+')
+    if [ "$(printf '%s\n' "$MIN_CARGO_VERSION" "$ver" | sort -V | head -1)" != "$MIN_CARGO_VERSION" ]; then
+        echo "Cargo ${ver} is too old (need >= ${MIN_CARGO_VERSION})"
+        return 0
+    fi
+    return 1
+}
+
+if needs_rust_install; then
+    echo "Installing/upgrading Rust via rustup..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     # shellcheck disable=SC1091
     source "$HOME/.cargo/env"
 else
-    echo "Rust already installed: $(rustc --version)"
+    echo "Rust already installed: $(cargo --version)"
 fi
 
 # ── Step 3: Lean 4 (elan) ────────────────────────────────────────────────
