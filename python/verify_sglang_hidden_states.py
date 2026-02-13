@@ -2,11 +2,10 @@
 Verify SGLang hidden states format for BurnQED EBM integration.
 
 Run on a GPU machine:
-    pip install "sglang[all]"
-    python python/verify_sglang_hidden_states.py
+    python python/verify_sglang_hidden_states.py ~/BurnQED/models/DeepSeek-Prover-V2-7B
 
 What to check:
-    1. hidden_states shape: expected (num_prompt_tokens, 4096)
+    1. hidden_states shape: (1, num_prompt_tokens, 4096)
     2. Mean-pooling produces a (4096,) vector
     3. Log-prob format for tactic ranking
     4. Whether HTTP server supports return_hidden_states (Issue #6528)
@@ -36,23 +35,15 @@ def main():
         return_hidden_states=True,
     )
     hs = out[0]["meta_info"]["hidden_states"]
-    print(f"type: {type(hs)}")
-    if isinstance(hs, list):
-        print(f"len: {len(hs)}")
-        if len(hs) > 0:
-            first = hs[0]
-            print(f"  element type: {type(first)}")
-            if isinstance(first, list):
-                print(f"  element len: {len(first)} (expected 4096)")
-            elif hasattr(first, "shape"):
-                print(f"  element shape: {first.shape}")
-    elif hasattr(hs, "shape"):
-        print(f"shape: {hs.shape}")
+    arr = np.array(hs, dtype=np.float32)
+    print(f"raw shape: {arr.shape}")  # Observed: (1, num_tokens, 4096)
 
     # --- Test 2: Mean-pooling ---
     print("\n=== Test 2: Mean-pooling ===")
-    arr = np.array(hs, dtype=np.float32)
-    print(f"numpy shape: {arr.shape}")  # Expected: (num_tokens, 4096)
+    # Shape is (1, num_tokens, 4096) — squeeze batch dim, then mean over tokens
+    if arr.ndim == 3:
+        arr = arr[0]  # (num_tokens, 4096)
+    print(f"after squeeze: {arr.shape}")
     embedding = arr.mean(axis=0)
     print(f"embedding shape: {embedding.shape}")  # Expected: (4096,)
     print(f"embedding norm: {np.linalg.norm(embedding):.4f}")
@@ -76,40 +67,83 @@ def main():
     )
     hs2 = out2[0]["meta_info"]["hidden_states"]
     arr2 = np.array(hs2, dtype=np.float32)
-    print(f"proof state hidden states shape: {arr2.shape}")
+    if arr2.ndim == 3:
+        arr2 = arr2[0]
+    print(f"proof state shape: {arr2.shape}")  # Expected: (num_tokens, 4096)
     emb2 = arr2.mean(axis=0)
-    print(f"proof state embedding shape: {emb2.shape}")
-    print(f"proof state embedding norm: {np.linalg.norm(emb2):.4f}")
+    print(f"embedding shape: {emb2.shape}")  # Expected: (4096,)
+    print(f"embedding norm: {np.linalg.norm(emb2):.4f}")
 
     # --- Test 4: Generation with logprobs ---
+    # SGLang 0.5.x uses 'return_logprob' as a top-level arg, not in sampling_params.
+    # Try multiple approaches to find the correct API.
     print("\n=== Test 4: Generation with logprobs ===")
-    out3 = engine.generate(
-        [prompt],
-        sampling_params={
-            "max_new_tokens": 64,
-            "temperature": 0.6,
-            "top_p": 0.95,
-            "n": 4,
-            "return_logprob": True,
-            "logprob_start_len": -1,
-        },
-    )
+
+    # Approach A: return_logprob as top-level kwarg (like return_hidden_states)
+    try:
+        out3 = engine.generate(
+            [prompt],
+            sampling_params={
+                "max_new_tokens": 64,
+                "temperature": 0.6,
+                "top_p": 0.95,
+                "n": 4,
+            },
+            return_logprob=True,
+        )
+        print("  (used return_logprob as top-level kwarg)")
+    except TypeError:
+        # Approach B: logprobs in sampling_params
+        try:
+            out3 = engine.generate(
+                [prompt],
+                sampling_params={
+                    "max_new_tokens": 64,
+                    "temperature": 0.6,
+                    "top_p": 0.95,
+                    "n": 4,
+                    "logprobs": True,
+                },
+            )
+            print("  (used logprobs in sampling_params)")
+        except TypeError:
+            # Approach C: no logprobs, just generate
+            out3 = engine.generate(
+                [prompt],
+                sampling_params={
+                    "max_new_tokens": 64,
+                    "temperature": 0.6,
+                    "top_p": 0.95,
+                    "n": 4,
+                },
+            )
+            print("  (no logprob support found, generated without)")
+
     for i, item in enumerate(out3):
         text = item["text"]
         meta = item["meta_info"]
-        logprobs = meta.get("output_token_logprobs", [])
         print(f"\n  Candidate {i}:")
-        print(f"    text: {repr(text[:80])}")
-        print(
-            f"    logprobs type: {type(logprobs)}, "
-            f"len: {len(logprobs) if isinstance(logprobs, list) else 'N/A'}"
-        )
-        if logprobs and len(logprobs) > 0:
-            print(f"    first logprob entry: {logprobs[0]}")
-            total_lp = sum(
-                lp[0] if isinstance(lp, (list, tuple)) else lp for lp in logprobs
-            )
-            print(f"    total log_prob: {total_lp:.4f}")
+        print(f"    text: {repr(text[:100])}")
+        print(f"    meta_info keys: {list(meta.keys())}")
+        # Try various logprob key names
+        for key in ["output_token_logprobs", "token_logprobs", "logprobs",
+                     "output_logprobs", "completion_token_logprobs"]:
+            if key in meta:
+                logprobs = meta[key]
+                print(f"    {key} type: {type(logprobs)}, len: {len(logprobs) if isinstance(logprobs, list) else 'N/A'}")
+                if logprobs and len(logprobs) > 0:
+                    print(f"    first entry: {logprobs[0]}")
+                    try:
+                        total_lp = sum(
+                            lp[0] if isinstance(lp, (list, tuple)) else float(lp)
+                            for lp in logprobs
+                        )
+                        print(f"    total log_prob: {total_lp:.4f}")
+                    except (TypeError, ValueError) as e:
+                        print(f"    (couldn't sum logprobs: {e})")
+                break
+        else:
+            print("    No logprob keys found in meta_info")
 
     # --- Test 5: HTTP server hidden states (if running) ---
     print("\n=== Test 5: HTTP server check ===")
