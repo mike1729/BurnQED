@@ -48,15 +48,22 @@ if [ "$SKIP_MATHLIB" -eq 0 ]; then
         echo "Mathlib already present in lakefile.lean"
     fi
 
-    echo "Resolving Mathlib dependency..."
     cd "$PANTOGRAPH_DIR"
-    lake update mathlib
 
-    echo "Downloading prebuilt Mathlib oleans (~2GB, one-time)..."
-    lake exe cache get || echo "WARNING: cache get failed, will build from source (slower)"
+    # Check if Mathlib oleans are already present (skip expensive cache get + rebuild)
+    if [ -d "$PANTOGRAPH_DIR/.lake/packages/mathlib/.lake/build/lib" ] && \
+       [ -n "$(ls -A "$PANTOGRAPH_DIR/.lake/packages/mathlib/.lake/build/lib"/*.olean 2>/dev/null)" ]; then
+        echo "Mathlib oleans already present, skipping cache get + rebuild."
+    else
+        echo "Resolving Mathlib dependency..."
+        lake update mathlib
 
-    echo "Rebuilding with Mathlib..."
-    lake build
+        echo "Downloading prebuilt Mathlib oleans (~2GB, one-time)..."
+        lake exe cache get || echo "WARNING: cache get failed, will build from source (slower)"
+
+        echo "Rebuilding with Mathlib..."
+        lake build
+    fi
 
     echo "SUCCESS: Pantograph built with Mathlib support."
 else
