@@ -59,22 +59,24 @@ fi
 
 mkdir -p "$WORK_DIR"
 
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-
 # Build release
 echo "=== Building prover-core (release) ==="
-cargo build --release -p prover-core $CUDA_FEATURES
+cargo build --release -p prover-core
 echo ""
 
-PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
+PROVER="cargo run --release -p prover-core --"
 
 # Search
 echo "=== Running search (3 theorems, budget=20) ==="
+echo "NOTE: This script requires an SGLang server running."
+echo "Start with: SGLANG_URL=http://localhost:30000 ./scripts/start_sglang.sh $MODEL_PATH"
+echo ""
+SGLANG_URL="${SGLANG_URL:?SGLANG_URL must be set (e.g. http://localhost:30000)}"
+
 # shellcheck disable=SC2086
 $PROVER search \
     --config "$CONFIG" \
-    --model-path "$MODEL_PATH" \
+    --server-url "$SGLANG_URL" \
     --theorems "$THEOREMS" \
     --output "$OUTPUT" \
     --num-workers "$NUM_WORKERS" \

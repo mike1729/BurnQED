@@ -14,8 +14,8 @@ use ebm::{
     ContrastiveSampler, EBMScorer, EBMTrainingConfig, EBMValueFn, EmbeddingCache, EnergyHeadConfig,
 };
 use lean_repl::LeanPool;
-use policy::{PolicyConfig, TacticGenerator};
-use search::{SearchConfig, SearchEngine, ServicePolicyProvider};
+use policy::{InferenceHandle, PolicyConfig, SglangConfig, SglangClient, TacticGenerator};
+use search::{InferencePolicyProvider, SearchConfig, SearchEngine};
 use trajectory::{TheoremIndex, TrajectoryReader, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
@@ -26,8 +26,8 @@ use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
 pub struct SearchArgs {
     /// Path to the search config TOML file.
     pub config: PathBuf,
-    /// Path to the HuggingFace model directory.
-    pub model_path: PathBuf,
+    /// URL of the SGLang inference server.
+    pub server_url: String,
     /// Path to the theorem index JSON file.
     pub theorems: PathBuf,
     /// Path for the output Parquet file.
@@ -64,8 +64,8 @@ pub struct SummaryArgs {
 pub struct EvalArgs {
     /// Path to the search config TOML file.
     pub config: PathBuf,
-    /// Path to the HuggingFace model directory.
-    pub model_path: PathBuf,
+    /// URL of the SGLang inference server.
+    pub server_url: String,
     /// Path to EBM checkpoint directory for value-guided search.
     pub ebm_path: Option<PathBuf>,
     /// Path to the theorem index JSON file.
@@ -128,16 +128,18 @@ type TrainingBackend = Autodiff<NdArray<f32>>;
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
-    policy: ServicePolicyProvider,
+    policy: InferencePolicyProvider,
     value_fn: Option<EBMValueFn>,
+    /// Display string for the inference backend (model path or server URL).
+    inference_label: String,
 }
 
-/// Load Lean pool, LLM policy, and optional EBM scorer.
+/// Load Lean pool, SGLang policy, and optional EBM scorer.
 ///
 /// This is the shared setup used by both `run_search` and `run_eval`.
 async fn load_policy_and_ebm(
     config_path: &Path,
-    model_path: &Path,
+    server_url: &str,
     ebm_path: Option<&Path>,
     num_workers: Option<usize>,
     temperature: Option<f64>,
@@ -155,79 +157,93 @@ async fn load_policy_and_ebm(
     );
     let pool = Arc::new(LeanPool::new(lean_config).await?);
 
-    // 3. Load LLM policy
-    tracing::info!(model = %model_path.display(), "Loading policy model");
-    let mut policy_config = PolicyConfig::new(model_path.to_path_buf());
-    if let Some(temp) = temperature {
-        policy_config.temperature = temp;
-    }
-    if let Some(mtt) = max_tactic_tokens {
-        policy_config.max_tactic_tokens = mtt;
-    }
-    let generator = TacticGenerator::load(&policy_config)?;
+    // 3. Connect to SGLang server
+    tracing::info!(url = server_url, "Connecting to SGLang inference server");
+    let config = SglangConfig {
+        server_url: server_url.to_string(),
+        temperature: temperature.unwrap_or(0.6),
+        top_p: 0.95,
+        max_tactic_tokens: max_tactic_tokens.unwrap_or(48),
+        hidden_size: 4096,
+    };
+    let client = SglangClient::new(config).await?;
+    let inference_handle = InferenceHandle::new(client);
 
-    // 4. Spawn generation service (replaces Arc<Mutex<TacticGenerator>>)
-    let service_handle = policy::spawn_generation_service(generator);
-    let policy = ServicePolicyProvider::new(service_handle.clone());
+    let policy = InferencePolicyProvider::new(inference_handle.clone());
 
-    // 5. Optional EBM scorer
-    let value_fn = if let Some(ebm_dir) = ebm_path {
-        tracing::info!(path = %ebm_dir.display(), "Loading EBM scorer");
+    // 4. Optional EBM scorer
+    let value_fn = load_ebm_scorer(ebm_path, &inference_handle)?;
 
-        // Load EnergyHeadConfig from JSON alongside checkpoint
-        let cfg_path = ebm_dir.join("energy_head_config.json");
-        let config_json = std::fs::read_to_string(&cfg_path).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to read EnergyHeadConfig from {}: {e}",
-                cfg_path.display()
-            )
-        })?;
-        let head_config: EnergyHeadConfig = serde_json::from_str(&config_json).map_err(|e| {
-            anyhow::anyhow!("Failed to parse EnergyHeadConfig: {e}")
-        })?;
+    Ok((
+        toml.search,
+        LoadedPolicy {
+            pool,
+            policy,
+            value_fn,
+            inference_label: server_url.to_string(),
+        },
+    ))
+}
 
-        // Create encode_fn closure using the service handle + embedding cache.
-        // The cache avoids redundant 7B forward passes on repeated proof states.
-        // Only microsecond holds for HashMap lookup/insert — no contention risk.
-        let encode_handle = service_handle.clone();
-        let embedding_cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>> =
-            Arc::new(std::sync::Mutex::new(HashMap::new()));
-        let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
-            Box::new(move |state: &str| {
-                // Fast path: check cache first
-                {
-                    let cache = embedding_cache
-                        .lock()
-                        .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
-                    if let Some(cached) = cache.get(state) {
-                        return Ok(cached.clone());
-                    }
-                }
-                // Cache miss: compute embedding via service channel
-                let embedding = encode_handle.encode_blocking(state)?;
-                let data = embedding.data;
-                // Insert into cache
-                embedding_cache
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?
-                    .insert(state.to_owned(), data.clone());
-                Ok(data)
-            });
-
-        // Load EBM scorer from checkpoint
-        let checkpoint_path = ebm_dir.join("final");
-        let device = Default::default();
-        let scorer =
-            EBMScorer::<InferenceBackend>::load(&checkpoint_path, &head_config, encode_fn, device)?;
-        let value_fn = EBMValueFn::new(scorer);
-
-        tracing::info!("EBM scorer loaded successfully");
-        Some(value_fn)
-    } else {
-        None
+/// Load an optional EBM scorer using the provided inference handle for encoding.
+fn load_ebm_scorer(
+    ebm_path: Option<&Path>,
+    inference_handle: &InferenceHandle,
+) -> anyhow::Result<Option<EBMValueFn>> {
+    let ebm_dir = match ebm_path {
+        Some(dir) => dir,
+        None => return Ok(None),
     };
 
-    Ok((toml.search, LoadedPolicy { pool, policy, value_fn }))
+    tracing::info!(path = %ebm_dir.display(), "Loading EBM scorer");
+
+    // Load EnergyHeadConfig from JSON alongside checkpoint
+    let cfg_path = ebm_dir.join("energy_head_config.json");
+    let config_json = std::fs::read_to_string(&cfg_path).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read EnergyHeadConfig from {}: {e}",
+            cfg_path.display()
+        )
+    })?;
+    let head_config: EnergyHeadConfig = serde_json::from_str(&config_json)
+        .map_err(|e| anyhow::anyhow!("Failed to parse EnergyHeadConfig: {e}"))?;
+
+    // Create encode_fn closure using the inference handle + embedding cache.
+    // The cache avoids redundant forward passes on repeated proof states.
+    let encode_handle = inference_handle.clone();
+    let embedding_cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>> =
+        Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
+        Box::new(move |state: &str| {
+            // Fast path: check cache first
+            {
+                let cache = embedding_cache
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+                if let Some(cached) = cache.get(state) {
+                    return Ok(cached.clone());
+                }
+            }
+            // Cache miss: compute embedding via inference handle
+            let embedding = encode_handle.encode_blocking(state)?;
+            let data = embedding.data;
+            // Insert into cache
+            embedding_cache
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?
+                .insert(state.to_owned(), data.clone());
+            Ok(data)
+        });
+
+    // Load EBM scorer from checkpoint
+    let checkpoint_path = ebm_dir.join("final");
+    let device = Default::default();
+    let scorer =
+        EBMScorer::<InferenceBackend>::load(&checkpoint_path, &head_config, encode_fn, device)?;
+    let value_fn = EBMValueFn::new(scorer);
+
+    tracing::info!("EBM scorer loaded successfully");
+    Ok(Some(value_fn))
 }
 
 /// Outcome of a single theorem search task, returned from spawned tasks.
@@ -247,7 +263,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
     let (search_config, loaded) = load_policy_and_ebm(
         &args.config,
-        &args.model_path,
+        &args.server_url,
         args.ebm_path.as_deref(),
         args.num_workers,
         args.temperature,
@@ -269,7 +285,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     // Dry-run: verify setup and exit early
     if args.dry_run {
         println!("Dry run — setup verified successfully");
-        println!("  Model: {}", args.model_path.display());
+        println!("  Inference: {}", loaded.inference_label);
         println!("  Theorems: {} loaded", index.len());
         println!("  Workers: {}", loaded.pool.num_workers());
         println!(
@@ -499,6 +515,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     println!(" Total Lean time:    {:.1}s", total_lean_ms as f64 / 1000.0);
     println!(" Total gen time:     {:.1}s", total_gen_ms as f64 / 1000.0);
     println!(" Total wall time:    {elapsed_secs:.1}s");
+    println!(" Inference:          {}", loaded.inference_label);
     println!(" Trajectory file:    {}", args.output.display());
     println!("   Records:          {record_count}");
     if args.ebm_path.is_some() {
@@ -560,7 +577,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
 
     let (base_config, loaded) = load_policy_and_ebm(
         &args.config,
-        &args.model_path,
+        &args.server_url,
         args.ebm_path.as_deref(),
         args.num_workers,
         None,
@@ -761,7 +778,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let result = IterationResult {
         iteration: None,
         timestamp: chrono::Utc::now().to_rfc3339(),
-        llm_path: args.model_path.display().to_string(),
+        llm_path: loaded.inference_label.clone(),
         ebm_path: args.ebm_path.map(|p| p.display().to_string()),
         benchmark: args.theorems.display().to_string(),
         total_theorems: total,

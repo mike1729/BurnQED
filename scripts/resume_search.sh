@@ -18,12 +18,11 @@ TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
 LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
+SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
+PROVER="cargo run --release -p prover-core --"
 
 echo "================================================================"
 echo "  Resume Search — Iteration ${ITER}"
@@ -65,7 +64,7 @@ with open('${THEOREM_INDEX}') as f:
 
         # shellcheck disable=SC2086
         $PROVER search \
-            --model-path "$LLM_DIR" \
+            --server-url "$SGLANG_URL" \
             $EBM_FLAG \
             --theorems "$THEOREM_INDEX" \
             --output "$TRAJ_OUTPUT" \
@@ -83,7 +82,7 @@ else
 
     # shellcheck disable=SC2086
     $PROVER search \
-        --model-path "$LLM_DIR" \
+        --server-url "$SGLANG_URL" \
         $EBM_FLAG \
         --theorems "$THEOREM_INDEX" \
         --output "$TRAJ_OUTPUT" \

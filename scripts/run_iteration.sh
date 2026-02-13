@@ -32,14 +32,13 @@ THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
+SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-10000}"
 
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
+PROVER="cargo run --release -p prover-core --"
 
 mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$CKPT_DIR" "$LLM_DIR" "$EBM_DIR"
 mkdir -p "${REPO_ROOT}/logs"
@@ -52,6 +51,7 @@ echo "  LLM output:     ${LLM_DIR}"
 echo "  EBM output:     ${EBM_DIR}"
 echo "  Trajectory dir:  ${TRAJ_DIR}"
 echo "  Theorem index:   ${THEOREM_INDEX}"
+echo "  SGLang:          ${SGLANG_URL}"
 echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
 echo "  Max theorems:    ${MAX_THEOREMS}"
@@ -163,7 +163,7 @@ TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
 
 # shellcheck disable=SC2086
 $PROVER search \
-    --model-path "$LLM_DIR" \
+    --server-url "$SGLANG_URL" \
     $EBM_FLAG \
     --theorems "$THEOREM_INDEX" \
     --output "$TRAJ_OUTPUT" \
@@ -180,7 +180,7 @@ if [ "$ITER" -eq 0 ]; then
     NOISY_OUTPUT="${TRAJ_DIR}/iter_0_noisy.parquet"
 
     $PROVER search \
-        --model-path "$LLM_DIR" \
+        --server-url "$SGLANG_URL" \
         --temperature 1.2 \
         --theorems "$THEOREM_INDEX" \
         --output "$NOISY_OUTPUT" \
@@ -204,7 +204,7 @@ fi
 # Eval WITH EBM (if available)
 # shellcheck disable=SC2086
 $PROVER eval \
-    --model-path "$LLM_DIR" \
+    --server-url "$SGLANG_URL" \
     $EBM_FLAG \
     --theorems "$EVAL_THEOREMS" \
     --budgets 100,300,600 \
@@ -220,7 +220,7 @@ if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
     echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
 
     $PROVER eval \
-        --model-path "$LLM_DIR" \
+        --server-url "$SGLANG_URL" \
         --theorems "$EVAL_THEOREMS" \
         --budgets 100,300,600 \
         --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \

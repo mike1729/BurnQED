@@ -1,5 +1,5 @@
 #!/bin/bash
-# End-to-end smoke test for the full pipeline (~3-5 min on A100 with CUDA).
+# End-to-end smoke test for the full pipeline (~3-5 min on A100).
 #
 # Validates that all components work together:
 #   1. LLM-only search on all test theorems (light node budget)
@@ -8,27 +8,26 @@
 #   4. Compare solve rates
 #
 # Usage:
-#   ./scripts/lean_start.sh [model_path]
+#   SGLANG_URL=http://localhost:30000 ./scripts/lean_start.sh
 #
 # Prerequisites:
+#   - SGLang server running (./scripts/start_sglang.sh)
 #   - Pantograph built (./scripts/setup_pantograph.sh)
 #   - cargo build --release -p prover-core
-#   - Model weights available
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
+SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+MODEL_PATH="${MODEL_PATH:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 WORK_DIR="${REPO_ROOT}/lean_start_output"
 
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
+PROVER="cargo run --release -p prover-core --"
 
 echo "================================================================"
 echo "  BurnQED Smoke Test"
 echo "================================================================"
-echo "  Model: ${MODEL_PATH}"
+echo "  SGLang: ${SGLANG_URL}"
 echo "  Output: ${WORK_DIR}"
 echo "================================================================"
 
@@ -39,7 +38,7 @@ mkdir -p "$WORK_DIR"
 SMOKE_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
 echo "Using all theorems from ${SMOKE_THEOREMS}"
 
-# Light search config for smoke test: 100 nodes, 32 candidates, 120s timeout
+# Light search config for smoke test: 100 nodes, 4 candidates, 120s timeout
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
 cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
@@ -65,7 +64,7 @@ LLM_TRAJ="${WORK_DIR}/llm_only.parquet"
 
 $PROVER search \
     --config "$SMOKE_CONFIG" \
-    --model-path "$MODEL_PATH" \
+    --server-url "$SGLANG_URL" \
     --theorems "$SMOKE_THEOREMS" \
     --output "$LLM_TRAJ"
 
@@ -89,11 +88,11 @@ EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"
 
 if [ -f "${EBM_DIR}/final.mpk" ]; then
     echo ""
-    echo "=== Step 3: Search with EBM (16 theorems, 30 nodes) ==="
+    echo "=== Step 3: Search with EBM (16 theorems, 100 nodes) ==="
 
     $PROVER search \
         --config "$SMOKE_CONFIG" \
-        --model-path "$MODEL_PATH" \
+        --server-url "$SGLANG_URL" \
         --ebm-path "$EBM_DIR" \
         --theorems "$SMOKE_THEOREMS" \
         --output "$EBM_TRAJ"

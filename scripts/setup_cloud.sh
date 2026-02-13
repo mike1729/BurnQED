@@ -220,12 +220,10 @@ with open('${SMOKE_THEOREMS}', 'w') as f:
 
 SMOKE_OUTPUT=$(mktemp /tmp/smoke_output.XXXXXX.parquet)
 
-cargo run --release -p prover-core $CUDA_FEATURES -- search \
-    --model-path "$MODEL_DIR" \
-    --theorems "$SMOKE_THEOREMS" \
-    --output "$SMOKE_OUTPUT" && \
-    echo "Smoke test PASSED" || \
-    echo "Smoke test FAILED (check Lean/model setup)"
+echo "NOTE: Smoke test requires SGLang server running."
+echo "Start with: ./scripts/start_sglang.sh $MODEL_DIR"
+echo "Then test:  cargo run --release -p prover-core -- search --server-url http://localhost:30000 --theorems $SMOKE_THEOREMS --output $SMOKE_OUTPUT"
+echo "Skipping automated smoke test (requires SGLang server)."
 
 rm -f "$SMOKE_THEOREMS" "$SMOKE_OUTPUT"
 

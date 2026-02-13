@@ -25,9 +25,9 @@ enum Command {
         /// Path to search config TOML file.
         #[arg(long, default_value = "configs/search.toml")]
         config: PathBuf,
-        /// Path to the HuggingFace model directory.
+        /// URL of the SGLang inference server (e.g., http://localhost:30000).
         #[arg(long)]
-        model_path: PathBuf,
+        server_url: String,
         /// Path to the theorem index JSON file.
         #[arg(long)]
         theorems: PathBuf,
@@ -73,9 +73,9 @@ enum Command {
         /// Path to search config TOML file.
         #[arg(long, default_value = "configs/search.toml")]
         config: PathBuf,
-        /// Path to the HuggingFace model directory.
+        /// URL of the SGLang inference server (e.g., http://localhost:30000).
         #[arg(long)]
-        model_path: PathBuf,
+        server_url: String,
         /// Path to EBM checkpoint directory for value-guided search.
         #[arg(long)]
         ebm_path: Option<PathBuf>,
@@ -161,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Search {
             config,
-            model_path,
+            server_url,
             theorems,
             output,
             num_workers,
@@ -176,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             pipeline::run_search(SearchArgs {
                 config,
-                model_path,
+                server_url,
                 theorems,
                 output,
                 num_workers,
@@ -194,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Summary { input } => pipeline::run_summary(SummaryArgs { input }),
         Command::Eval {
             config,
-            model_path,
+            server_url,
             ebm_path,
             theorems,
             budgets,
@@ -208,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             pipeline::run_eval(EvalArgs {
                 config,
-                model_path,
+                server_url,
                 ebm_path,
                 theorems,
                 budgets,

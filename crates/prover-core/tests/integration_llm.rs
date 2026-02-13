@@ -23,8 +23,35 @@ use std::sync::Arc;
 use burn::backend::ndarray::NdArray;
 use burn::prelude::Backend;
 
-use policy::{DeviceConfig, PolicyConfig, TacticGenerator};
-use search::{MutexPolicyProvider, PolicyProvider, SearchConfig, SearchEngine, ValueScorer};
+use policy::{DeviceConfig, GeneratedTactic, PolicyConfig, TacticGenerator};
+use search::{PolicyProvider, SearchConfig, SearchEngine, SearchError, ValueScorer};
+
+/// Local test helper: wraps TacticGenerator in Mutex for PolicyProvider trait.
+/// (Production code uses SGLang via InferencePolicyProvider instead.)
+struct MutexPolicyProvider {
+    generator: Arc<std::sync::Mutex<TacticGenerator>>,
+}
+
+impl MutexPolicyProvider {
+    fn new_shared(generator: Arc<std::sync::Mutex<TacticGenerator>>) -> Self {
+        Self { generator }
+    }
+}
+
+impl PolicyProvider for MutexPolicyProvider {
+    fn generate_candidates(
+        &self,
+        proof_state: &str,
+        n: usize,
+    ) -> Result<Vec<GeneratedTactic>, SearchError> {
+        let mut gen = self
+            .generator
+            .lock()
+            .map_err(|e| SearchError::Policy(anyhow::anyhow!("{e}")))?;
+        gen.generate_candidates(proof_state, n)
+            .map_err(SearchError::Policy)
+    }
+}
 use trajectory::{
     SearchResult, SearchStats, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
     TrajectoryWriter,

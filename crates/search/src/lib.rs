@@ -11,7 +11,7 @@
 //! - [`SearchNode`] / [`ScoredNode`] — tree nodes and priority queue entries
 //! - [`PolicyProvider`] / [`ValueScorer`] — traits for tactic generation and scoring
 //! - [`ProofEnvironment`] / [`TacticRunner`] — traits for Lean interaction
-//! - [`MutexPolicyProvider`] — thread-safe adapter for `TacticGenerator`
+//! - [`InferencePolicyProvider`] — SGLang-backed policy adapter
 
 pub mod adapters;
 pub mod config;
@@ -19,7 +19,7 @@ pub mod engine;
 pub mod mocks;
 pub mod node;
 
-pub use adapters::{MutexPolicyProvider, ServicePolicyProvider};
+pub use adapters::InferencePolicyProvider;
 pub use config::SearchConfig;
 pub use engine::{
     PolicyProvider, ProofEnvironment, SearchEngine, SearchError, TacticRunner, ValueScorer,

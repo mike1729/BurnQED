@@ -12,20 +12,17 @@
 
 set -euo pipefail
 
-MODEL_PATH="${MODEL_PATH:?MODEL_PATH must be set to model directory}"
+SGLANG_URL="${SGLANG_URL:?SGLANG_URL must be set (e.g. http://localhost:30000)}"
 THEOREMS="${THEOREMS:-data/test_theorems.json}"
 NUM_WORKERS="${NUM_WORKERS:-10}"
 CONFIG="${CONFIG:-configs/search.toml}"
 
 echo "=== Tactic Workers Benchmark ==="
-echo "Model:      $MODEL_PATH"
+echo "SGLang:     $SGLANG_URL"
 echo "Theorems:   $THEOREMS"
 echo "Workers:    $NUM_WORKERS"
 echo "Config:     $CONFIG"
 echo ""
-
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
 
 for tw in 1 2 4 8; do
     echo "=== tactic_workers=$tw ==="
@@ -39,9 +36,9 @@ for tw in 1 2 4 8; do
 
     START=$(date +%s%N)
 
-    RUST_LOG=search=debug cargo run --release -p prover-core $CUDA_FEATURES -- search \
+    RUST_LOG=search=debug cargo run --release -p prover-core -- search \
         --config "$TMPCFG" \
-        --model-path "$MODEL_PATH" \
+        --server-url "$SGLANG_URL" \
         --theorems "$THEOREMS" \
         --output "$TMPOUT" \
         --num-workers "$NUM_WORKERS" \

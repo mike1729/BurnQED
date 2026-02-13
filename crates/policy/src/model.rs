@@ -479,7 +479,7 @@ fn detect_repetition(
 /// Format a proof state into a chat message for the model.
 ///
 /// Uses tactic-state comment format matching DeepSeek-Prover-V1.5/V2 training data.
-fn format_tactic_message(proof_state: &str) -> String {
+pub fn format_tactic_message(proof_state: &str) -> String {
     format!(
         "Complete the following Lean 4 code:\n\n\
          ```lean4\n\
@@ -498,7 +498,7 @@ fn format_tactic_message(proof_state: &str) -> String {
 /// - Comment lines (`"-- We introduce h\nintro h"`)
 /// - Full theorem declarations (`"theorem X : T := by\n  tactic"` → `"tactic"`)
 /// - Inline proof (`"theorem X := by trivial"` → `"trivial"`)
-fn extract_first_tactic(raw: &str) -> String {
+pub fn extract_first_tactic(raw: &str) -> String {
     let text = raw.trim();
     // Strip code fence if present
     let text = if text.starts_with("```") {

@@ -9,28 +9,26 @@
 #   B4. Record results summary
 #
 # Usage:
-#   ./scripts/run_baseline.sh [model_path]
-#   NUM_WORKERS=30 ./scripts/run_baseline.sh
-#   CONCURRENCY=16 ./scripts/run_baseline.sh
+#   SGLANG_URL=http://localhost:30000 ./scripts/run_baseline.sh
+#   NUM_WORKERS=30 CONCURRENCY=16 ./scripts/run_baseline.sh
 #
 # Prerequisites:
+#   - SGLang server running (./scripts/start_sglang.sh)
 #   - Rust prover-core built (cargo build --release -p prover-core)
 #   - Pantograph built (./scripts/setup_pantograph.sh)
-#   - Model weights available
 #   - Data prepared (test_theorems.json, minif2f_test.json, theorem_index.json)
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
+SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+MODEL_PATH="${MODEL_PATH:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-10000}"
 
-# Auto-detect CUDA
-CUDA_FEATURES=$(command -v nvidia-smi &>/dev/null && echo "--features cuda" || echo "")
-PROVER="cargo run --release -p prover-core ${CUDA_FEATURES} --"
+PROVER="cargo run --release -p prover-core --"
 BASELINES_DIR="${REPO_ROOT}/baselines"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 
@@ -39,7 +37,8 @@ mkdir -p "$BASELINES_DIR" "$TRAJ_DIR" "${REPO_ROOT}/logs"
 echo "================================================================"
 echo "  Phase B: Baseline Raw Model Evaluation"
 echo "================================================================"
-echo "  Model:        ${MODEL_PATH}"
+echo "  SGLang:       ${SGLANG_URL}"
+echo "  Model (EBM):  ${MODEL_PATH}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Max theorems: ${MAX_THEOREMS}"
@@ -58,7 +57,7 @@ if [ ! -f "$TEST_THEOREMS" ]; then
 fi
 
 $PROVER search \
-    --model-path "$MODEL_PATH" \
+    --server-url "$SGLANG_URL" \
     --theorems "$TEST_THEOREMS" \
     --output "${BASELINES_DIR}/raw_test_theorems.parquet" \
     --num-workers "$NUM_WORKERS" \
@@ -75,7 +74,7 @@ MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 
 if [ -f "$MINIF2F" ]; then
     $PROVER eval \
-        --model-path "$MODEL_PATH" \
+        --server-url "$SGLANG_URL" \
         --theorems "$MINIF2F" \
         --budgets 100,300,600 \
         --output "${BASELINES_DIR}/raw_minif2f.json" \
@@ -95,7 +94,7 @@ THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 
 if [ -f "$THEOREM_INDEX" ]; then
     $PROVER search \
-        --model-path "$MODEL_PATH" \
+        --server-url "$SGLANG_URL" \
         --theorems "$THEOREM_INDEX" \
         --output "${TRAJ_DIR}/baseline_raw.parquet" \
         --num-workers "$NUM_WORKERS" \
