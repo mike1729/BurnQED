@@ -15,7 +15,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use url::Url;
 
 use crate::prompt::{extract_first_tactic, format_tactic_message};
@@ -67,27 +67,6 @@ struct SamplingParams {
     n: Option<usize>,
 }
 
-#[derive(Deserialize, Debug)]
-struct GenerateResponse {
-    meta_info: MetaInfo,
-}
-
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct MetaInfo {
-    #[serde(default)]
-    output_token_logprobs: Option<Vec<LogprobEntry>>,
-    #[serde(default)]
-    hidden_states: Option<Vec<Vec<Vec<f32>>>>,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-/// Each logprob entry is (logprob, token_id, token_str_or_null).
-/// We only need the logprob value.
-#[derive(Deserialize, Debug)]
-#[allow(dead_code)]
-struct LogprobEntry(f64, u32, Option<String>);
 
 impl SglangClient {
     /// Create a new client and verify the server is reachable.
@@ -289,20 +268,28 @@ impl SglangClient {
 
         let url = self.base_url.join("/generate")?;
         let resp = self.post_with_retry(&url, &request).await?;
-        let gen: GenerateResponse = resp.json().await?;
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| anyhow::anyhow!("Failed to decode SGLang encode response: {e}"))?;
 
-        let hidden_states = gen
-            .meta_info
-            .hidden_states
+        // Extract hidden_states from meta_info: shape (1, num_tokens, hidden_size)
+        let hs_value = body.get("meta_info")
+            .and_then(|m| m.get("hidden_states"))
             .ok_or_else(|| anyhow::anyhow!(
                 "Server did not return hidden_states. Ensure --enable-return-hidden-states is set."
             ))?;
 
-        // Shape: (1, num_tokens, hidden_size) — index [0] to remove batch dim
-        let token_states = hidden_states
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Empty hidden_states batch dimension"))?;
+        let token_states: Vec<Vec<f32>> = hs_value
+            .as_array()
+            .and_then(|batch| batch.first())
+            .and_then(|tokens| tokens.as_array())
+            .ok_or_else(|| anyhow::anyhow!("Empty hidden_states batch dimension"))?
+            .iter()
+            .map(|token| {
+                token.as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                    .unwrap_or_default()
+            })
+            .collect();
 
         let num_tokens = token_states.len();
         if num_tokens == 0 {
@@ -435,56 +422,6 @@ mod tests {
         assert!(prompt.contains("<\u{ff5c}Assistant\u{ff5c}>"));
         assert!(prompt.contains("tactic state:"));
         assert!(prompt.contains("n + 0 = n"));
-    }
-
-    #[test]
-    fn test_logprob_entry_deserialize() {
-        let json = r#"[-0.123, 42, null]"#;
-        let entry: LogprobEntry = serde_json::from_str(json).unwrap();
-        assert!((entry.0 - (-0.123)).abs() < 1e-6);
-        assert_eq!(entry.1, 42);
-        assert!(entry.2.is_none());
-    }
-
-    #[test]
-    fn test_logprob_entry_with_token_str() {
-        let json = r#"[-0.5, 100, "hello"]"#;
-        let entry: LogprobEntry = serde_json::from_str(json).unwrap();
-        assert!((entry.0 - (-0.5)).abs() < 1e-6);
-        assert_eq!(entry.1, 100);
-        assert_eq!(entry.2.as_deref(), Some("hello"));
-    }
-
-    #[test]
-    fn test_generate_response_deserialize() {
-        let json = r#"{
-            "text": "intro n",
-            "meta_info": {
-                "output_token_logprobs": [[-0.1, 42, null], [-0.2, 43, null]],
-                "finish_reason": "stop"
-            }
-        }"#;
-        let resp: GenerateResponse = serde_json::from_str(json).unwrap();
-        let lps = resp.meta_info.output_token_logprobs.unwrap();
-        assert_eq!(lps.len(), 2);
-        let total: f64 = lps.iter().map(|lp| lp.0).sum();
-        assert!((total - (-0.3)).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_hidden_states_response_deserialize() {
-        // Shape: (1, 2, 3) — batch=1, tokens=2, hidden_size=3
-        let json = r#"{
-            "text": "",
-            "meta_info": {
-                "hidden_states": [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]
-            }
-        }"#;
-        let resp: GenerateResponse = serde_json::from_str(json).unwrap();
-        let hs = resp.meta_info.hidden_states.unwrap();
-        assert_eq!(hs.len(), 1);       // batch
-        assert_eq!(hs[0].len(), 2);    // tokens
-        assert_eq!(hs[0][0].len(), 3); // hidden_size
     }
 
     #[test]
