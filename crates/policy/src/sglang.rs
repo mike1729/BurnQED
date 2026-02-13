@@ -68,9 +68,7 @@ struct SamplingParams {
 }
 
 #[derive(Deserialize, Debug)]
-#[allow(dead_code)]
 struct GenerateResponse {
-    text: String,
     meta_info: MetaInfo,
 }
 
@@ -467,7 +465,6 @@ mod tests {
             }
         }"#;
         let resp: GenerateResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.text, "intro n");
         let lps = resp.meta_info.output_token_logprobs.unwrap();
         assert_eq!(lps.len(), 2);
         let total: f64 = lps.iter().map(|lp| lp.0).sum();

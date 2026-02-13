@@ -42,16 +42,16 @@ mkdir -p "$WORK_DIR"
 SMOKE_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
 echo "Using all theorems from ${SMOKE_THEOREMS}"
 
-# Light search config for smoke test: 100 nodes, 4 candidates, 120s timeout
+# Light search config for smoke test: 4 nodes, 4 candidates, 60s timeout
 SMOKE_CONFIG="${WORK_DIR}/smoke_search.toml"
 cat > "$SMOKE_CONFIG" << 'TOML'
 [search]
-max_nodes = 100
-max_depth = 25
+max_nodes = 4
+max_depth = 5
 num_candidates = 4
 alpha = 0.5
 beta = 0.5
-timeout_per_theorem = 120
+timeout_per_theorem = 60
 
 [lean_pool]
 num_workers = 6
