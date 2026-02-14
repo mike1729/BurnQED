@@ -223,6 +223,7 @@ impl SearchEngine {
             let gen_start = std::time::Instant::now();
             let mut candidates = policy.generate_candidates(&goals_text, self.config.num_candidates)?;
             stats.total_generate_time_ms += gen_start.elapsed().as_millis() as u64;
+            stats.candidates_per_expansion.push(candidates.len());
 
             // Inject fallback tactics when LLM returns nothing
             if candidates.is_empty() && !self.config.fallback_tactics.is_empty() {

@@ -82,6 +82,8 @@ pub struct SearchStats {
     pub total_lean_time_ms: u64,
     /// Cumulative wall time in ms for `generate_candidates` calls.
     pub total_generate_time_ms: u64,
+    /// Number of unique candidates returned per expansion (after dedup).
+    pub candidates_per_expansion: Vec<usize>,
 }
 
 /// Result of searching for a proof of a single theorem.

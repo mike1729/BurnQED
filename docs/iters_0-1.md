@@ -114,6 +114,28 @@ After training completes:
 
 5. **Most proofs are 1-step.** Avg nodes ~1.7 — the model mostly succeeds with `simp`, `omega`, or direct lemma application. Multi-step proofs are rare but do occur (up to 10 nodes).
 
+## Candidate Diversity & EBM Effectiveness
+
+**Problem:** At T=0.6 with 8 candidates, dedup leaves only 2-3 unique tactics per expansion. The EBM scorer can't add much value when there's almost nothing to rank.
+
+**Evidence from iter 0:**
+- Regular search (T=0.6, 8 candidates): 120/2000 proved, avg 1.7 nodes
+- Noisy search (T=1.2, 8 candidates): 175/2000 proved, avg 2.1 nodes — **46% more proofs**
+- Higher temperature produces more diverse candidates, enabling more productive search
+
+**Mitigations applied:**
+- When `--ebm-path` is set, defaults auto-override to T=1.0 and 8 candidates (CLI flags still take priority)
+- `candidates_per_expansion` stats (min/avg/max) now printed in search summary for monitoring
+- Noise injection search at T=1.2 continues for training data diversity
+
+**Alternative models to consider if diversity remains insufficient:**
+- **DeepSeek-R1-Distill-Qwen-7B:** Strong reasoning capabilities, often outperforms specialized provers on complex logic. Not theorem-proving specific but may produce more diverse tactics.
+- **Goedel-Prover-V2 (8B):** High efficiency, more diverse search behaviors than DeepSeek-Prover-V2-7B. Recently released, designed for formal math proving.
+
+Both are SGLang-compatible — switching requires only changing `LLM_BASE` env var and possibly adjusting the prompt format in `SglangClient::format_prompt()`.
+
+**Decision point:** After iter 1 search with EBM, check `Candidates/expand` stats. If avg unique candidates < 4, strong signal to try an alternative backbone.
+
 ## Infrastructure Notes
 
 - **PYTHONUNBUFFERED=1** required in training scripts — otherwise `accelerate launch` buffers stdout and loss logs are invisible when piped through `tee`.

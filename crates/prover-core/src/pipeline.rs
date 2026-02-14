@@ -1,5 +1,6 @@
 //! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -267,20 +268,31 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let start = Instant::now();
     let concurrency = args.concurrency.max(1);
 
+    // EBM-active overrides: more candidates + higher temperature for diversity
+    let temperature = args.temperature.or_else(|| {
+        args.ebm_path.as_ref().map(|_| {
+            tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
+            1.0
+        })
+    });
+
     let (mut search_config, loaded) = load_policy_and_ebm(
         &args.config,
         &args.server_url,
         args.ebm_path.as_deref(),
         args.num_workers,
-        args.temperature,
+        temperature,
         args.max_tactic_tokens,
         args.imports.as_deref(),
     )
     .await?;
 
-    // Apply CLI override for num_candidates
+    // Apply CLI override for num_candidates, or EBM default
     if let Some(n) = args.num_candidates {
         search_config.num_candidates = n;
+    } else if args.ebm_path.is_some() {
+        tracing::info!("EBM active — defaulting num_candidates to 8");
+        search_config.num_candidates = 8;
     }
 
     // Load theorem index
@@ -347,6 +359,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let mut total_lean_ms: u64 = 0;
     let mut total_gen_ms: u64 = 0;
     let mut searched_count: u32 = 0;
+    let mut all_candidate_counts: Vec<usize> = Vec::new();
 
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
@@ -420,6 +433,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                     total_nodes += result.nodes_expanded as u64;
                     total_lean_ms += result.stats.total_lean_time_ms;
                     total_gen_ms += result.stats.total_generate_time_ms;
+                    all_candidate_counts.extend_from_slice(&result.stats.candidates_per_expansion);
 
                     if result.proved {
                         proved_count += 1;
@@ -525,6 +539,14 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     println!(" Avg time/theorem:   {avg_time:.1}s");
     println!(" Total Lean time:    {:.1}s", total_lean_ms as f64 / 1000.0);
     println!(" Total gen time:     {:.1}s", total_gen_ms as f64 / 1000.0);
+    if !all_candidate_counts.is_empty() {
+        let n = all_candidate_counts.len();
+        let sum: usize = all_candidate_counts.iter().sum();
+        let min = all_candidate_counts.iter().min().unwrap();
+        let max = all_candidate_counts.iter().max().unwrap();
+        let avg = sum as f64 / n as f64;
+        println!(" Candidates/expand:  avg={avg:.1} min={min} max={max} ({n} expansions)");
+    }
     println!(" Total wall time:    {elapsed_secs:.1}s");
     println!(" Inference:          {}", loaded.inference_label);
     println!(" Trajectory file:    {}", args.output.display());
@@ -586,20 +608,31 @@ struct EvalOutcome {
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let concurrency = args.concurrency.max(1);
 
+    // EBM-active overrides: more candidates + higher temperature for diversity
+    let temperature = if args.ebm_path.is_some() {
+        tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
+        Some(1.0)
+    } else {
+        None
+    };
+
     let (mut base_config, loaded) = load_policy_and_ebm(
         &args.config,
         &args.server_url,
         args.ebm_path.as_deref(),
         args.num_workers,
-        None,
+        temperature,
         args.max_tactic_tokens,
         args.imports.as_deref(),
     )
     .await?;
 
-    // Apply CLI override for num_candidates
+    // Apply CLI override for num_candidates, or EBM default
     if let Some(n) = args.num_candidates {
         base_config.num_candidates = n;
+    } else if args.ebm_path.is_some() {
+        tracing::info!("EBM active — defaulting num_candidates to 8");
+        base_config.num_candidates = 8;
     }
 
     let mut index = TheoremIndex::from_json(&args.theorems)?;
@@ -961,39 +994,47 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         "Trajectory data loaded"
     );
 
-    // 3. Build embedding cache (precompute via SGLang or load from disk)
+    // 3. Build lazy embedding cache (warm from disk or start empty)
     let cache = if let Some(ref cache_path) = args.embeddings_cache {
-        tracing::info!(path = %cache_path.display(), "Loading embedding cache from disk");
+        tracing::info!(path = %cache_path.display(), "Loading embedding cache from disk (warm start)");
         EmbeddingCache::load(cache_path)?
     } else {
-        tracing::info!(url = %args.server_url, "Precomputing embeddings via SGLang");
-        let handle = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                let config = SglangConfig {
-                    server_url: args.server_url.clone(),
-                    temperature: 0.0,
-                    top_p: 1.0,
-                    max_tactic_tokens: 1,
-                    hidden_size,
-                };
-                let client = SglangClient::new(config).await?;
-                Ok::<_, anyhow::Error>(InferenceHandle::new(client))
-            })
-        })?;
-        let raw_encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
-            let embedding = handle.encode_blocking(state)?;
-            Ok(embedding.data)
-        };
-        EmbeddingCache::precompute(&sampler, &raw_encode_fn, hidden_size)
+        EmbeddingCache::new(hidden_size)
     };
 
-    // 3b. Optionally save cache for reuse
-    if let Some(ref save_path) = args.save_embeddings {
-        cache.save(save_path)?;
-    }
+    // Connect to SGLang for on-demand encoding of cache misses
+    let handle = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let config = SglangConfig {
+                server_url: args.server_url.clone(),
+                temperature: 0.0,
+                top_p: 1.0,
+                max_tactic_tokens: 1,
+                hidden_size,
+            };
+            let client = SglangClient::new(config).await?;
+            Ok::<_, anyhow::Error>(InferenceHandle::new(client))
+        })
+    })?;
 
-    // 4. Create encode_fn from cache (O(1) lookups)
-    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> { cache.get_or_err(state) };
+    tracing::info!(
+        warm_entries = cache.len(),
+        "Lazy embedding cache — embeddings computed on demand during training"
+    );
+
+    // 4. Create lazy encode_fn: check cache → on miss call SGLang → insert → return
+    let cache = RefCell::new(cache);
+    let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
+        // Fast path: cache hit
+        if let Some(emb) = cache.borrow().get(state) {
+            return Ok(emb.to_vec());
+        }
+        // Cache miss: encode via SGLang
+        let embedding = handle.encode_blocking(state)?;
+        let data = embedding.data;
+        cache.borrow_mut().insert(state.to_owned(), data.clone());
+        Ok(data)
+    };
 
     // 5. Build training config
     let output_dir_str = args.output_dir.to_string_lossy().to_string();
@@ -1007,7 +1048,19 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     // 6. Train
     let _trained = ebm::train(&training_config, model, &encode_fn, &sampler, &device)?;
 
-    // 7. Save EnergyHeadConfig alongside checkpoint
+    // 7. Optionally save embedding cache for reuse
+    let cache = cache.into_inner();
+    if let Some(ref save_path) = args.save_embeddings {
+        cache.save(save_path)?;
+    }
+
+    tracing::info!(
+        cached = cache.len(),
+        dim = cache.dim(),
+        "Lazy embedding cache stats after training"
+    );
+
+    // 8. Save EnergyHeadConfig alongside checkpoint
     std::fs::create_dir_all(&args.output_dir)?;
     let config_path = args.output_dir.join("energy_head_config.json");
     let config_json = serde_json::to_string_pretty(&head_config)?;

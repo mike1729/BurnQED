@@ -99,6 +99,20 @@ impl EmbeddingCache {
             .ok_or_else(|| anyhow::anyhow!("Embedding not found in cache for state: {}", state_pp))
     }
 
+    /// Insert an embedding into the cache.
+    ///
+    /// Used for lazy (on-demand) cache population during training.
+    pub fn insert(&mut self, state: String, embedding: Vec<f32>) {
+        debug_assert_eq!(
+            embedding.len(),
+            self.dim,
+            "Embedding dim mismatch: expected {}, got {}",
+            self.dim,
+            embedding.len()
+        );
+        self.embeddings.insert(state, embedding);
+    }
+
     /// Number of cached embeddings.
     pub fn len(&self) -> usize {
         self.embeddings.len()
@@ -262,6 +276,25 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert!(!cache.is_empty());
         assert_eq!(cache.dim(), 4);
+    }
+
+    #[test]
+    fn test_cache_insert() {
+        let mut cache = EmbeddingCache::new(3);
+        assert!(cache.is_empty());
+
+        cache.insert("⊢ A".to_string(), vec![1.0, 2.0, 3.0]);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get("⊢ A"), Some(&[1.0, 2.0, 3.0][..]));
+
+        // Overwrite existing key
+        cache.insert("⊢ A".to_string(), vec![4.0, 5.0, 6.0]);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get("⊢ A"), Some(&[4.0, 5.0, 6.0][..]));
+
+        // Insert second key
+        cache.insert("⊢ B".to_string(), vec![7.0, 8.0, 9.0]);
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]

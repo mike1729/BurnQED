@@ -55,7 +55,7 @@ if [ -n "$SSH_KEY" ]; then
     SSH_CMD="$SSH_CMD -i ${SSH_KEY}"
 fi
 
-RSYNC_OPTS="-avz --progress --compress -e '${SSH_CMD}'"
+RSYNC_OPTS="-rltz --progress --compress --no-owner --no-group -e '${SSH_CMD}'"
 if [ "$DRY_RUN" -eq 1 ]; then
     RSYNC_OPTS="$RSYNC_OPTS --dry-run"
     echo "(DRY RUN — no files will be transferred)"
