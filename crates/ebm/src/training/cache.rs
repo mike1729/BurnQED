@@ -5,7 +5,8 @@
 //! `HashMap<String, Vec<f32>>` for O(1) lookups during training. Optionally
 //! persists to Parquet for reuse across runs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -13,6 +14,7 @@ use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
@@ -84,6 +86,96 @@ impl EmbeddingCache {
         );
 
         Self { embeddings, dim }
+    }
+
+    /// Precompute embeddings concurrently for a set of states.
+    ///
+    /// Fires up to `concurrency` encode requests in parallel via
+    /// `buffer_unordered`, which lets SGLang's continuous batching scheduler
+    /// batch them on the GPU. States already present in `self` are skipped.
+    ///
+    /// Returns `(newly_encoded, errors)`.
+    pub async fn precompute_concurrent<F, Fut>(
+        &mut self,
+        states: &HashSet<&str>,
+        encode_fn: F,
+        concurrency: usize,
+        dim: usize,
+    ) -> (usize, usize)
+    where
+        F: Fn(String) -> Fut,
+        Fut: Future<Output = anyhow::Result<Vec<f32>>>,
+    {
+        // Filter to states not already cached
+        let missing: Vec<String> = states
+            .iter()
+            .filter(|s| !self.embeddings.contains_key(**s))
+            .map(|s| s.to_string())
+            .collect();
+
+        if missing.is_empty() {
+            tracing::info!("All {} states already cached — skipping precompute", states.len());
+            return (0, 0);
+        }
+
+        let total = missing.len();
+        tracing::info!(
+            total_states = states.len(),
+            cached = states.len() - total,
+            to_encode = total,
+            concurrency,
+            "Starting concurrent embedding precomputation"
+        );
+
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) Encoding embeddings")
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
+                .progress_chars("=> "),
+        );
+
+        let mut encoded = 0usize;
+        let mut errors = 0usize;
+
+        // Stream of (state, result) pairs with bounded concurrency
+        let mut result_stream = stream::iter(missing.into_iter().map(|state| {
+            let fut = encode_fn(state.clone());
+            async move { (state, fut.await) }
+        }))
+        .buffer_unordered(concurrency);
+
+        while let Some((state, result)) = result_stream.next().await {
+            match result {
+                Ok(emb) => {
+                    debug_assert_eq!(
+                        emb.len(),
+                        dim,
+                        "Embedding dim mismatch: expected {dim}, got {}",
+                        emb.len()
+                    );
+                    self.embeddings.insert(state, emb);
+                    encoded += 1;
+                }
+                Err(e) => {
+                    errors += 1;
+                    tracing::warn!(state = %state, error = %e, "Failed to encode state");
+                }
+            }
+            pb.inc(1);
+        }
+
+        pb.finish_with_message("done");
+
+        tracing::info!(
+            total_states = states.len(),
+            newly_encoded = encoded,
+            errors,
+            total_cached = self.embeddings.len(),
+            "Concurrent embedding precomputation complete"
+        );
+
+        (encoded, errors)
     }
 
     /// Look up the embedding for a proof state.
@@ -371,5 +463,40 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert!(cache.get("⊢ A").is_some());
         assert!(cache.get("⊢ B").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_precompute_concurrent_skips_cached_and_reports_errors() {
+        // Pre-populate cache with one state
+        let mut cache = EmbeddingCache::new(2);
+        cache.insert("⊢ cached".to_string(), vec![9.0, 9.0]);
+
+        // States to precompute: one already cached, two new, one that will fail
+        let states: HashSet<&str> = ["⊢ cached", "⊢ new_a", "⊢ new_b", "⊢ fail"]
+            .into_iter()
+            .collect();
+
+        let encode_fn = |state: String| async move {
+            if state == "⊢ fail" {
+                anyhow::bail!("simulated encode failure");
+            }
+            Ok(vec![1.0, 2.0])
+        };
+
+        let (encoded, errors) = cache
+            .precompute_concurrent(&states, encode_fn, 4, 2)
+            .await;
+
+        // "⊢ cached" should be skipped (not re-encoded)
+        assert_eq!(cache.get("⊢ cached"), Some(&[9.0, 9.0][..]));
+        // Two new states should be encoded
+        assert_eq!(encoded, 2);
+        assert!(cache.get("⊢ new_a").is_some());
+        assert!(cache.get("⊢ new_b").is_some());
+        // One error
+        assert_eq!(errors, 1);
+        assert!(cache.get("⊢ fail").is_none());
+        // Total cached: 1 pre-existing + 2 new = 3
+        assert_eq!(cache.len(), 3);
     }
 }

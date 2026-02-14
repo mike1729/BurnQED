@@ -29,6 +29,7 @@ rand = "0.8"
 clap = { version = "4", features = ["derive"] }
 ordered-float = "4"
 async-trait = "0.1"
+futures = "0.3"
 indicatif = "0.17"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json"] }

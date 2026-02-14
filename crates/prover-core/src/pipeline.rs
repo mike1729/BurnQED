@@ -1,6 +1,5 @@
 //! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,6 +126,8 @@ pub struct TrainEbmArgs {
     pub save_embeddings: Option<PathBuf>,
     /// Path to tactic pairs JSONL file for augmenting training data.
     pub tactic_pairs: Option<PathBuf>,
+    /// Number of concurrent encode requests during embedding precomputation.
+    pub encode_concurrency: usize,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -949,7 +950,7 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
 }
 
 /// Train the Energy-Based Model from trajectory data.
-pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
+pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let hidden_size = args.hidden_size;
 
     tracing::info!(
@@ -1012,49 +1013,60 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         "Trajectory data loaded"
     );
 
-    // 3. Build lazy embedding cache (warm from disk or start empty)
-    let cache = if let Some(ref cache_path) = args.embeddings_cache {
+    // 3. Build embedding cache (warm from disk or start empty)
+    let mut cache = if let Some(ref cache_path) = args.embeddings_cache {
         tracing::info!(path = %cache_path.display(), "Loading embedding cache from disk (warm start)");
         EmbeddingCache::load(cache_path)?
     } else {
         EmbeddingCache::new(hidden_size)
     };
 
-    // Connect to SGLang for on-demand encoding of cache misses
-    let handle = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            let config = SglangConfig {
-                server_url: args.server_url.clone(),
-                temperature: 0.0,
-                top_p: 1.0,
-                max_tactic_tokens: 1,
-                hidden_size,
-            };
-            let client = SglangClient::new(config).await?;
-            Ok::<_, anyhow::Error>(InferenceHandle::new(client))
-        })
-    })?;
+    // 4. Connect to SGLang and precompute all unique embeddings concurrently
+    let config = SglangConfig {
+        server_url: args.server_url.clone(),
+        temperature: 0.0,
+        top_p: 1.0,
+        max_tactic_tokens: 1,
+        hidden_size,
+    };
+    let client = SglangClient::new(config).await?;
+    let handle = InferenceHandle::new(client);
+
+    let unique_states = sampler.unique_states();
+    let encode_concurrency = args.encode_concurrency;
+    let (newly_encoded, encode_errors) = cache
+        .precompute_concurrent(
+            &unique_states,
+            |state: String| {
+                let h = handle.clone();
+                async move {
+                    let emb = h.encode(&state).await?;
+                    Ok(emb.data)
+                }
+            },
+            encode_concurrency,
+            hidden_size,
+        )
+        .await;
+
+    if encode_errors > 0 {
+        anyhow::bail!(
+            "{encode_errors} state(s) failed to encode — cannot train with incomplete cache"
+        );
+    }
 
     tracing::info!(
-        warm_entries = cache.len(),
-        "Lazy embedding cache — embeddings computed on demand during training"
+        newly_encoded,
+        cached_entries = cache.len(),
+        "All embeddings precomputed — training will use cached lookups only"
     );
 
-    // 4. Create lazy encode_fn: check cache → on miss call SGLang → insert → return
-    let cache = RefCell::new(cache);
+    // 5. Create cache-only encode_fn (no network calls during training)
     let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
-        // Fast path: cache hit
-        if let Some(emb) = cache.borrow().get(state) {
-            return Ok(emb.to_vec());
-        }
-        // Cache miss: encode via SGLang
-        let embedding = handle.encode_blocking(state)?;
-        let data = embedding.data;
-        cache.borrow_mut().insert(state.to_owned(), data.clone());
-        Ok(data)
+        cache.get_or_err(state)
     };
 
-    // 5. Build training config
+    // 6. Build training config
     let output_dir_str = args.output_dir.to_string_lossy().to_string();
     let training_config = EBMTrainingConfig::new()
         .with_lr(args.lr)
@@ -1063,11 +1075,10 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .with_k_negatives(args.k_negatives)
         .with_checkpoint_dir(output_dir_str.clone());
 
-    // 6. Train
+    // 7. Train
     let _trained = ebm::train(&training_config, model, &encode_fn, &sampler, &device)?;
 
-    // 7. Optionally save embedding cache for reuse
-    let cache = cache.into_inner();
+    // 8. Optionally save embedding cache for reuse
     if let Some(ref save_path) = args.save_embeddings {
         cache.save(save_path)?;
     }
@@ -1075,10 +1086,10 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     tracing::info!(
         cached = cache.len(),
         dim = cache.dim(),
-        "Lazy embedding cache stats after training"
+        "Embedding cache stats after training"
     );
 
-    // 8. Save EnergyHeadConfig alongside checkpoint
+    // 9. Save EnergyHeadConfig alongside checkpoint
     std::fs::create_dir_all(&args.output_dir)?;
     let config_path = args.output_dir.join("energy_head_config.json");
     let config_json = serde_json::to_string_pretty(&head_config)?;

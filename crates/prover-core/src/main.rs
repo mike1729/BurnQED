@@ -157,6 +157,9 @@ enum Command {
         /// Path to tactic pairs JSONL file for augmenting training data.
         #[arg(long)]
         tactic_pairs: Option<PathBuf>,
+        /// Number of concurrent encode requests during embedding precomputation.
+        #[arg(long, default_value_t = 32)]
+        encode_concurrency: usize,
     },
 }
 
@@ -252,19 +255,24 @@ async fn main() -> anyhow::Result<()> {
             embeddings_cache,
             save_embeddings,
             tactic_pairs,
-        } => pipeline::run_train_ebm(TrainEbmArgs {
-            trajectories,
-            output_dir,
-            server_url,
-            hidden_size,
-            resume_from,
-            steps,
-            lr,
-            batch_size,
-            k_negatives,
-            embeddings_cache,
-            save_embeddings,
-            tactic_pairs,
-        }),
+            encode_concurrency,
+        } => {
+            pipeline::run_train_ebm(TrainEbmArgs {
+                trajectories,
+                output_dir,
+                server_url,
+                hidden_size,
+                resume_from,
+                steps,
+                lr,
+                batch_size,
+                k_negatives,
+                embeddings_cache,
+                save_embeddings,
+                tactic_pairs,
+                encode_concurrency,
+            })
+            .await
+        }
     }
 }
