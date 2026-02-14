@@ -97,9 +97,13 @@ impl LeanWorker {
     }
 
     /// Consume the initial "ready." line from Pantograph.
+    ///
+    /// Uses a longer timeout (120s) than normal tactic operations because
+    /// loading large environments like Mathlib can take 60-90s on first spawn.
     async fn consume_ready_line(&mut self) -> Result<(), LeanError> {
         let mut line = String::new();
-        let timeout = std::time::Duration::from_secs(30);
+        let startup_timeout_secs = 120;
+        let timeout = std::time::Duration::from_secs(startup_timeout_secs);
 
         let result = tokio::time::timeout(timeout, self.stdout.read_line(&mut line)).await;
 
@@ -113,7 +117,7 @@ impl LeanWorker {
                 Ok(())
             }
             Ok(Err(e)) => Err(LeanError::Io(e)),
-            Err(_) => Err(LeanError::Timeout(30)),
+            Err(_) => Err(LeanError::Timeout(startup_timeout_secs)),
         }
     }
 
