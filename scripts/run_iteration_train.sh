@@ -85,7 +85,7 @@ else
         "${EXTRA_DATA_ARGS[@]}" \
         --output "${CKPT_DIR}/iter_${ITER}" \
         --base "$BASE_CKPT" \
-        --epochs 1 \
+        --max-steps 800 \
         --lr "$LR"
 fi
 
