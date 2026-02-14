@@ -245,7 +245,7 @@ def train(args):
         seed=args.seed,
         dataloader_num_workers=4,
         remove_unused_columns=False,
-        disable_tqdm=False,
+        disable_tqdm=not sys.stdout.isatty(),
     )
 
     # Train
