@@ -29,7 +29,7 @@ ensure_sglang "$SGLANG_URL"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
-EBM_STEPS="${EBM_STEPS:-10000}"
+EBM_STEPS="${EBM_STEPS:-2000}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
 PROVER="cargo run --release -p prover-core --"
