@@ -347,7 +347,7 @@ impl SglangClient {
         for attempt in 0..3 {
             if attempt > 0 {
                 let delay = Duration::from_millis(500 * (1 << attempt));
-                tracing::warn!(attempt, delay_ms = delay.as_millis() as u64, "Retrying SGLang request");
+                tracing::debug!(attempt, delay_ms = delay.as_millis() as u64, "Retrying SGLang request");
                 tokio::time::sleep(delay).await;
             }
 

@@ -70,7 +70,7 @@ impl EmbeddingCache {
                 }
                 Err(e) => {
                     errors += 1;
-                    tracing::warn!(state = %state, error = %e, "Failed to encode state");
+                    tracing::debug!(state = %state, error = %e, "Failed to encode state");
                 }
             }
             pb.inc(1);
@@ -159,13 +159,20 @@ impl EmbeddingCache {
                 }
                 Err(e) => {
                     errors += 1;
-                    tracing::warn!(state = %state, error = %e, "Failed to encode state");
+                    tracing::debug!(state = %state, error = %e, "Failed to encode state");
                 }
             }
             pb.inc(1);
         }
 
         pb.finish_with_message("done");
+
+        if errors > 0 {
+            tracing::warn!(
+                errors,
+                "Some states failed to encode (use RUST_LOG=debug for details)"
+            );
+        }
 
         tracing::info!(
             total_states = states.len(),
