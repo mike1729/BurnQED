@@ -129,7 +129,7 @@ def train(args):
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
-        DataCollatorForLanguageModeling,
+        DataCollatorForSeq2Seq,
         Trainer,
         TrainingArguments,
     )
@@ -149,7 +149,7 @@ def train(args):
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
     )
     model.config.use_cache = False  # Required for gradient checkpointing
 
@@ -206,10 +206,11 @@ def train(args):
         val_records = load_base_data(args.val_data)
         eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
 
-    # Data collator with dynamic padding
-    data_collator = DataCollatorForLanguageModeling(
+    # Data collator with dynamic padding (pads both input_ids and labels)
+    data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer,
-        mlm=False,
+        padding=True,
+        pad_to_multiple_of=8,
     )
 
     # Detect bf16 support
