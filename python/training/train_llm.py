@@ -147,9 +147,10 @@ def train(args):
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map={"": 0},
         trust_remote_code=True,
         dtype=torch.bfloat16,
+        attn_implementation="flash_attention_2",
     )
     model.config.use_cache = False  # Required for gradient checkpointing
     model.enable_input_require_grads()  # Required for QLoRA + gradient checkpointing
@@ -230,7 +231,8 @@ def train(args):
         weight_decay=0.01,
         fp16=not use_bf16,
         bf16=use_bf16,
-        logging_steps=50,
+        logging_steps=10,
+        logging_first_step=True,
         save_strategy="steps",
         save_steps=500,
         save_total_limit=3,
@@ -338,13 +340,13 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=4,
+        default=8,
         help="Per-device batch size (default: %(default)s)",
     )
     parser.add_argument(
         "--gradient-accumulation",
         type=int,
-        default=8,
+        default=4,
         help="Gradient accumulation steps (default: %(default)s, effective batch = 32)",
     )
     parser.add_argument(
@@ -362,7 +364,7 @@ def main():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=2048,
+        default=1024,
         help="Maximum sequence length (default: %(default)s)",
     )
     parser.add_argument(

@@ -60,7 +60,7 @@ if [ "$ITER" -eq 0 ]; then
         --data "$TRAIN_DATA" \
         $VAL_DATA_FLAG \
         --output "${CKPT_DIR}/iter_0" \
-        --epochs 3 \
+        --epochs 1 \
         --lr "$LR"
 else
     echo "Iteration ${ITER}: training with trajectory data from previous iterations"
