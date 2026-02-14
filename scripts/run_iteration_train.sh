@@ -15,6 +15,7 @@
 #   - Training data prepared (python python/data/trace_mathlib.py + prepare_tactic_pairs.py)
 
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 
 ITER=${1:?"Usage: ./scripts/run_iteration_train.sh <iteration_number>"}
 PREV=$((ITER - 1))
