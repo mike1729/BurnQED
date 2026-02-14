@@ -79,7 +79,8 @@ cargo build --release -p prover-core
 For cloud GPU setup (installs Rust, elan, Python deps, builds everything):
 
 ```bash
-bash scripts/setup_cloud.sh
+bash scripts/setup_runpod.sh   # RunPod (RTX 4090) — recommended
+bash scripts/setup_lambda.sh   # Lambda Labs (A100)
 ```
 
 ## CLI Reference

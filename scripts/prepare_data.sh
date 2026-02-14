@@ -356,7 +356,7 @@ done
 if [ $FAIL -eq 0 ]; then
     echo ""
     echo "  Next steps:"
-    echo "    1. Cloud bootstrap:  ./scripts/setup_cloud.sh"
+    echo "    1. Cloud bootstrap:  ./scripts/setup_runpod.sh  (or setup_lambda.sh)"
     echo "    2. Run baseline:     ./scripts/run_baseline.sh"
     echo "    3. Run experiment:   NUM_WORKERS=64 ./scripts/run_all_iterations.sh"
 fi

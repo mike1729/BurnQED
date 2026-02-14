@@ -1,36 +1,67 @@
 #!/bin/bash
-# Bootstrap a cloud GPU instance for BurnQED.
+# Bootstrap a RunPod GPU instance for BurnQED.
 #
-# Installs: Rust, elan (Lean 4), Python deps, builds Pantograph and prover-core.
-# Tested on: Ubuntu 22.04 with CUDA 12.x pre-installed.
+# Optimized for RTX 4090 (24GB VRAM) — the sweet spot for 7B QLoRA.
+# Also works on RTX 3090, A100, or any CUDA GPU with >= 24GB VRAM.
 #
 # Usage:
-#   # On a fresh cloud instance:
+#   # On a fresh RunPod pod (PyTorch template recommended):
 #   git clone https://github.com/<you>/BurnQED.git && cd BurnQED
-#   bash scripts/setup_cloud.sh
+#   bash scripts/setup_runpod.sh
 #
-#   # Or via SSH:
-#   ssh gpu-instance 'cd BurnQED && bash scripts/setup_cloud.sh'
+# RunPod Network Volume:
+#   Create a Network Volume in the RunPod dashboard and attach it to your pod.
+#   It mounts at /workspace/ (or /runpod-volume/ in some templates).
+#   The script auto-detects /workspace/ as PERSIST_DIR if present.
 #
-#   # With persistent storage (model weights pre-placed):
-#   PERSIST_DIR=/home/michal/burnqed-data bash scripts/setup_cloud.sh
+#   Pre-place model weights at /workspace/models/deepseek-prover-v2-7b/
+#   to avoid re-downloading on pod restarts.
 #
-# Persistent Storage:
-#   Set PERSIST_DIR to a mounted persistent volume (e.g., NFS, EBS).
-#   The script will create symlinks from the repo to $PERSIST_DIR for:
-#     models/, trajectories/, checkpoints/, baselines/, eval_results/, data/, logs/
-#   Model weights should be pre-placed at $PERSIST_DIR/models/deepseek-prover-v2-7b/
+# Spot Instances:
+#   Safe to use — the pipeline auto-checkpoints:
+#     - LoRA saves every 500 training steps
+#     - Trajectory auto-saves every 50 theorems (flush_partial)
+#     - --resume-from flag for search resumption
+#   Attach a Network Volume so checkpoints survive pod termination.
+#
+# See also: scripts/setup_lambda.sh for Lambda Labs (A100) instances.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Auto-detect RunPod Network Volume
+if [ -z "${PERSIST_DIR:-}" ]; then
+    if [ -d "/workspace" ] && [ -w "/workspace" ]; then
+        PERSIST_DIR="/workspace"
+    fi
+fi
 PERSIST_DIR="${PERSIST_DIR:-}"
 
+# Detect GPU type for VRAM-aware configuration
+GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "unknown")
+GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")
+
 echo "================================================================"
-echo "  BurnQED Cloud Setup"
+echo "  BurnQED Setup — RunPod"
 echo "================================================================"
+echo "  GPU:        ${GPU_NAME}"
+echo "  VRAM:       ${GPU_MEM_MB} MB"
+if [ -n "$PERSIST_DIR" ]; then
+    echo "  Storage:    ${PERSIST_DIR} (persistent)"
+else
+    echo "  Storage:    local (no Network Volume detected)"
+fi
+echo "================================================================"
+
+# Warn if VRAM is tight
+if [ "$GPU_MEM_MB" -gt 0 ] && [ "$GPU_MEM_MB" -lt 20000 ]; then
+    echo ""
+    echo "  WARNING: ${GPU_MEM_MB}MB VRAM detected. Minimum 24GB recommended."
+    echo "  QLoRA training needs ~12GB, SGLang inference needs ~14GB."
+    echo ""
+fi
 
 # ── Step 0: Persistent storage symlinks ─────────────────────────────────
 if [ -n "$PERSIST_DIR" ]; then
@@ -43,18 +74,15 @@ if [ -n "$PERSIST_DIR" ]; then
         mkdir -p "$PERSIST_DIR"
     fi
 
-    # Directories to symlink to persistent storage
     PERSIST_DIRS=(models trajectories checkpoints baselines eval_results data logs)
 
     for dir in "${PERSIST_DIRS[@]}"; do
         persist_path="${PERSIST_DIR}/${dir}"
         repo_path="${REPO_ROOT}/${dir}"
 
-        # Create the persistent directory if it doesn't exist
         mkdir -p "$persist_path"
 
         if [ -L "$repo_path" ]; then
-            # Already a symlink — verify it points to the right place
             current_target=$(readlink -f "$repo_path")
             expected_target=$(readlink -f "$persist_path")
             if [ "$current_target" = "$expected_target" ]; then
@@ -65,7 +93,6 @@ if [ -n "$PERSIST_DIR" ]; then
                 ln -s "$persist_path" "$repo_path"
             fi
         elif [ -d "$repo_path" ]; then
-            # Real directory exists — move contents to persistent, then symlink
             if [ -n "$(ls -A "$repo_path" 2>/dev/null)" ]; then
                 echo "  ${dir}/ → migrating contents to persistent storage"
                 cp -a "$repo_path"/* "$persist_path"/ 2>/dev/null || true
@@ -74,33 +101,37 @@ if [ -n "$PERSIST_DIR" ]; then
             ln -s "$persist_path" "$repo_path"
             echo "  ${dir}/ → linked"
         else
-            # Nothing exists yet — just create the symlink
             ln -s "$persist_path" "$repo_path"
             echo "  ${dir}/ → linked (new)"
         fi
     done
 
-    # Check if model weights are pre-placed
     MODEL_CHECK="${PERSIST_DIR}/models/deepseek-prover-v2-7b"
     if [ -d "$MODEL_CHECK" ] && [ -n "$(ls -A "$MODEL_CHECK"/*.safetensors 2>/dev/null)" ]; then
         echo ""
         echo "  Model weights found at ${MODEL_CHECK}"
     else
         echo ""
-        echo "  WARNING: Model weights not found at ${MODEL_CHECK}"
-        echo "  Place them there before running baseline/iteration scripts."
+        echo "  Model weights not found at ${MODEL_CHECK}"
+        echo "  They'll be downloaded in Step 8."
     fi
 else
     echo ""
     echo "  (No PERSIST_DIR set — using local storage)"
-    echo "  Tip: Set PERSIST_DIR=/path/to/mount for persistent storage"
+    echo "  Tip: Attach a RunPod Network Volume for persistent storage"
 fi
 
 # ── Step 1: System packages ───────────────────────────────────────────────
 echo ""
 echo "=== Step 1: System packages ==="
 if command -v apt-get &>/dev/null; then
-    sudo apt-get update -qq
+    # RunPod templates have most packages, but ensure build deps are present
+    apt-get update -qq 2>/dev/null || sudo apt-get update -qq
+    apt-get install -y -qq \
+        build-essential git curl wget pkg-config \
+        libssl-dev libclang-dev cmake \
+        python3 python3-pip python3-venv \
+        2>/dev/null || \
     sudo apt-get install -y -qq \
         build-essential git curl wget pkg-config \
         libssl-dev libclang-dev cmake \
@@ -158,16 +189,27 @@ bash "${REPO_ROOT}/scripts/setup_pantograph.sh"
 # ── Step 6: Python environment ────────────────────────────────────────────
 echo ""
 echo "=== Step 6: Python environment ==="
-if [ ! -d "${REPO_ROOT}/.venv" ]; then
-    python3 -m venv "${REPO_ROOT}/.venv"
-fi
-# shellcheck disable=SC1091
-source "${REPO_ROOT}/.venv/bin/activate"
-pip install --upgrade pip
-pip install -r "${REPO_ROOT}/python/requirements.txt"
-pip install "sglang[all]"
 
-# Configure accelerate for single-GPU (needed for LLM fine-tuning)
+# RunPod templates often have torch pre-installed (conda or system).
+# Prefer using the existing environment to avoid re-downloading torch.
+if python3 -c "import torch; print(f'PyTorch {torch.__version__} (CUDA {torch.version.cuda})')" 2>/dev/null; then
+    echo "Using existing Python environment with PyTorch"
+    pip install --upgrade pip
+    pip install -r "${REPO_ROOT}/python/requirements.txt"
+    pip install "sglang[all]"
+else
+    echo "No PyTorch found — creating venv and installing from scratch"
+    if [ ! -d "${REPO_ROOT}/.venv" ]; then
+        python3 -m venv "${REPO_ROOT}/.venv"
+    fi
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/.venv/bin/activate"
+    pip install --upgrade pip
+    pip install -r "${REPO_ROOT}/python/requirements.txt"
+    pip install "sglang[all]"
+fi
+
+# Configure accelerate for single-GPU
 echo "Configuring accelerate for single GPU..."
 accelerate config default 2>/dev/null || python -m accelerate config default 2>/dev/null || true
 
@@ -176,28 +218,16 @@ echo ""
 echo "=== Step 7: Build prover-core ==="
 cargo build --release -p prover-core
 
-# ── Step 8: Download model weights ────────────────────────────────────────
+# ── Step 8: Verify model weights ──────────────────────────────────────────
 echo ""
 echo "=== Step 8: Model weights ==="
 MODEL_DIR="${REPO_ROOT}/models/deepseek-prover-v2-7b"
 if [ -d "$MODEL_DIR" ] && [ -n "$(ls -A "$MODEL_DIR"/*.safetensors 2>/dev/null)" ]; then
     echo "Model weights found at ${MODEL_DIR}"
 else
-    echo "Model weights not found. Download them with:"
-    echo ""
-    echo "  # Option A: HuggingFace CLI"
-    echo "  pip install huggingface-hub"
-    echo "  huggingface-cli download deepseek-ai/DeepSeek-Prover-V2-7B --local-dir ${MODEL_DIR}"
-    echo ""
-    echo "  # Option B: git lfs"
-    echo "  git clone https://huggingface.co/deepseek-ai/DeepSeek-Prover-V2-7B ${MODEL_DIR}"
-    echo ""
-    echo "Skipping smoke test until model weights are available."
-    echo ""
-    echo "================================================================"
-    echo "  Setup complete (model weights needed for smoke test)"
-    echo "================================================================"
-    exit 0
+    echo "Model weights not found at ${MODEL_DIR}"
+    echo "Transfer them from another instance using:"
+    echo "  bash scripts/migrate_to_runpod.sh <source_host> <this_host>"
 fi
 
 # ── Step 9: Smoke test ────────────────────────────────────────────────────
@@ -208,12 +238,16 @@ echo "  ./scripts/smoke_test.sh"
 
 echo ""
 echo "================================================================"
-echo "  Cloud setup complete!"
+echo "  RunPod setup complete!"
 echo ""
 echo "  Next steps:"
-echo "    1. Download model weights (if not done above)"
-echo "    2. Start SGLang server: ./scripts/start_sglang.sh"
-echo "    3. Prepare training data: ./scripts/prepare_data.sh"
-echo "    4. Run baseline evaluation: ./scripts/run_baseline.sh"
-echo "    5. Run first iteration: ./scripts/run_iteration.sh 0"
+echo "    1. Start SGLang server: ./scripts/start_sglang.sh"
+echo "    2. Prepare training data: ./scripts/prepare_data.sh"
+echo "    3. Run baseline evaluation: ./scripts/run_baseline.sh"
+echo "    4. Run first iteration: ./scripts/run_iteration.sh 0"
+echo ""
+echo "  Spot instance tips:"
+echo "    - Checkpoints auto-save (LoRA: every 500 steps, search: every 50 theorems)"
+echo "    - Resume interrupted search: ./scripts/resume_search.sh N"
+echo "    - Use Network Volume to persist data across pod restarts"
 echo "================================================================"

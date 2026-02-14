@@ -2,39 +2,44 @@
 
 ## Provider Recommendations
 
-| Provider | GPU Options | Spot Price (A100 80GB) | On-Demand | Notes |
-|----------|------------|----------------------|-----------|-------|
-| **Lambda Labs** | A100 80GB, H100 | ~$1.10/hr | $1.99/hr | Best for ML; pre-installed CUDA/PyTorch |
-| **RunPod** | A100, H100, A6000 | ~$1.20/hr | $1.64/hr | Serverless + pod options; community templates |
-| **Vast.ai** | Mixed (A100, 3090, etc.) | ~$0.80/hr | Varies | Cheapest spot; less reliable; good for search |
-| **AWS (p4d)** | A100 40GB x8 | ~$8/hr | $32/hr | Most reliable; overkill for single-GPU tasks |
-| **GCP (a2-highgpu)** | A100 40/80GB | ~$3/hr | $5/hr | Good Kubernetes integration |
+For a 7B model with QLoRA, an A100 is overkill. An RTX 4090 (24GB) handles both
+QLoRA training (~12GB) and fp16 inference (~14GB) at a fraction of the cost.
 
-**Recommended setup**: Lambda Labs or RunPod for simplicity. Use spot/interruptible instances for search (which can resume), on-demand for LLM fine-tuning (harder to checkpoint mid-epoch).
+| Provider | GPU | Cost/hr | VRAM | Best For |
+|----------|-----|---------|------|----------|
+| **RunPod** (recommended) | RTX 4090 | $0.32–0.44 | 24GB | 7B QLoRA + inference |
+| **TensorDock** | RTX 4090 | $0.30–0.40 | 24GB | Long training jobs |
+| **Lambda Labs** | A100 40GB | $1.29–1.50 | 40GB | If you need >24GB VRAM |
+| **Vast.ai** | RTX 3090 | $0.15–0.25 | 24GB | Cheapest; less reliable |
+
+**Recommended**: RunPod RTX 4090 with a Network Volume. ~3× cheaper than A100
+with nearly identical performance for 7B models. Use spot instances for search
+(auto-resumes), on-demand for fine-tuning.
+
+**Important**: Ensure the instance has 8+ vCPUs and 32GB+ RAM for Lean workers.
 
 ## Hardware Requirements
 
 ### LLM Fine-Tuning (QLoRA)
 
-- **GPU**: 1x A100 80GB (preferred) or 1x A100 40GB
+- **GPU**: 1x RTX 4090 24GB (recommended) or 1x A100 40GB
   - 7B model in 4-bit: ~4GB VRAM
-  - Activations + optimizer states: ~20-30GB
-  - With gradient checkpointing: fits on 40GB
-- **RAM**: 64GB+ (model loading + data)
+  - Activations + optimizer states: ~8-12GB with gradient checkpointing
+  - Fits comfortably on 24GB
+- **RAM**: 32GB+ (model loading + data)
 - **Disk**: 50GB (model weights + checkpoints)
-- **Time**: ~2-4 hours per epoch on full Mathlib tactic pairs (~500K examples)
-
-For multi-GPU fine-tuning (faster):
-- 4x A100 80GB with `accelerate` FSDP or DeepSpeed ZeRO-3
-- ~30 min per epoch
+- **Time**: ~2-3 hours for 1500 steps on 246K examples
 
 ### Proof Search (Lean + LLM Inference)
 
-- **GPU**: 1x A100 40GB (LLM inference in fp16/bf16)
-- **CPU**: 8+ cores (for Lean worker pool, 4-8 concurrent Pantograph processes)
+- **GPU**: 1x RTX 4090 24GB (fp16 inference ~14GB)
+- **CPU**: 8+ cores (for Lean worker pool, 6 concurrent Pantograph processes)
 - **RAM**: 32GB+ (Lean processes use ~2GB each)
 - **Disk**: 30GB (model weights + Lean/Mathlib toolchain)
-- **Time**: ~1-2 hours per 1000 theorems (600 nodes/theorem budget)
+- **Time**: ~2-4 hours per 2000 theorems (100 nodes/theorem budget)
+- Note: 4090 has lower memory bandwidth (1 TB/s vs A100's 2 TB/s), so
+  autoregressive generation is ~1.5× slower per token, but the cost savings
+  more than compensate
 
 ### EBM Training
 
@@ -46,9 +51,9 @@ For multi-GPU fine-tuning (faster):
 
 ### Combined (One Iteration)
 
-- **Minimum**: 1x A100 40GB, 8 CPU cores, 64GB RAM, 100GB disk
-- **Recommended**: 1x A100 80GB, 16 CPU cores, 128GB RAM, 200GB disk
-- **Time per iteration**: ~6-10 hours
+- **Minimum**: 1x RTX 4090 24GB, 8 CPU cores, 32GB RAM, 100GB disk
+- **Recommended**: 1x RTX 4090 24GB, 16 CPU cores, 64GB RAM, 200GB disk
+- **Time per iteration**: ~6-10 hours (4090), ~4-7 hours (A100)
 
 ## Instance Setup Checklist
 
@@ -67,7 +72,12 @@ nvcc --version        # CUDA compiler (12.x recommended)
 # Clone repo and run setup
 git clone https://github.com/<you>/BurnQED.git
 cd BurnQED
-bash scripts/setup_cloud.sh
+
+# RunPod (RTX 4090) — recommended
+bash scripts/setup_runpod.sh
+
+# Lambda Labs (A100)
+bash scripts/setup_lambda.sh
 ```
 
 This installs: Rust, elan (Lean 4), Python deps, builds Pantograph and prover-core.
@@ -228,34 +238,33 @@ rm -rf models/llm/iter_{0..3}/
 
 ## Cost Estimate
 
-### Per Iteration (A100 80GB spot @ $1.10/hr)
+### Per Iteration (RTX 4090 spot @ $0.35/hr)
 
-| Step | GPU Hours | Cost |
-|------|-----------|------|
-| LLM fine-tune (iter 0: 3 epochs) | 6-8h | $7-9 |
-| LLM fine-tune (iter N: 1 epoch) | 2-3h | $2-3 |
-| LLM export (merge + save) | 0.5h | $0.55 |
-| EBM training (50K steps) | 0.5h | $0.55 |
-| Search (1000 theorems) | 2-4h | $2-4 |
-| Evaluation (miniF2F, 3 budgets) | 1-2h | $1-2 |
-| **Iteration 0 total** | ~12h | **~$13** |
-| **Iteration N total** | ~8h | **~$9** |
+| Step | GPU Hours | Cost (4090) | Cost (A100) |
+|------|-----------|-------------|-------------|
+| LLM fine-tune (iter 0: 1500 steps) | 2.5-3h | $0.90-1.05 | $3.75-4.50 |
+| LLM fine-tune (iter N: 800 steps) | 1-1.5h | $0.35-0.53 | $1.29-1.95 |
+| LLM export (merge + save) | 0.2h | $0.07 | $0.26 |
+| EBM training (2000 steps) | 1h | $0.35 | $1.29 |
+| Search (2000 theorems) | 3-5h | $1.05-1.75 | $3.87-6.45 |
+| Evaluation (miniF2F, budget 600) | 1-2h | $0.35-0.70 | $1.29-2.58 |
+| **Iteration 0 total** | ~10h | **~$3.50** | **~$13** |
+| **Iteration N total** | ~8h | **~$2.80** | **~$10** |
 
 ### Full 5-Iteration Run
 
-| Component | Cost |
-|-----------|------|
-| Iteration 0 | ~$13 |
-| Iterations 1-4 | ~$36 |
-| Persistent storage (200GB, 1 week) | ~$5-10 |
-| **Total** | **~$55-60** |
+| Component | Cost (4090) | Cost (A100) |
+|-----------|-------------|-------------|
+| Iteration 0 | ~$3.50 | ~$13 |
+| Iterations 1-4 | ~$11 | ~$40 |
+| Persistent storage (200GB, 1 week) | ~$3-5 | ~$5-10 |
+| **Total** | **~$18-20** | **~$58-63** |
 
 ### Budget Tips
 
-- Use spot instances for search (auto-resumes via `--resume-from`)
-- Use on-demand for fine-tuning (harder to resume mid-training)
+- Use RunPod RTX 4090 spot instances (~$0.32/hr vs A100 ~$1.29/hr)
+- Use spot for search (auto-resumes via `--resume-from`)
 - Pre-compute embeddings once (`--save-embeddings`), reuse for EBM training
-- A smaller model (1.3B) reduces costs 5x but with lower prove rates
 
 ## Monitoring
 

@@ -497,7 +497,8 @@ If a code change would make any code sample, type signature, or architectural de
 ./scripts/prepare_data.sh --trace      # Local LeanDojo trace (optional)
 
 # 2. Cloud bootstrap (on GPU instance)
-bash scripts/setup_cloud.sh
+bash scripts/setup_runpod.sh   # RunPod RTX 4090 (recommended)
+bash scripts/setup_lambda.sh   # Lambda Labs A100
 
 # 3. Run full experiment
 NUM_WORKERS=64 ./scripts/run_all_iterations.sh
@@ -507,7 +508,9 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 
 | Script | Purpose | GPU? |
 |--------|---------|------|
-| `scripts/setup_cloud.sh` | Install Rust, elan, Python deps, build Pantograph + prover-core | No |
+| `scripts/setup_runpod.sh` | Setup for RunPod RTX 4090 (auto-detects Network Volume, VRAM) | No |
+| `scripts/setup_lambda.sh` | Setup for Lambda Labs A100 | No |
+| `scripts/migrate_to_runpod.sh` | Transfer checkpoints/trajectories from Lambda to RunPod | No |
 | `scripts/prepare_data.sh` | Trace Mathlib + format tactic pairs + validate outputs | No |
 | `scripts/run_baseline.sh` | Phase B: raw model baseline on test_theorems + miniF2F + theorem_index + baseline EBM | Yes |
 | `scripts/run_iteration.sh N` | One expert iteration: fine-tune → export → EBM → search → eval + ablation | Yes |
