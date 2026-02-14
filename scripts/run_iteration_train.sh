@@ -86,6 +86,8 @@ else
         --output "${CKPT_DIR}/iter_${ITER}" \
         --base "$BASE_CKPT" \
         --max-steps 800 \
+        --base-subsample 10000 \
+        --trajectory-upsample 10 \
         --lr "$LR"
 fi
 

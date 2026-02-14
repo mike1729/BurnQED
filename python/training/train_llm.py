@@ -191,33 +191,34 @@ def train(args):
         100.0 * trainable_params / total_params,
     )
 
-    # Load training data
+    # Load training data (optionally subsampled)
+    import random
     train_records = load_base_data(args.data)
+    if args.base_subsample and args.base_subsample < len(train_records):
+        random.seed(args.seed)
+        train_records = random.sample(train_records, args.base_subsample)
+        logger.info("Subsampled base data: %d examples", len(train_records))
 
-    # Add trajectory data from previous iterations (auto-upsampled)
+    # Add trajectory data from previous iterations (optionally upsampled)
     if args.extra_data:
         extra_records = load_trajectory_data(args.extra_data)
+        if extra_records and args.trajectory_upsample > 1:
+            original_count = len(extra_records)
+            extra_records = extra_records * args.trajectory_upsample
+            logger.info(
+                "Upsampled trajectory data: %d → %d (×%d)",
+                original_count,
+                len(extra_records),
+                args.trajectory_upsample,
+            )
         if extra_records:
-            base_count = len(train_records)
-            extra_count = len(extra_records)
-            target_count = int(base_count * args.trajectory_target_ratio)
-            if extra_count < target_count:
-                upsample = max(1, target_count // extra_count)
-                extra_records = extra_records * upsample
-                logger.info(
-                    "Upsampled trajectory data: %d → %d (×%d, target ratio %.0f%%)",
-                    extra_count,
-                    len(extra_records),
-                    upsample,
-                    args.trajectory_target_ratio * 100,
-                )
-            else:
-                logger.info(
-                    "Trajectory data already %.1f%% of base — no upsampling needed",
-                    100.0 * extra_count / base_count,
-                )
             train_records.extend(extra_records)
-            logger.info("Combined training set: %d examples", len(train_records))
+            logger.info(
+                "Combined training set: %d examples (base: %d, trajectory: %d)",
+                len(train_records),
+                len(train_records) - len(extra_records),
+                len(extra_records),
+            )
 
     train_dataset = build_dataset(train_records, tokenizer, args.max_seq_len)
 
@@ -389,10 +390,16 @@ def main():
         help="LoRA alpha (default: %(default)s)",
     )
     parser.add_argument(
-        "--trajectory-target-ratio",
-        type=float,
-        default=0.05,
-        help="Target ratio of trajectory data to base data. Auto-upsamples if below this. (default: %(default)s = 5%%)",
+        "--base-subsample",
+        type=int,
+        default=None,
+        help="Subsample base data to this many examples (default: use all)",
+    )
+    parser.add_argument(
+        "--trajectory-upsample",
+        type=int,
+        default=1,
+        help="Repeat trajectory examples this many times (default: %(default)s, no upsampling)",
     )
     parser.add_argument(
         "--max-seq-len",
