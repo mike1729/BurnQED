@@ -152,6 +152,7 @@ def train(args):
         dtype=torch.bfloat16,
     )
     model.config.use_cache = False  # Required for gradient checkpointing
+    model.enable_input_require_grads()  # Required for QLoRA + gradient checkpointing
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -236,6 +237,7 @@ def train(args):
         eval_strategy="steps" if eval_dataset else "no",
         eval_steps=500 if eval_dataset else None,
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to="none",
         seed=args.seed,
         dataloader_num_workers=4,
