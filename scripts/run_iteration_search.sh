@@ -9,6 +9,7 @@
 #   NUM_WORKERS=30 ./scripts/run_iteration_search.sh 1
 
 set -euo pipefail
+export PYTHONUNBUFFERED=1
 
 ITER=${1:?"Usage: ./scripts/run_iteration_search.sh <iteration_number>"}
 PREV=$((ITER - 1))
