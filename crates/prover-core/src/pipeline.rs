@@ -1050,15 +1050,18 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .await;
 
     if encode_errors > 0 {
-        anyhow::bail!(
-            "{encode_errors} state(s) failed to encode — cannot train with incomplete cache"
+        tracing::warn!(
+            encode_errors,
+            newly_encoded,
+            "Some states failed to encode — training will skip batches containing them"
         );
     }
 
     tracing::info!(
         newly_encoded,
+        encode_errors,
         cached_entries = cache.len(),
-        "All embeddings precomputed — training will use cached lookups only"
+        "Embedding precomputation complete — training will use cached lookups"
     );
 
     // 5. Create cache-only encode_fn (no network calls during training)
