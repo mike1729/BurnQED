@@ -7,8 +7,9 @@
 
 use rand::seq::SliceRandom;
 use rand::Rng;
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 
 use trajectory::TrajectoryReader;
 
@@ -270,7 +271,7 @@ impl ContrastiveSampler {
 /// Load trajectory records from Parquet files and convert to ProofStateRecords.
 ///
 /// Uses `TrajectoryReader::read_multiple` for I/O. Filters out "unknown" labels.
-fn load_records_from_parquet(
+pub fn load_records_from_parquet(
     paths: &[PathBuf],
 ) -> anyhow::Result<Vec<ProofStateRecord>> {
     let trajectory_records = TrajectoryReader::read_multiple(paths)?;
@@ -290,6 +291,86 @@ fn load_records_from_parquet(
             llm_log_prob: r.llm_log_prob,
         })
         .collect();
+
+    Ok(records)
+}
+
+/// A single tactic pair record from the training JSONL file.
+#[derive(serde::Deserialize)]
+struct TacticPairJson {
+    state: String,
+    #[allow(dead_code)]
+    tactic: String,
+    theorem: String,
+    depth: u32,
+}
+
+/// Load ground-truth proof states from a tactic pairs JSONL file.
+///
+/// Each line is `{"state", "tactic", "theorem", "depth"}`. Records are grouped
+/// by theorem to compute `remaining_depth = max_depth_in_theorem - depth`.
+/// All records are labeled "positive" with `llm_log_prob = 0.0`.
+///
+/// If `filter_theorems` is `Some`, only records whose `theorem` field matches
+/// a name in the set are loaded. This keeps the merge targeted to theorems
+/// that already have negative records from search trajectories.
+pub fn load_tactic_pairs(
+    path: &Path,
+    filter_theorems: Option<&HashSet<String>>,
+) -> anyhow::Result<Vec<ProofStateRecord>> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| anyhow::anyhow!("Failed to open tactic pairs file {}: {e}", path.display()))?;
+    let reader = std::io::BufReader::new(file);
+
+    // First pass: parse all matching records, grouped by theorem
+    let mut by_theorem: HashMap<String, Vec<(String, u32)>> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let pair: TacticPairJson = serde_json::from_str(&line)
+            .map_err(|e| anyhow::anyhow!("Failed to parse tactic pair JSON: {e}"))?;
+
+        if let Some(filter) = filter_theorems {
+            if !filter.contains(&pair.theorem) {
+                continue;
+            }
+        }
+
+        by_theorem
+            .entry(pair.theorem)
+            .or_default()
+            .push((pair.state, pair.depth));
+    }
+
+    // Second pass: compute remaining_depth per theorem and build records
+    let mut records = Vec::new();
+    let mut theorem_count = 0u32;
+
+    for (theorem_name, states) in &by_theorem {
+        let max_depth = states.iter().map(|(_, d)| *d).max().unwrap_or(0);
+        theorem_count += 1;
+
+        for (state_pp, depth) in states {
+            let remaining_depth = max_depth as i32 - *depth as i32;
+            records.push(ProofStateRecord {
+                theorem_name: theorem_name.clone(),
+                state_pp: state_pp.clone(),
+                label: "positive".to_string(),
+                depth_from_root: *depth,
+                remaining_depth,
+                llm_log_prob: 0.0,
+            });
+        }
+    }
+
+    tracing::info!(
+        records = records.len(),
+        theorems = theorem_count,
+        "Loaded tactic pair records"
+    );
 
     Ok(records)
 }
@@ -437,6 +518,71 @@ mod tests {
         assert_eq!(batch.len(), 8);
         for sample in &batch {
             assert_eq!(sample.negatives.len(), 2);
+        }
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        let content = r#"{"state":"⊢ True","tactic":"trivial","theorem":"True_self","depth":0}
+{"state":"⊢ True ∧ True","tactic":"constructor","theorem":"True_self","depth":1}
+{"state":"⊢ False → False","tactic":"intro","theorem":"false_imp","depth":0}
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let records = load_tactic_pairs(&path, None).unwrap();
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|r| r.label == "positive"));
+        assert!(records.iter().all(|r| r.llm_log_prob == 0.0));
+
+        // True_self has max_depth=1, so depth=0 → remaining=1, depth=1 → remaining=0
+        let true_self: Vec<_> = records.iter().filter(|r| r.theorem_name == "True_self").collect();
+        assert_eq!(true_self.len(), 2);
+        let depths: HashSet<i32> = true_self.iter().map(|r| r.remaining_depth).collect();
+        assert!(depths.contains(&0));
+        assert!(depths.contains(&1));
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_filtered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        let content = r#"{"state":"⊢ True","tactic":"trivial","theorem":"True_self","depth":0}
+{"state":"⊢ False → False","tactic":"intro","theorem":"false_imp","depth":0}
+{"state":"⊢ 1 + 1 = 2","tactic":"norm_num","theorem":"one_plus_one","depth":0}
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let mut filter = HashSet::new();
+        filter.insert("True_self".to_string());
+        filter.insert("one_plus_one".to_string());
+
+        let records = load_tactic_pairs(&path, Some(&filter)).unwrap();
+        assert_eq!(records.len(), 2);
+        let names: HashSet<_> = records.iter().map(|r| r.theorem_name.as_str()).collect();
+        assert!(names.contains("True_self"));
+        assert!(names.contains("one_plus_one"));
+        assert!(!names.contains("false_imp"));
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_remaining_depth() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        // Theorem with 4 steps: depth 0,1,2,3 → remaining 3,2,1,0
+        let content = r#"{"state":"s0","tactic":"t0","theorem":"thm","depth":0}
+{"state":"s1","tactic":"t1","theorem":"thm","depth":1}
+{"state":"s2","tactic":"t2","theorem":"thm","depth":2}
+{"state":"s3","tactic":"t3","theorem":"thm","depth":3}
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let records = load_tactic_pairs(&path, None).unwrap();
+        assert_eq!(records.len(), 4);
+        for r in &records {
+            let expected_remaining = 3 - r.depth_from_root as i32;
+            assert_eq!(r.remaining_depth, expected_remaining);
         }
     }
 

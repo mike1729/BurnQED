@@ -136,13 +136,21 @@ BASELINE_EBM_DIR="${REPO_ROOT}/checkpoints/ebm/baseline"
 mkdir -p "$BASELINE_EBM_DIR"
 
 if [ -f "${TRAJ_DIR}/baseline_raw.parquet" ]; then
+    TACTIC_PAIRS_FLAG=""
+    TACTIC_PAIRS_FILE="${REPO_ROOT}/data/tactic_pairs/train.jsonl"
+    if [ -f "$TACTIC_PAIRS_FILE" ]; then
+        TACTIC_PAIRS_FLAG="--tactic-pairs ${TACTIC_PAIRS_FILE}"
+    fi
+
+    # shellcheck disable=SC2086
     $PROVER train-ebm \
         --trajectories "${TRAJ_DIR}/baseline_raw.parquet" \
         --server-url "$SGLANG_URL" \
         --hidden-size "${HIDDEN_SIZE:-4096}" \
         --output-dir "$BASELINE_EBM_DIR" \
         --steps "$EBM_STEPS" \
-        --save-embeddings "${BASELINE_EBM_DIR}/embeddings.parquet"
+        --save-embeddings "${BASELINE_EBM_DIR}/embeddings.parquet" \
+        $TACTIC_PAIRS_FLAG
 
     echo "Baseline EBM saved to: ${BASELINE_EBM_DIR}"
 else

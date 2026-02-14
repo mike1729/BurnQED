@@ -9,6 +9,7 @@ burn-contrib = { path = "../burn-contrib" }
 trajectory = { path = "../trajectory" }
 anyhow = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
 arrow = { workspace = true }

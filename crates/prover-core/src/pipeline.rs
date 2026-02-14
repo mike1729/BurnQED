@@ -125,6 +125,8 @@ pub struct TrainEbmArgs {
     pub embeddings_cache: Option<PathBuf>,
     /// Save precomputed embeddings to this path for reuse.
     pub save_embeddings: Option<PathBuf>,
+    /// Path to tactic pairs JSONL file for augmenting training data.
+    pub tactic_pairs: Option<PathBuf>,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -973,7 +975,23 @@ pub fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 
     // 2. Load trajectory data
     tracing::info!("Loading trajectory data from {} file(s)", args.trajectories.len());
-    let sampler = match ContrastiveSampler::from_parquet(&args.trajectories, args.k_negatives) {
+    let mut records = ebm::load_records_from_parquet(&args.trajectories)?;
+    tracing::info!(records = records.len(), "Loaded trajectory records");
+
+    // 2b. Merge tactic pair positives (if provided)
+    if let Some(ref tactic_pairs_path) = args.tactic_pairs {
+        let theorem_names: HashSet<String> = records.iter().map(|r| r.theorem_name.clone()).collect();
+        let tp_records = ebm::load_tactic_pairs(tactic_pairs_path, Some(&theorem_names))?;
+        let tp_theorems: HashSet<&str> = tp_records.iter().map(|r| r.theorem_name.as_str()).collect();
+        tracing::info!(
+            tactic_pair_records = tp_records.len(),
+            tactic_pair_theorems = tp_theorems.len(),
+            "Merged tactic pair records for augmented training"
+        );
+        records.extend(tp_records);
+    }
+
+    let sampler = match ContrastiveSampler::from_trajectory_records(records, args.k_negatives) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "Cannot train EBM — not enough contrastive data");

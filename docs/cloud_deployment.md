@@ -241,33 +241,34 @@ rm -rf models/llm/iter_{0..3}/
 
 ## Cost Estimate
 
-### Per Iteration (RTX 4090 spot @ $0.35/hr)
+### Per Iteration
 
-| Step | GPU Hours | Cost (4090) | Cost (A100) |
-|------|-----------|-------------|-------------|
-| LLM fine-tune (iter 0: 1500 steps) | 2.5-3h | $0.90-1.05 | $3.75-4.50 |
-| LLM fine-tune (iter N: 800 steps) | 1-1.5h | $0.35-0.53 | $1.29-1.95 |
-| LLM export (merge + save) | 0.2h | $0.07 | $0.26 |
-| EBM training (2000 steps) | 1h | $0.35 | $1.29 |
-| Search (2000 theorems) | 3-5h | $1.05-1.75 | $3.87-6.45 |
-| Evaluation (miniF2F, budget 600) | 1-2h | $0.35-0.70 | $1.29-2.58 |
-| **Iteration 0 total** | ~10h | **~$3.50** | **~$13** |
-| **Iteration N total** | ~8h | **~$2.80** | **~$10** |
+| Step | GPU Hours | 4090 on-demand ($0.59) | 4090 spot ($0.35) | A100 ($1.29) |
+|------|-----------|------------------------|-------------------|--------------|
+| LLM fine-tune (iter 0: 1500 steps) | 2.5-3h | $1.48-1.77 | $0.90-1.05 | $3.75-4.50 |
+| LLM fine-tune (iter N: 800 steps) | 1-1.5h | $0.59-0.89 | $0.35-0.53 | $1.29-1.95 |
+| LLM export (merge + save) | 0.2h | $0.12 | $0.07 | $0.26 |
+| EBM training (2000 steps) | 1h | $0.59 | $0.35 | $1.29 |
+| Search (2000 theorems) | 3-5h | $1.77-2.95 | $1.05-1.75 | $3.87-6.45 |
+| Evaluation (miniF2F, budget 600) | 1-2h | $0.59-1.18 | $0.35-0.70 | $1.29-2.58 |
+| **Iteration 0 total** | ~10h | **~$5.90** | **~$3.50** | **~$13** |
+| **Iteration N total** | ~8h | **~$4.70** | **~$2.80** | **~$10** |
 
 ### Full 5-Iteration Run
 
-| Component | Cost (4090) | Cost (A100) |
-|-----------|-------------|-------------|
-| Iteration 0 | ~$3.50 | ~$13 |
-| Iterations 1-4 | ~$11 | ~$40 |
-| Persistent storage (200GB, 1 week) | ~$3-5 | ~$5-10 |
-| **Total** | **~$18-20** | **~$58-63** |
+| Component | 4090 on-demand | 4090 spot | A100 |
+|-----------|----------------|-----------|------|
+| Iteration 0 | ~$5.90 | ~$3.50 | ~$13 |
+| Iterations 1-4 | ~$19 | ~$11 | ~$40 |
+| Persistent storage (200GB, 1 week) | ~$3-5 | ~$3-5 | ~$5-10 |
+| **Total** | **~$28-30** | **~$18-20** | **~$58-63** |
 
 ### Budget Tips
 
-- Use RunPod RTX 4090 spot instances (~$0.32/hr vs A100 ~$1.29/hr)
-- Use spot for search (auto-resumes via `--resume-from`)
+- **Recommended**: RunPod Secure Cloud on-demand 4090 ($0.59/hr) — reliable, persistent volumes, ~2× cheaper than A100
+- Spot instances ($0.32-0.44/hr) are cheaper but get interrupted frequently on RunPod; only viable for search (auto-resumes via `--resume-from`), not for fine-tuning
 - Pre-compute embeddings once (`--save-embeddings`), reuse for EBM training
+- Stop the pod when idle — persistent Network Volume costs ~$0.10/GB/month (storage only)
 
 ## Monitoring
 

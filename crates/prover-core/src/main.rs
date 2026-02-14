@@ -154,6 +154,9 @@ enum Command {
         /// Save precomputed embeddings to this path for reuse.
         #[arg(long)]
         save_embeddings: Option<PathBuf>,
+        /// Path to tactic pairs JSONL file for augmenting training data.
+        #[arg(long)]
+        tactic_pairs: Option<PathBuf>,
     },
 }
 
@@ -248,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
             k_negatives,
             embeddings_cache,
             save_embeddings,
+            tactic_pairs,
         } => pipeline::run_train_ebm(TrainEbmArgs {
             trajectories,
             output_dir,
@@ -260,6 +264,7 @@ async fn main() -> anyhow::Result<()> {
             k_negatives,
             embeddings_cache,
             save_embeddings,
+            tactic_pairs,
         }),
     }
 }

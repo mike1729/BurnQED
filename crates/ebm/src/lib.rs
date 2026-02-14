@@ -35,7 +35,10 @@ pub use inference::{EBMScorer, EBMValueFn};
 
 // -- Training re-exports --
 pub use training::cache::EmbeddingCache;
-pub use training::data::{ContrastiveSample, ContrastiveSampler, ProofStateRecord};
+pub use training::data::{
+    load_records_from_parquet, load_tactic_pairs, ContrastiveSample, ContrastiveSampler,
+    ProofStateRecord,
+};
 pub use training::loss::{depth_regression_loss, info_nce_loss};
 pub use training::metrics::{EBMMetrics, MetricsHistory};
 pub use training::trainer::{lr_schedule, resume_from_checkpoint, train, EBMTrainingConfig};

@@ -74,6 +74,12 @@ if [ "$ITER" -gt 0 ]; then
 
     EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"
 
+    TACTIC_PAIRS_FLAG=""
+    TACTIC_PAIRS_FILE="${REPO_ROOT}/data/tactic_pairs/train.jsonl"
+    if [ -f "$TACTIC_PAIRS_FILE" ]; then
+        TACTIC_PAIRS_FLAG="--tactic-pairs ${TACTIC_PAIRS_FILE}"
+    fi
+
     # shellcheck disable=SC2086
     $PROVER train-ebm \
         --trajectories "${TRAJ_FILES[@]}" \
@@ -82,7 +88,8 @@ if [ "$ITER" -gt 0 ]; then
         --output-dir "$EBM_DIR" \
         --steps "$EBM_STEPS" \
         --save-embeddings "$EMBEDDINGS_SAVE" \
-        $RESUME_FLAG
+        $RESUME_FLAG \
+        $TACTIC_PAIRS_FLAG
 else
     echo ""
     echo "=== Step 2: Skipping EBM training (iteration 0) ==="
