@@ -150,7 +150,7 @@ def train(args):
         device_map={"": 0},
         trust_remote_code=True,
         dtype=torch.bfloat16,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
     )
     model.config.use_cache = False  # Required for gradient checkpointing
     model.enable_input_require_grads()  # Required for QLoRA + gradient checkpointing
