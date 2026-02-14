@@ -160,6 +160,10 @@ enum Command {
         /// Number of concurrent encode requests during embedding precomputation.
         #[arg(long, default_value_t = 32)]
         encode_concurrency: usize,
+        /// Batch size for batched encode requests. Each batch is a single HTTP request
+        /// to SGLang, enabling GPU-optimal batching. Set to 0 for individual requests.
+        #[arg(long, default_value_t = 8)]
+        encode_batch_size: usize,
     },
 }
 
@@ -256,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
             save_embeddings,
             tactic_pairs,
             encode_concurrency,
+            encode_batch_size,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -271,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
                 save_embeddings,
                 tactic_pairs,
                 encode_concurrency,
+                encode_batch_size,
             })
             .await
         }

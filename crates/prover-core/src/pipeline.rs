@@ -128,6 +128,8 @@ pub struct TrainEbmArgs {
     pub tactic_pairs: Option<PathBuf>,
     /// Number of concurrent encode requests during embedding precomputation.
     pub encode_concurrency: usize,
+    /// Batch size for batched encode requests (0 = use individual concurrent requests).
+    pub encode_batch_size: usize,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -1034,20 +1036,45 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 
     let unique_states = sampler.unique_states();
     let encode_concurrency = args.encode_concurrency;
-    let (newly_encoded, encode_errors) = cache
-        .precompute_concurrent(
-            &unique_states,
-            |state: String| {
-                let h = handle.clone();
-                async move {
-                    let emb = h.encode(&state).await?;
-                    Ok(emb.data)
-                }
-            },
-            encode_concurrency,
-            hidden_size,
-        )
-        .await;
+    let encode_batch_size = args.encode_batch_size;
+
+    let (newly_encoded, encode_errors) = if encode_batch_size > 0 {
+        // Batched: send N texts per HTTP request for GPU-optimal batching
+        cache
+            .precompute_batched(
+                &unique_states,
+                |texts: Vec<String>| {
+                    let h = handle.clone();
+                    async move {
+                        let embeddings = h.encode_batch(&texts).await?;
+                        Ok(embeddings
+                            .into_iter()
+                            .map(|r| r.map(|emb| emb.data))
+                            .collect())
+                    }
+                },
+                encode_batch_size,
+                encode_concurrency,
+                hidden_size,
+            )
+            .await
+    } else {
+        // Individual concurrent requests (fallback)
+        cache
+            .precompute_concurrent(
+                &unique_states,
+                |state: String| {
+                    let h = handle.clone();
+                    async move {
+                        let emb = h.encode(&state).await?;
+                        Ok(emb.data)
+                    }
+                },
+                encode_concurrency,
+                hidden_size,
+            )
+            .await
+    };
 
     if encode_errors > 0 {
         tracing::warn!(

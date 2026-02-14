@@ -56,6 +56,17 @@ struct GenerateRequest {
     return_hidden_states: bool,
 }
 
+/// Batch request: `text` is a list of prompts, SGLang batches them in one GPU forward pass.
+#[derive(Serialize)]
+struct BatchGenerateRequest {
+    text: Vec<String>,
+    sampling_params: SamplingParams,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    return_logprob: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    return_hidden_states: bool,
+}
+
 #[derive(Serialize)]
 struct SamplingParams {
     max_new_tokens: usize,
@@ -178,7 +189,7 @@ impl SglangClient {
                 return_hidden_states: false,
             };
 
-            let resp = self.post_with_retry(&url, &request).await?;
+            let resp = self.post_with_retry(&url, &request, None).await?;
             let body = resp.bytes().await?;
             match serde_json::from_slice::<serde_json::Value>(&body) {
                 Ok(val) => {
@@ -267,16 +278,84 @@ impl SglangClient {
         };
 
         let url = self.base_url.join("/generate")?;
-        let resp = self.post_with_retry(&url, &request).await?;
+        let resp = self.post_with_retry(&url, &request, None).await?;
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode SGLang encode response: {e}"))?;
 
-        // Extract hidden_states from meta_info: shape (1, num_tokens, hidden_size)
-        let hs_value = body.get("meta_info")
+        self.parse_hidden_states(&body)
+    }
+
+    /// Encode a batch of proof states in a single HTTP request.
+    ///
+    /// SGLang's `/generate` endpoint accepts `text: [list]` for batch requests,
+    /// batching them in one GPU forward pass. Returns per-input results so
+    /// individual failures don't discard the whole batch.
+    pub async fn encode_batch(&self, texts: &[String]) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let prompts: Vec<String> = texts.iter().map(|t| self.format_prompt(t)).collect();
+
+        let request = BatchGenerateRequest {
+            text: prompts,
+            sampling_params: SamplingParams {
+                max_new_tokens: 1,
+                temperature: Some(0.0),
+                top_p: None,
+                n: None,
+            },
+            return_logprob: false,
+            return_hidden_states: true,
+        };
+
+        let url = self.base_url.join("/generate")?;
+        // 300s timeout: batch responses can be ~50MB JSON for batch_size=8
+        let resp = self
+            .post_with_retry(&url, &request, Some(Duration::from_secs(300)))
+            .await?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            anyhow::anyhow!("Failed to decode SGLang batch encode response: {e}")
+        })?;
+
+        // SGLang returns a JSON array when text is a list
+        let items = body.as_array().ok_or_else(|| {
+            let preview: String = body.to_string().chars().take(200).collect();
+            anyhow::anyhow!(
+                "Expected JSON array for batch response, got: {preview}"
+            )
+        })?;
+
+        if items.len() != texts.len() {
+            anyhow::bail!(
+                "Batch response length mismatch: expected {}, got {}",
+                texts.len(),
+                items.len()
+            );
+        }
+
+        let results: Vec<anyhow::Result<Embedding>> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                self.parse_hidden_states(item)
+                    .map_err(|e| anyhow::anyhow!("Batch item {i}: {e}"))
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Extract hidden states from a response JSON object and mean-pool to an embedding.
+    fn parse_hidden_states(&self, body: &serde_json::Value) -> anyhow::Result<Embedding> {
+        let hs_value = body
+            .get("meta_info")
             .and_then(|m| m.get("hidden_states"))
-            .ok_or_else(|| anyhow::anyhow!(
-                "Server did not return hidden_states. Ensure --enable-return-hidden-states is set."
-            ))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Server did not return hidden_states. Ensure --enable-return-hidden-states is set."
+                )
+            })?;
 
         let token_states: Vec<Vec<f32>> = hs_value
             .as_array()
@@ -285,8 +364,13 @@ impl SglangClient {
             .ok_or_else(|| anyhow::anyhow!("Empty hidden_states batch dimension"))?
             .iter()
             .map(|token| {
-                token.as_array()
-                    .map(|arr| arr.iter().filter_map(|v| v.as_f64().map(|f| f as f32)).collect())
+                token
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_f64().map(|f| f as f32))
+                            .collect()
+                    })
                     .unwrap_or_default()
             })
             .collect();
@@ -338,10 +422,14 @@ impl SglangClient {
     }
 
     /// POST with retry (up to 3 attempts with exponential backoff on 5xx).
-    async fn post_with_retry(
+    ///
+    /// An optional `timeout` overrides the client default (useful for large
+    /// batch requests that produce multi-MB responses).
+    async fn post_with_retry<T: Serialize>(
         &self,
         url: &Url,
-        body: &GenerateRequest,
+        body: &T,
+        timeout: Option<Duration>,
     ) -> anyhow::Result<reqwest::Response> {
         let mut last_err = None;
         for attempt in 0..3 {
@@ -351,7 +439,12 @@ impl SglangClient {
                 tokio::time::sleep(delay).await;
             }
 
-            match self.client.post(url.clone()).json(body).send().await {
+            let mut req = self.client.post(url.clone()).json(body);
+            if let Some(t) = timeout {
+                req = req.timeout(t);
+            }
+
+            match req.send().await {
                 Ok(resp) if resp.status().is_server_error() => {
                     let status = resp.status();
                     let body_text = resp.text().await.unwrap_or_default();
@@ -470,6 +563,83 @@ mod tests {
         // false bools should be skipped
         assert!(json.get("return_logprob").is_none());
         assert!(json.get("return_hidden_states").is_none());
+    }
+
+    #[test]
+    fn test_batch_request_serializes_text_as_array() {
+        let req = BatchGenerateRequest {
+            text: vec!["prompt1".to_string(), "prompt2".to_string()],
+            sampling_params: SamplingParams {
+                max_new_tokens: 1,
+                temperature: Some(0.0),
+                top_p: None,
+                n: None,
+            },
+            return_logprob: false,
+            return_hidden_states: true,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        let text_arr = json["text"].as_array().unwrap();
+        assert_eq!(text_arr.len(), 2);
+        assert_eq!(text_arr[0], "prompt1");
+        assert_eq!(text_arr[1], "prompt2");
+        assert_eq!(json["return_hidden_states"], true);
+        assert!(json.get("return_logprob").is_none());
+    }
+
+    #[test]
+    fn test_parse_hidden_states_extracts_embedding() {
+        let config = SglangConfig {
+            server_url: "http://localhost:30000".to_string(),
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tactic_tokens: 128,
+            hidden_size: 3,
+        };
+        let client = SglangClient {
+            client: Client::new(),
+            base_url: Url::parse("http://localhost:30000").unwrap(),
+            config,
+        };
+
+        // Simulated response: 2 tokens × 3 dims
+        let body = serde_json::json!({
+            "meta_info": {
+                "hidden_states": [[[1.0, 2.0, 3.0], [3.0, 4.0, 5.0]]]
+            }
+        });
+
+        let emb = client.parse_hidden_states(&body).unwrap();
+        assert_eq!(emb.dim, 3);
+        // Mean of [1,2,3] and [3,4,5] = [2,3,4]
+        assert!((emb.data[0] - 2.0).abs() < 1e-6);
+        assert!((emb.data[1] - 3.0).abs() < 1e-6);
+        assert!((emb.data[2] - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_hidden_states_rejects_wrong_dim() {
+        let config = SglangConfig {
+            server_url: "http://localhost:30000".to_string(),
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tactic_tokens: 128,
+            hidden_size: 4096,
+        };
+        let client = SglangClient {
+            client: Client::new(),
+            base_url: Url::parse("http://localhost:30000").unwrap(),
+            config,
+        };
+
+        let body = serde_json::json!({
+            "meta_info": {
+                "hidden_states": [[[1.0, 2.0, 3.0]]]
+            }
+        });
+
+        let err = client.parse_hidden_states(&body).unwrap_err();
+        assert!(err.to_string().contains("Hidden size mismatch"));
     }
 
     #[test]

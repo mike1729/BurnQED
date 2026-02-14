@@ -185,6 +185,131 @@ impl EmbeddingCache {
         (encoded, errors)
     }
 
+    /// Precompute embeddings in batches for GPU-optimal throughput.
+    ///
+    /// Chunks missing states into groups of `batch_size`, sends each chunk to
+    /// `encode_batch_fn` (which should issue a single batched HTTP request),
+    /// and processes up to `concurrency` chunks concurrently via
+    /// `buffer_unordered`. Progress bar increments per state (not per batch).
+    ///
+    /// Returns `(newly_encoded, errors)`.
+    pub async fn precompute_batched<F, Fut>(
+        &mut self,
+        states: &HashSet<&str>,
+        encode_batch_fn: F,
+        batch_size: usize,
+        concurrency: usize,
+        dim: usize,
+    ) -> (usize, usize)
+    where
+        F: Fn(Vec<String>) -> Fut,
+        Fut: Future<Output = anyhow::Result<Vec<anyhow::Result<Vec<f32>>>>>,
+    {
+        // Filter to states not already cached
+        let missing: Vec<String> = states
+            .iter()
+            .filter(|s| !self.embeddings.contains_key(**s))
+            .map(|s| s.to_string())
+            .collect();
+
+        if missing.is_empty() {
+            tracing::info!("All {} states already cached — skipping precompute", states.len());
+            return (0, 0);
+        }
+
+        let total = missing.len();
+        let batch_size = batch_size.max(1);
+        let num_batches = (total + batch_size - 1) / batch_size;
+
+        tracing::info!(
+            total_states = states.len(),
+            cached = states.len() - total,
+            to_encode = total,
+            batch_size,
+            num_batches,
+            concurrency,
+            "Starting batched embedding precomputation"
+        );
+
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) Encoding embeddings (batched)")
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
+                .progress_chars("=> "),
+        );
+
+        let mut encoded = 0usize;
+        let mut errors = 0usize;
+
+        // Chunk missing states into batches, stream with bounded concurrency
+        let chunks: Vec<Vec<String>> = missing
+            .chunks(batch_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+
+        let mut result_stream = stream::iter(chunks.into_iter().map(|chunk| {
+            let fut = encode_batch_fn(chunk.clone());
+            async move { (chunk, fut.await) }
+        }))
+        .buffer_unordered(concurrency);
+
+        while let Some((chunk, batch_result)) = result_stream.next().await {
+            match batch_result {
+                Ok(results) => {
+                    for (state, result) in chunk.iter().zip(results.into_iter()) {
+                        match result {
+                            Ok(emb) => {
+                                debug_assert_eq!(
+                                    emb.len(),
+                                    dim,
+                                    "Embedding dim mismatch: expected {dim}, got {}",
+                                    emb.len()
+                                );
+                                self.embeddings.insert(state.clone(), emb);
+                                encoded += 1;
+                            }
+                            Err(e) => {
+                                errors += 1;
+                                tracing::debug!(state = %state, error = %e, "Failed to encode state in batch");
+                            }
+                        }
+                        pb.inc(1);
+                    }
+                }
+                Err(e) => {
+                    // Whole batch failed — count all states as errors
+                    errors += chunk.len();
+                    tracing::warn!(
+                        batch_size = chunk.len(),
+                        error = %e,
+                        "Entire batch failed to encode"
+                    );
+                    pb.inc(chunk.len() as u64);
+                }
+            }
+        }
+
+        pb.finish_with_message("done");
+
+        if errors > 0 {
+            tracing::warn!(
+                errors,
+                "Some states failed to encode (use RUST_LOG=debug for details)"
+            );
+        }
+
+        tracing::info!(
+            total_states = states.len(),
+            newly_encoded = encoded,
+            errors,
+            total_cached = self.embeddings.len(),
+            "Batched embedding precomputation complete"
+        );
+
+        (encoded, errors)
+    }
+
     /// Look up the embedding for a proof state.
     pub fn get(&self, state_pp: &str) -> Option<&[f32]> {
         self.embeddings.get(state_pp).map(|v| v.as_slice())
@@ -470,6 +595,74 @@ mod tests {
         assert_eq!(cache.len(), 2);
         assert!(cache.get("⊢ A").is_some());
         assert!(cache.get("⊢ B").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_precompute_batched_groups_and_handles_errors() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let call_count = Arc::new(AtomicUsize::new(0));
+
+        // Pre-populate cache with one state
+        let mut cache = EmbeddingCache::new(2);
+        cache.insert("⊢ cached".to_string(), vec![9.0, 9.0]);
+
+        // 5 states: 1 cached, 3 new, 1 that will fail inside a batch
+        let states: HashSet<&str> =
+            ["⊢ cached", "⊢ a", "⊢ b", "⊢ c", "⊢ fail"].into_iter().collect();
+
+        let cc = call_count.clone();
+        let encode_batch_fn = move |texts: Vec<String>| {
+            let cc = cc.clone();
+            async move {
+                cc.fetch_add(1, Ordering::SeqCst);
+                let results: Vec<anyhow::Result<Vec<f32>>> = texts
+                    .iter()
+                    .map(|t| {
+                        if t == "⊢ fail" {
+                            Err(anyhow::anyhow!("simulated failure"))
+                        } else {
+                            Ok(vec![1.0, 2.0])
+                        }
+                    })
+                    .collect();
+                Ok(results)
+            }
+        };
+
+        let (encoded, errors) = cache
+            .precompute_batched(&states, encode_batch_fn, 2, 4, 2)
+            .await;
+
+        // "⊢ cached" skipped; 3 new encoded; 1 error
+        assert_eq!(encoded, 3);
+        assert_eq!(errors, 1);
+        assert_eq!(cache.get("⊢ cached"), Some(&[9.0, 9.0][..]));
+        assert!(cache.get("⊢ a").is_some());
+        assert!(cache.get("⊢ b").is_some());
+        assert!(cache.get("⊢ c").is_some());
+        assert!(cache.get("⊢ fail").is_none());
+        assert_eq!(cache.len(), 4); // 1 pre-existing + 3 new
+
+        // 4 missing states, batch_size=2 → 2 batch calls
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_precompute_batched_whole_batch_failure() {
+        let mut cache = EmbeddingCache::new(2);
+        let states: HashSet<&str> = ["⊢ x", "⊢ y"].into_iter().collect();
+
+        let encode_batch_fn = |_texts: Vec<String>| async move {
+            Err(anyhow::anyhow!("HTTP timeout"))
+        };
+
+        let (encoded, errors) = cache
+            .precompute_batched(&states, encode_batch_fn, 4, 1, 2)
+            .await;
+
+        assert_eq!(encoded, 0);
+        assert_eq!(errors, 2);
+        assert!(cache.is_empty());
     }
 
     #[tokio::test]

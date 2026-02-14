@@ -53,6 +53,16 @@ impl InferenceHandle {
             tokio::runtime::Handle::current().block_on(self.encode(text))
         })
     }
+
+    /// Encode a batch of proof states in a single HTTP request (async).
+    ///
+    /// Returns per-input results so individual failures don't discard the batch.
+    pub async fn encode_batch(
+        &self,
+        texts: &[String],
+    ) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+        self.0.encode_batch(texts).await
+    }
 }
 
 #[cfg(test)]
