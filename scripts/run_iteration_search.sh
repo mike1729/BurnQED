@@ -1,0 +1,214 @@
+#!/bin/bash
+# Steps 2-5 of an expert iteration: EBM training, proof search, eval, summary.
+#
+# Run this after run_iteration_train.sh and restarting SGLang with the new model.
+#
+# Usage:
+#   ./scripts/run_iteration_search.sh <iteration_number>
+#   ./scripts/run_iteration_search.sh 0
+#   NUM_WORKERS=30 ./scripts/run_iteration_search.sh 1
+
+set -euo pipefail
+
+ITER=${1:?"Usage: ./scripts/run_iteration_search.sh <iteration_number>"}
+PREV=$((ITER - 1))
+
+# ── Paths ──────────────────────────────────────────────────────────────────
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$(dirname "$0")/_lib.sh"
+LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
+EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
+TRAJ_DIR="${REPO_ROOT}/trajectories"
+EVAL_DIR="${REPO_ROOT}/eval_results"
+THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
+MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
+SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+ensure_sglang "$SGLANG_URL"
+CONCURRENCY="${CONCURRENCY:-6}"
+NUM_WORKERS="${NUM_WORKERS:-6}"
+MAX_THEOREMS="${MAX_THEOREMS:-2000}"
+EBM_STEPS="${EBM_STEPS:-10000}"
+SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
+
+PROVER="cargo run --release -p prover-core --"
+
+mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$EBM_DIR"
+mkdir -p "${REPO_ROOT}/logs"
+
+echo "================================================================"
+echo "  Expert Iteration ${ITER} — Search & Eval"
+echo "================================================================"
+echo "  LLM model:      ${LLM_DIR}"
+echo "  EBM output:     ${EBM_DIR}"
+echo "  Trajectory dir:  ${TRAJ_DIR}"
+echo "  Theorem index:   ${THEOREM_INDEX}"
+echo "  Config:          ${SEARCH_CONFIG}"
+echo "  SGLang:          ${SGLANG_URL}"
+echo "  Workers:         ${NUM_WORKERS}"
+echo "  Concurrency:     ${CONCURRENCY}"
+echo "  Max theorems:    ${MAX_THEOREMS}"
+echo "  EBM steps:       ${EBM_STEPS}"
+echo "================================================================"
+
+# ── Step 2: EBM Training (skip iteration 0) ───────────────────────────────
+if [ "$ITER" -gt 0 ]; then
+    echo ""
+    echo "=== Step 2: EBM Training ==="
+
+    TRAJ_FILES=()
+    for i in $(seq 0 "$PREV"); do
+        pattern="${TRAJ_DIR}/iter_${i}*.parquet"
+        # shellcheck disable=SC2086
+        for f in $pattern; do
+            [ -f "$f" ] && TRAJ_FILES+=("$f")
+        done
+    done
+
+    RESUME_FLAG=""
+    PREV_EBM="${REPO_ROOT}/checkpoints/ebm/iter_${PREV}"
+    if [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
+        RESUME_FLAG="--resume-from ${PREV_EBM}"
+    fi
+
+    EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"
+
+    # shellcheck disable=SC2086
+    $PROVER train-ebm \
+        --trajectories "${TRAJ_FILES[@]}" \
+        --server-url "$SGLANG_URL" \
+        --hidden-size "${HIDDEN_SIZE:-4096}" \
+        --output-dir "$EBM_DIR" \
+        --steps "$EBM_STEPS" \
+        --save-embeddings "$EMBEDDINGS_SAVE" \
+        $RESUME_FLAG
+else
+    echo ""
+    echo "=== Step 2: Skipping EBM training (iteration 0) ==="
+fi
+
+# ── Step 3: Proof Search ──────────────────────────────────────────────────
+echo ""
+echo "=== Step 3: Proof Search ==="
+
+EBM_FLAG=""
+if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
+    EBM_FLAG="--ebm-path ${EBM_DIR}"
+fi
+
+TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
+
+# shellcheck disable=SC2086
+$PROVER search \
+    --config "$SEARCH_CONFIG" \
+    --server-url "$SGLANG_URL" \
+    $EBM_FLAG \
+    --theorems "$THEOREM_INDEX" \
+    --output "$TRAJ_OUTPUT" \
+    --num-workers "$NUM_WORKERS" \
+    --concurrency "$CONCURRENCY" \
+    --max-theorems "$MAX_THEOREMS" \
+    --num-candidates 8 \
+    --imports Mathlib
+
+# ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
+if [ "$ITER" -eq 0 ]; then
+    echo ""
+    echo "=== Step 3b: Noise Injection Search (temperature=1.2) ==="
+
+    NOISY_OUTPUT="${TRAJ_DIR}/iter_0_noisy.parquet"
+
+    $PROVER search \
+        --config "$SEARCH_CONFIG" \
+        --server-url "$SGLANG_URL" \
+        --temperature 1.2 \
+        --theorems "$THEOREM_INDEX" \
+        --output "$NOISY_OUTPUT" \
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 8 \
+        --imports Mathlib
+fi
+
+# ── Step 4: Evaluation ────────────────────────────────────────────────────
+echo ""
+echo "=== Step 4: Evaluation ==="
+
+if [ -f "$MINIF2F" ]; then
+    EVAL_THEOREMS="$MINIF2F"
+else
+    echo "Warning: miniF2F file not found at ${MINIF2F}, using theorem_index.json"
+    EVAL_THEOREMS="$THEOREM_INDEX"
+fi
+
+# Eval WITH EBM (if available)
+# shellcheck disable=SC2086
+$PROVER eval \
+    --config "$SEARCH_CONFIG" \
+    --server-url "$SGLANG_URL" \
+    $EBM_FLAG \
+    --theorems "$EVAL_THEOREMS" \
+    --budgets 600 \
+    --output "${EVAL_DIR}/iter_${ITER}.json" \
+    --num-workers "$NUM_WORKERS" \
+    --concurrency "$CONCURRENCY" \
+    --max-theorems "$MAX_THEOREMS" \
+    --num-candidates 16 \
+    --imports Mathlib
+
+# ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
+if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
+    echo ""
+    echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
+
+    $PROVER eval \
+        --config "$SEARCH_CONFIG" \
+        --server-url "$SGLANG_URL" \
+        --theorems "$EVAL_THEOREMS" \
+        --budgets 600 \
+        --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 16 \
+        --imports Mathlib
+fi
+
+# ── Step 5: Summary ──────────────────────────────────────────────────────
+echo ""
+echo "=== Step 5: Trajectory Summary ==="
+$PROVER summary --input "$TRAJ_OUTPUT"
+
+# Compare with previous iteration if available
+if [ "$ITER" -gt 0 ]; then
+    PREV_EVAL="${EVAL_DIR}/iter_${PREV}.json"
+    CURR_EVAL="${EVAL_DIR}/iter_${ITER}.json"
+    if [ -f "$PREV_EVAL" ] && [ -f "$CURR_EVAL" ]; then
+        echo ""
+        echo "=== Cross-Iteration Comparison ==="
+        $PROVER compare --results "$PREV_EVAL" "$CURR_EVAL"
+    fi
+
+    # EBM ablation comparison
+    NO_EBM_EVAL="${EVAL_DIR}/iter_${ITER}_no_ebm.json"
+    if [ -f "$NO_EBM_EVAL" ] && [ -f "$CURR_EVAL" ]; then
+        echo ""
+        echo "=== EBM Ablation Comparison ==="
+        $PROVER compare --results "$NO_EBM_EVAL" "$CURR_EVAL"
+    fi
+fi
+
+echo ""
+echo "================================================================"
+echo "  Iteration ${ITER} search & eval complete!"
+echo "  Trajectory:  ${TRAJ_OUTPUT}"
+echo "  Eval:        ${EVAL_DIR}/iter_${ITER}.json"
+if [ "$ITER" -gt 0 ] && [ -f "${EVAL_DIR}/iter_${ITER}_no_ebm.json" ]; then
+    echo "  Ablation:    ${EVAL_DIR}/iter_${ITER}_no_ebm.json"
+fi
+echo "  LLM:         ${LLM_DIR}"
+if [ "$ITER" -gt 0 ]; then
+    echo "  EBM:         ${EBM_DIR}"
+fi
+echo "================================================================"
