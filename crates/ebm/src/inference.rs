@@ -101,6 +101,12 @@ impl<B: Backend> EBMScorer<B> {
 ///
 /// A `Mutex` is needed because burn's `Param` types contain `OnceCell` which
 /// is not `Sync`. The `Mutex` provides `Sync` for the `Send`-only scorer.
+///
+/// **Important**: When calling `score()` from an async context (e.g. tokio),
+/// callers MUST wrap the call in `block_in_place` to avoid thread starvation.
+/// Without this, concurrent tasks blocking on `mutex.lock()` starve the tokio
+/// thread pool, preventing HTTP futures from completing — a classic deadlock.
+/// See `search::adapters::ValueScorer for EBMValueFn` for the correct pattern.
 pub struct EBMValueFn {
     score_fn: Box<dyn Fn(&str) -> anyhow::Result<f64> + Send + Sync>,
 }

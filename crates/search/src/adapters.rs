@@ -103,6 +103,16 @@ impl PolicyProvider for InferencePolicyProvider {
 
 impl ValueScorer for EBMValueFn {
     fn score(&self, proof_state: &str) -> Result<f64, SearchError> {
-        self.score(proof_state).map_err(SearchError::Scorer)
+        // block_in_place tells tokio this thread will block (on the internal
+        // Mutex + encode HTTP call), so it spawns a replacement worker.
+        // Without this, concurrent search tasks starve the thread pool.
+        // Falls back to direct call when not on a multi-threaded runtime (tests).
+        let score_fn = || self.score(proof_state).map_err(SearchError::Scorer);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(score_fn)
+            }
+            _ => score_fn(),
+        }
     }
 }

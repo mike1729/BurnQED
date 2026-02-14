@@ -18,6 +18,9 @@ with nearly identical performance for 7B models. Use spot instances for search
 
 **Important**: Ensure the instance has 8+ vCPUs and 32GB+ RAM for Lean workers.
 
+**RunPod note**: Community Cloud pods do NOT support persistent Network Volumes.
+You must use Secure Cloud (spot or on-demand) to attach a Network Volume.
+
 ## Hardware Requirements
 
 ### LLM Fine-Tuning (QLoRA)
