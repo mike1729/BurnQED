@@ -1825,7 +1825,7 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
 name = "ebm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -4039,7 +4039,7 @@ dependencies = [
 
 [[package]]
 name = "policy"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -4144,7 +4144,7 @@ dependencies = [
 
 [[package]]
 name = "prover-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "burn",

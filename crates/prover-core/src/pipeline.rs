@@ -1225,6 +1225,15 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 // Generate-negatives pipeline
 // ---------------------------------------------------------------------------
 
+/// Built-in Lean 4 tactics tried at each proof step as additional candidates.
+/// These are cheap (no LLM call) and frequently produce valid divergent states
+/// where LLM-generated candidates mostly produce `TacticResult::Failed`.
+const PROBE_TACTICS: &[&str] = &[
+    "simp", "ring", "omega", "norm_num", "decide", "trivial", "rfl", "tauto",
+    "linarith", "push_neg", "contradiction", "exfalso", "constructor", "ext",
+    "simp_all", "intro _",
+];
+
 /// Process a single theorem: walk the ground-truth proof path, generate LLM
 /// candidates at each step, and classify them as Positive or Negative.
 async fn process_theorem(
@@ -1563,6 +1572,126 @@ async fn process_theorem(
             // Early stop if we have enough negatives
             if outcome.negatives >= target_negatives {
                 break;
+            }
+        }
+
+        // Try probe tactics — built-in Lean 4 tactics that commonly apply.
+        // These are cheap (no LLM call) and often produce valid divergent
+        // states, boosting negative yield where LLM candidates mostly fail.
+        if outcome.negatives < target_negatives {
+            let llm_tried: HashSet<String> = candidates
+                .iter()
+                .map(|c| normalize_tactic(&c.text))
+                .collect();
+            let mut probe_hits = 0usize;
+
+            for probe in PROBE_TACTICS {
+                let probe_normalized = normalize_tactic(probe);
+                if probe_normalized == gt_normalized
+                    || llm_tried.contains(&probe_normalized)
+                {
+                    continue;
+                }
+
+                let probe_wrapped = if let Some(ref prefix) = open_prefix {
+                    format!("{}{}", prefix, probe)
+                } else {
+                    probe.to_string()
+                };
+
+                match handle
+                    .run_tactic(current_state_id, Some(0), &probe_wrapped)
+                    .await
+                {
+                    Ok(TacticResult::ProofComplete { .. }) => {
+                        outcome.records.push(TrajectoryRecord {
+                            theorem_name: theorem_name.to_string(),
+                            state_id: current_state_id,
+                            state_pp: state_pp.clone(),
+                            tactic_applied: probe.to_string(),
+                            parent_state_id: if step_idx == 0 {
+                                None
+                            } else {
+                                Some(current_state_id.saturating_sub(1))
+                            },
+                            label: TrajectoryLabel::Positive,
+                            depth_from_root: step.depth,
+                            remaining_depth,
+                            llm_log_prob: 0.0,
+                            ebm_score: 0.0,
+                            is_proof_complete: true,
+                            timestamp_ms: 0,
+                        });
+                        outcome.positives += 1;
+                        outcome.alternative_proofs += 1;
+                        probe_hits += 1;
+                    }
+                    Ok(TacticResult::Success { goals, .. }) if goals.is_empty() => {
+                        outcome.records.push(TrajectoryRecord {
+                            theorem_name: theorem_name.to_string(),
+                            state_id: current_state_id,
+                            state_pp: state_pp.clone(),
+                            tactic_applied: probe.to_string(),
+                            parent_state_id: if step_idx == 0 {
+                                None
+                            } else {
+                                Some(current_state_id.saturating_sub(1))
+                            },
+                            label: TrajectoryLabel::Positive,
+                            depth_from_root: step.depth,
+                            remaining_depth,
+                            llm_log_prob: 0.0,
+                            ebm_score: 0.0,
+                            is_proof_complete: true,
+                            timestamp_ms: 0,
+                        });
+                        outcome.positives += 1;
+                        outcome.alternative_proofs += 1;
+                        probe_hits += 1;
+                    }
+                    Ok(TacticResult::Success { goals, .. }) => {
+                        let neg_state_pp = goals
+                            .first()
+                            .map(|g| g.raw.clone())
+                            .unwrap_or_default();
+                        outcome.records.push(TrajectoryRecord {
+                            theorem_name: theorem_name.to_string(),
+                            state_id: current_state_id,
+                            state_pp: neg_state_pp,
+                            tactic_applied: probe.to_string(),
+                            parent_state_id: if step_idx == 0 {
+                                None
+                            } else {
+                                Some(current_state_id.saturating_sub(1))
+                            },
+                            label: TrajectoryLabel::Negative,
+                            depth_from_root: step.depth + 1,
+                            remaining_depth: -1,
+                            llm_log_prob: 0.0,
+                            ebm_score: 0.0,
+                            is_proof_complete: false,
+                            timestamp_ms: 0,
+                        });
+                        outcome.negatives += 1;
+                        probe_hits += 1;
+                    }
+                    Ok(TacticResult::Failed { .. }) | Err(_) => {
+                        // Expected — most probe tactics won't apply
+                    }
+                }
+
+                if outcome.negatives >= target_negatives {
+                    break;
+                }
+            }
+
+            if probe_hits > 0 {
+                tracing::debug!(
+                    theorem = theorem_name,
+                    step = step_idx,
+                    probe_hits,
+                    "Probe tactics produced records"
+                );
             }
         }
 
@@ -1921,7 +2050,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
     println!(" Output:              {}", args.output.display());
     println!(" Wall time:           {:.1}s", elapsed.as_secs_f64());
     println!(" Concurrency:         {concurrency}");
-    println!(" Candidates/step:     {candidates_per_step}");
+    println!(" Candidates/step:     {candidates_per_step} LLM + {} probe", PROBE_TACTICS.len());
     println!(" Target negs/theorem: {target_negatives}");
     println!("──────────────────────────────────────────");
     println!(" Depth Distribution:");
@@ -1983,5 +2112,21 @@ mod tests {
             "rw [Nat.add_comm]"
         );
         assert_eq!(normalize_tactic("exact h"), "exact h");
+    }
+
+    #[test]
+    fn test_probe_tactics_no_duplicates() {
+        let mut seen = std::collections::HashSet::new();
+        for tactic in PROBE_TACTICS {
+            assert!(
+                seen.insert(normalize_tactic(tactic)),
+                "Duplicate probe tactic: {tactic}"
+            );
+        }
+        assert!(
+            PROBE_TACTICS.len() >= 10,
+            "Expected at least 10 probe tactics, got {}",
+            PROBE_TACTICS.len()
+        );
     }
 }
