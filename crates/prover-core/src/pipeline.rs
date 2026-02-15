@@ -1322,7 +1322,9 @@ async fn process_theorem(
             "Generated candidates for step"
         );
 
-        // Try each non-ground-truth candidate
+        // Try each non-ground-truth candidate.
+        // Wrap with open prefix so candidates using short names (from LLM training
+        // on code with `open` directives) resolve in Pantograph's bare namespace.
         for candidate in &candidates {
             let candidate_normalized = normalize_tactic(&candidate.text);
             if candidate_normalized == gt_normalized {
@@ -1334,6 +1336,12 @@ async fn process_theorem(
                 continue;
             }
 
+            let tactic_to_try = if let Some(ref prefix) = open_prefix {
+                format!("{}{}", prefix, &candidate.text)
+            } else {
+                candidate.text.clone()
+            };
+
             tracing::debug!(
                 theorem = theorem_name,
                 step = step_idx,
@@ -1342,7 +1350,7 @@ async fn process_theorem(
             );
 
             match handle
-                .run_tactic(current_state_id, Some(0), &candidate.text)
+                .run_tactic(current_state_id, Some(0), &tactic_to_try)
                 .await
             {
                 Ok(TacticResult::ProofComplete { .. }) => {
@@ -1437,8 +1445,13 @@ async fn process_theorem(
                         let mut chain_proved = false;
 
                         for (chain_idx, chain_tactic) in all_tactics[1..].iter().enumerate() {
+                            let chain_tactic_wrapped = if let Some(ref prefix) = open_prefix {
+                                format!("{}{}", prefix, chain_tactic)
+                            } else {
+                                chain_tactic.clone()
+                            };
                             match handle
-                                .run_tactic(chain_state_id, Some(0), chain_tactic)
+                                .run_tactic(chain_state_id, Some(0), &chain_tactic_wrapped)
                                 .await
                             {
                                 Ok(TacticResult::ProofComplete { .. }) => {
