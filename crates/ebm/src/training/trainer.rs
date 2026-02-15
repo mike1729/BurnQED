@@ -128,7 +128,7 @@ pub fn train<B: AutodiffBackend>(
                     remaining_depths.push(sample.remaining_depth as f32);
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to encode positive state: {e}");
+                    tracing::debug!("Failed to encode positive state: {e}");
                     encode_failed = true;
                     break;
                 }
@@ -145,7 +145,7 @@ pub fn train<B: AutodiffBackend>(
                 match encode_fn(&neg.state_pp) {
                     Ok(emb) => neg_embeddings.push(emb),
                     Err(e) => {
-                        tracing::warn!("Failed to encode negative state: {e}");
+                        tracing::debug!("Failed to encode negative state: {e}");
                         encode_failed = true;
                         break;
                     }
