@@ -3,8 +3,10 @@
 /// A generated tactic candidate with metadata.
 #[derive(Debug, Clone)]
 pub struct GeneratedTactic {
-    /// The tactic text.
+    /// The extracted first tactic text (post `extract_first_tactic`).
     pub text: String,
+    /// The raw model output before tactic extraction.
+    pub raw_text: String,
     /// Sum of log-probabilities of the generated tokens.
     pub log_prob: f64,
     /// The generated token IDs (excluding prompt tokens).
@@ -28,6 +30,7 @@ mod tests {
     fn test_generated_tactic() {
         let t = GeneratedTactic {
             text: "intro n".to_string(),
+            raw_text: "intro n".to_string(),
             log_prob: -0.5,
             tokens: vec![1, 2, 3],
         };

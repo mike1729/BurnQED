@@ -1,6 +1,6 @@
 //! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -295,6 +295,7 @@ struct NegGenOutcome {
     theorem_name: String,
     records: Vec<trajectory::TrajectoryRecord>,
     steps_walked: usize,
+    total_steps: usize,
     completed: bool,
     positives: usize,
     negatives: usize,
@@ -1222,6 +1223,7 @@ async fn process_theorem(
         theorem_name: theorem_name.to_string(),
         records: Vec::new(),
         steps_walked: 0,
+        total_steps: steps.len(),
         completed: false,
         positives: 0,
         negatives: 0,
@@ -1296,11 +1298,32 @@ async fn process_theorem(
 
         let gt_normalized = normalize_tactic(&step.tactic);
 
+        tracing::debug!(
+            theorem = theorem_name,
+            step = step_idx,
+            candidates = candidates.len(),
+            gt_tactic = step.tactic,
+            "Generated candidates for step"
+        );
+
         // Try each non-ground-truth candidate
         for candidate in &candidates {
-            if normalize_tactic(&candidate.text) == gt_normalized {
-                continue; // Skip ground-truth matches
+            let candidate_normalized = normalize_tactic(&candidate.text);
+            if candidate_normalized == gt_normalized {
+                tracing::trace!(
+                    theorem = theorem_name,
+                    candidate = candidate.text,
+                    "Skipping ground-truth match"
+                );
+                continue;
             }
+
+            tracing::debug!(
+                theorem = theorem_name,
+                step = step_idx,
+                candidate = candidate.text,
+                "Trying candidate tactic"
+            );
 
             match handle
                 .run_tactic(current_state_id, Some(0), &candidate.text)
@@ -1352,7 +1375,10 @@ async fn process_theorem(
                     outcome.positives += 1;
                     outcome.alternative_proofs += 1;
                 }
-                Ok(TacticResult::Success { goals, .. }) => {
+                Ok(TacticResult::Success {
+                    state_id: div_state_id,
+                    goals,
+                }) => {
                     // Divergent path — record the resulting state as Negative
                     let neg_state_pp = goals
                         .first()
@@ -1361,7 +1387,7 @@ async fn process_theorem(
                     outcome.records.push(TrajectoryRecord {
                         theorem_name: theorem_name.to_string(),
                         state_id: current_state_id,
-                        state_pp: neg_state_pp,
+                        state_pp: neg_state_pp.clone(),
                         tactic_applied: candidate.text.clone(),
                         parent_state_id: if step_idx == 0 {
                             None
@@ -1377,9 +1403,78 @@ async fn process_theorem(
                         timestamp_ms: 0,
                     });
                     outcome.negatives += 1;
+
+                    // Walk remaining tactics from full proof for medium-difficulty negatives.
+                    // If the model generated a multi-step proof, intermediate states along
+                    // that alternative path are valuable training signal — they're divergent
+                    // from ground-truth but still on a valid proof path.
+                    let all_tactics = policy::extract_all_tactics(&candidate.raw_text);
+                    if all_tactics.len() > 1 {
+                        let mut chain_state_id = div_state_id;
+
+                        for chain_tactic in &all_tactics[1..] {
+                            if outcome.negatives >= target_negatives {
+                                break;
+                            }
+                            match handle
+                                .run_tactic(chain_state_id, Some(0), chain_tactic)
+                                .await
+                            {
+                                Ok(TacticResult::ProofComplete { .. }) => {
+                                    // Chain completed — confirms these were medium-difficulty negatives
+                                    outcome.alternative_proofs += 1;
+                                    tracing::debug!(
+                                        theorem = theorem_name,
+                                        chain_len = all_tactics.len(),
+                                        "Multi-tactic chain completed proof"
+                                    );
+                                    break;
+                                }
+                                Ok(TacticResult::Success {
+                                    state_id: next_id,
+                                    goals: next_goals,
+                                }) if next_goals.is_empty() => {
+                                    outcome.alternative_proofs += 1;
+                                    break;
+                                }
+                                Ok(TacticResult::Success {
+                                    state_id: next_id,
+                                    goals: next_goals,
+                                }) => {
+                                    // Intermediate state — medium-difficulty negative
+                                    let next_pp = next_goals
+                                        .first()
+                                        .map(|g| g.raw.clone())
+                                        .unwrap_or_default();
+                                    outcome.records.push(TrajectoryRecord {
+                                        theorem_name: theorem_name.to_string(),
+                                        state_id: chain_state_id,
+                                        state_pp: next_pp,
+                                        tactic_applied: chain_tactic.clone(),
+                                        parent_state_id: Some(chain_state_id),
+                                        label: TrajectoryLabel::Negative,
+                                        depth_from_root: step.depth + 2, // deeper than first divergence
+                                        remaining_depth: -1,
+                                        llm_log_prob: 0.0, // no per-tactic logprob for chain steps
+                                        ebm_score: 0.0,
+                                        is_proof_complete: false,
+                                        timestamp_ms: 0,
+                                    });
+                                    outcome.negatives += 1;
+                                    chain_state_id = next_id;
+                                }
+                                _ => break, // Failed or error — stop chain
+                            }
+                        }
+                    }
                 }
-                Ok(TacticResult::Failed { .. }) => {
-                    // Tactic didn't apply — skip
+                Ok(TacticResult::Failed { message }) => {
+                    tracing::debug!(
+                        theorem = theorem_name,
+                        candidate = candidate.text,
+                        error = message,
+                        "Candidate tactic failed"
+                    );
                 }
                 Err(e) => {
                     tracing::debug!(
@@ -1557,6 +1652,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
         let inference = inference.clone();
         let interrupted = Arc::clone(&interrupted);
 
+        let step_count = steps.len();
         join_set.spawn(async move {
             let _permit = permit;
             if interrupted.load(Ordering::Relaxed) {
@@ -1564,6 +1660,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                     theorem_name,
                     records: Vec::new(),
                     steps_walked: 0,
+                    total_steps: step_count,
                     completed: false,
                     positives: 0,
                     negatives: 0,
@@ -1592,6 +1689,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                         theorem_name,
                         records: Vec::new(),
                         steps_walked: 0,
+                        total_steps: step_count,
                         completed: false,
                         positives: 0,
                         negatives: 0,
@@ -1609,6 +1707,8 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
     let mut completed_count: usize = 0;
     let mut skipped_count: usize = 0;
     let mut processed_count: usize = 0;
+    // depth → (positives, negatives)
+    let mut depth_dist: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
 
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
@@ -1622,6 +1722,17 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                 } else if outcome.steps_walked == 0 {
                     skipped_count += 1;
                 }
+
+                // Track depth distribution
+                for rec in &outcome.records {
+                    let entry = depth_dist.entry(rec.depth_from_root).or_insert((0, 0));
+                    match rec.label {
+                        TrajectoryLabel::Positive => entry.0 += 1,
+                        TrajectoryLabel::Negative => entry.1 += 1,
+                        _ => {}
+                    }
+                }
+
                 if !outcome.records.is_empty() {
                     writer.record_all(outcome.records);
                 }
@@ -1673,6 +1784,12 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
     println!(" Concurrency:         {concurrency}");
     println!(" Candidates/step:     {candidates_per_step}");
     println!(" Target negs/theorem: {target_negatives}");
+    println!("──────────────────────────────────────────");
+    println!(" Depth Distribution:");
+    println!(" {:>5}  {:>8}  {:>8}  {:>8}", "Depth", "Pos", "Neg", "Total");
+    for (depth, (pos, neg)) in &depth_dist {
+        println!(" {:>5}  {:>8}  {:>8}  {:>8}", depth, pos, neg, pos + neg);
+    }
     println!("══════════════════════════════════════════");
 
     Ok(())

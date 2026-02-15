@@ -1831,6 +1831,7 @@ dependencies = [
  "arrow",
  "burn",
  "burn-contrib",
+ "clap",
  "futures",
  "indicatif",
  "parquet",
@@ -1841,6 +1842,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-subscriber",
  "trajectory",
 ]
 

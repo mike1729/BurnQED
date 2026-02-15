@@ -13,6 +13,7 @@ use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner}
 pub fn make_tactic(text: &str, log_prob: f64) -> GeneratedTactic {
     GeneratedTactic {
         text: text.to_string(),
+        raw_text: text.to_string(),
         log_prob,
         tokens: vec![],
     }

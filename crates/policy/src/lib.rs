@@ -16,6 +16,6 @@ pub mod sglang;
 pub mod types;
 
 pub use handle::InferenceHandle;
-pub use prompt::{extract_first_tactic, format_tactic_message};
+pub use prompt::{extract_all_tactics, extract_first_tactic, format_tactic_message};
 pub use sglang::{SglangClient, SglangConfig};
 pub use types::{Embedding, GeneratedTactic};

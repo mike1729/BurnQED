@@ -263,6 +263,7 @@ impl SglangClient {
 
             tactics.push(GeneratedTactic {
                 text: tactic_text,
+                raw_text: raw_text.clone(),
                 log_prob,
                 tokens: Vec::new(), // Token IDs not needed for remote inference
             });

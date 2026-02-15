@@ -237,6 +237,7 @@ impl SearchEngine {
                     .iter()
                     .map(|t| GeneratedTactic {
                         text: t.clone(),
+                        raw_text: t.clone(),
                         log_prob: -100.0,
                         tokens: vec![],
                     })
