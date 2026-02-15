@@ -308,10 +308,24 @@ struct NegGenOutcome {
 ///
 /// Uses the last `.` separator: `"Polynomial.natDegree_cyclotomic'"` → `Some("Polynomial")`.
 /// Returns `None` for simple names without a dot.
-fn infer_open_namespace(theorem_name: &str) -> Option<String> {
-    theorem_name
-        .rfind('.')
-        .map(|pos| theorem_name[..pos].to_string())
+/// Build an `open ... in` prefix that opens all namespace segments of a theorem name.
+///
+/// For `CategoryTheory.ShortComplex.cycles_ext_iff` returns:
+///   `"open CategoryTheory CategoryTheory.ShortComplex in "`
+///
+/// Opening each prefix individually ensures short names from any level
+/// of the hierarchy resolve (e.g. `cancel_mono` from `CategoryTheory`).
+fn infer_open_prefix(theorem_name: &str) -> Option<String> {
+    let parts: Vec<&str> = theorem_name.split('.').collect();
+    if parts.len() <= 1 {
+        return None;
+    }
+    // Build all prefixes: ["A", "A.B", "A.B.C"] for "A.B.C.thm"
+    let mut prefixes = Vec::new();
+    for i in 1..parts.len() {
+        prefixes.push(parts[..i].join("."));
+    }
+    Some(format!("open {} in ", prefixes.join(" ")))
 }
 
 /// Normalize a tactic string by collapsing whitespace for comparison.
@@ -1242,7 +1256,7 @@ async fn process_theorem(
     };
 
     let total_steps = steps.len();
-    let namespace = infer_open_namespace(theorem_name);
+    let open_prefix = infer_open_prefix(theorem_name);
 
     // Record ALL ground-truth steps as Positive upfront from tactic pair data.
     // This ensures balanced depth distribution regardless of Pantograph replay
@@ -1550,11 +1564,11 @@ async fn process_theorem(
             .await
         {
             Ok(r) => Some(r),
-            Err(_) if namespace.is_some() => {
-                // Retry with open namespace
+            Err(_) if open_prefix.is_some() => {
+                // Retry with all namespace prefixes opened
                 let open_tactic = format!(
-                    "open {} in {}",
-                    namespace.as_ref().unwrap(),
+                    "{}{}",
+                    open_prefix.as_ref().unwrap(),
                     &step.tactic
                 );
                 match handle
@@ -1563,24 +1577,24 @@ async fn process_theorem(
                 {
                     Ok(r) => Some(r),
                     Err(e) => {
-                        tracing::warn!(
+                        tracing::debug!(
                             theorem = theorem_name,
                             step = step_idx,
                             tactic = step.tactic,
                             error = %e,
-                            "Ground-truth tactic failed even with open namespace"
+                            "Ground-truth tactic failed even with open namespaces"
                         );
                         None
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!(
+                tracing::debug!(
                     theorem = theorem_name,
                     step = step_idx,
                     tactic = step.tactic,
                     error = %e,
-                    "Ground-truth tactic failed"
+                    "Ground-truth tactic failed (no namespace to retry)"
                 );
                 None
             }
@@ -1597,7 +1611,7 @@ async fn process_theorem(
                 break;
             }
             Some(TacticResult::Failed { message }) => {
-                tracing::warn!(
+                tracing::debug!(
                     theorem = theorem_name,
                     step = step_idx,
                     tactic = step.tactic,
@@ -1930,17 +1944,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_infer_open_namespace() {
+    fn test_infer_open_prefix() {
         assert_eq!(
-            infer_open_namespace("Polynomial.natDegree_cyclotomic'"),
-            Some("Polynomial".to_string())
+            infer_open_prefix("Polynomial.natDegree_cyclotomic'"),
+            Some("open Polynomial in ".to_string())
         );
         assert_eq!(
-            infer_open_namespace("MeasureTheory.Measure.hahn"),
-            Some("MeasureTheory.Measure".to_string())
+            infer_open_prefix("MeasureTheory.Measure.hahn"),
+            Some("open MeasureTheory MeasureTheory.Measure in ".to_string())
         );
-        assert_eq!(infer_open_namespace("simple_name"), None);
-        assert_eq!(infer_open_namespace(""), None);
+        assert_eq!(
+            infer_open_prefix("CategoryTheory.ShortComplex.cycles_ext_iff"),
+            Some("open CategoryTheory CategoryTheory.ShortComplex in ".to_string())
+        );
+        assert_eq!(infer_open_prefix("simple_name"), None);
+        assert_eq!(infer_open_prefix(""), None);
     }
 
     #[test]
