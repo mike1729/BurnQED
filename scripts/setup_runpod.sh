@@ -230,9 +230,22 @@ else
     echo "  bash scripts/migrate_to_runpod.sh <source_host> <this_host>"
 fi
 
-# ── Step 9: Smoke test ────────────────────────────────────────────────────
+# ── Step 9: Shell environment ─────────────────────────────────────────────
 echo ""
-echo "=== Step 9: Smoke test ==="
+echo "=== Step 9: Persist PATH in .bashrc ==="
+BASHRC="$HOME/.bashrc"
+for line in 'source "$HOME/.cargo/env"' 'export PATH="$HOME/.elan/bin:$PATH"'; do
+    if ! grep -qF "$line" "$BASHRC" 2>/dev/null; then
+        echo "$line" >> "$BASHRC"
+        echo "  Added: $line"
+    else
+        echo "  Already present: $line"
+    fi
+done
+
+# ── Step 10: Smoke test ──────────────────────────────────────────────────
+echo ""
+echo "=== Step 10: Smoke test ==="
 echo "To run a quick end-to-end smoke test:"
 echo "  ./scripts/smoke_test.sh"
 
