@@ -287,6 +287,12 @@ def parse_args():
 def main():
     import os
 
+    # nest_asyncio allows Engine.generate() to call loop.run_until_complete()
+    # inside FastAPI's already-running event loop. Requires standard asyncio
+    # loop (not uvloop), so we set loop="asyncio" in uvicorn below.
+    import nest_asyncio
+    nest_asyncio.apply()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -305,7 +311,8 @@ def main():
     _encode_semaphore = asyncio.Semaphore(1)
 
     logger.info("Starting server on %s:%d", args.host, port)
-    uvicorn.run(app, host=args.host, port=port, log_level="info")
+    # loop="asyncio" disables uvloop (which nest_asyncio can't patch)
+    uvicorn.run(app, host=args.host, port=port, log_level="info", loop="asyncio")
 
 
 if __name__ == "__main__":
