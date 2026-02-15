@@ -129,12 +129,12 @@ if command -v apt-get &>/dev/null; then
     apt-get update -qq 2>/dev/null || sudo apt-get update -qq
     apt-get install -y -qq \
         build-essential git curl wget pkg-config \
-        libssl-dev libclang-dev cmake \
+        libssl-dev libclang-dev cmake libnuma1 \
         python3 python3-pip python3-venv \
         2>/dev/null || \
     sudo apt-get install -y -qq \
         build-essential git curl wget pkg-config \
-        libssl-dev libclang-dev cmake \
+        libssl-dev libclang-dev cmake libnuma1 \
         python3 python3-pip python3-venv
 fi
 
