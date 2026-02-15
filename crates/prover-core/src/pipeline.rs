@@ -13,10 +13,10 @@ use indicatif::{ProgressBar, ProgressStyle};
 use ebm::{
     ContrastiveSampler, EBMScorer, EBMTrainingConfig, EBMValueFn, EmbeddingCache, EnergyHeadConfig,
 };
-use lean_repl::LeanPool;
+use lean_repl::{LeanPool, TacticResult};
 use policy::{InferenceHandle, SglangClient, SglangConfig};
 use search::{InferencePolicyProvider, SearchConfig, SearchEngine};
-use trajectory::{TheoremIndex, TrajectoryReader, TrajectoryWriter};
+use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
 use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
@@ -256,6 +256,64 @@ fn load_ebm_scorer(
 
     tracing::info!("EBM scorer loaded successfully");
     Ok(Some(value_fn))
+}
+
+// ---------------------------------------------------------------------------
+// Generate-negatives helpers
+// ---------------------------------------------------------------------------
+
+/// Arguments for the `generate-negatives` subcommand.
+#[derive(Debug)]
+pub struct GenerateNegativesArgs {
+    /// Path to the search config TOML file.
+    pub config: PathBuf,
+    /// URL of the SGLang inference server.
+    pub server_url: String,
+    /// Path to the tactic pairs JSONL file.
+    pub tactic_pairs: PathBuf,
+    /// Path for the output Parquet file.
+    pub output: PathBuf,
+    /// Maximum number of theorems to process.
+    pub num_theorems: Option<usize>,
+    /// Number of LLM candidates to generate per proof step.
+    pub candidates_per_step: usize,
+    /// Target number of negatives per theorem before early stop.
+    pub target_negatives: usize,
+    /// Sampling temperature for generation.
+    pub temperature: f64,
+    /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
+    pub imports: Vec<String>,
+    /// Number of theorems to process in parallel.
+    pub concurrency: usize,
+    /// Optional CLI override for number of Lean workers.
+    pub num_workers: Option<usize>,
+}
+
+/// Per-theorem result from the generate-negatives pipeline.
+#[allow(dead_code)]
+struct NegGenOutcome {
+    theorem_name: String,
+    records: Vec<trajectory::TrajectoryRecord>,
+    steps_walked: usize,
+    completed: bool,
+    positives: usize,
+    negatives: usize,
+    alternative_proofs: usize,
+}
+
+/// Infer the `open` namespace prefix from a fully-qualified theorem name.
+///
+/// Uses the last `.` separator: `"Polynomial.natDegree_cyclotomic'"` → `Some("Polynomial")`.
+/// Returns `None` for simple names without a dot.
+fn infer_open_namespace(theorem_name: &str) -> Option<String> {
+    theorem_name
+        .rfind('.')
+        .map(|pos| theorem_name[..pos].to_string())
+}
+
+/// Normalize a tactic string by collapsing whitespace for comparison.
+fn normalize_tactic(tactic: &str) -> String {
+    tactic.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Outcome of a single theorem search task, returned from spawned tasks.
@@ -1144,4 +1202,509 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     println!("══════════════════════════════════════════");
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Generate-negatives pipeline
+// ---------------------------------------------------------------------------
+
+/// Process a single theorem: walk the ground-truth proof path, generate LLM
+/// candidates at each step, and classify them as Positive or Negative.
+async fn process_theorem(
+    pool: &Arc<LeanPool>,
+    inference: &InferenceHandle,
+    theorem_name: &str,
+    steps: &[ebm::TacticStep],
+    candidates_per_step: usize,
+    target_negatives: usize,
+) -> NegGenOutcome {
+    let mut outcome = NegGenOutcome {
+        theorem_name: theorem_name.to_string(),
+        records: Vec::new(),
+        steps_walked: 0,
+        completed: false,
+        positives: 0,
+        negatives: 0,
+        alternative_proofs: 0,
+    };
+
+    // Start proof by theorem name
+    let mut handle = match pool.start_proof_by_name_owned(theorem_name).await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!(theorem = theorem_name, error = %e, "Failed to start proof");
+            return outcome;
+        }
+    };
+
+    let total_steps = steps.len();
+    let namespace = infer_open_namespace(theorem_name);
+
+    // Get root state for the first step
+    let initial = handle.initial_state();
+    let mut current_state_id = initial.state_id;
+    let mut current_goals = initial.goals.clone();
+
+    for (step_idx, step) in steps.iter().enumerate() {
+        outcome.steps_walked = step_idx + 1;
+
+        // Use Pantograph's goal representation for state_pp (what EBM sees during search)
+        let state_pp = if let Some(g) = current_goals.first() {
+            g.raw.clone()
+        } else {
+            tracing::debug!(theorem = theorem_name, step = step_idx, "No goals at step");
+            break;
+        };
+
+        // Record ground-truth state as Positive
+        let remaining_depth = (total_steps - step_idx) as i32;
+        outcome.records.push(TrajectoryRecord {
+            theorem_name: theorem_name.to_string(),
+            state_id: current_state_id,
+            state_pp: state_pp.clone(),
+            tactic_applied: step.tactic.clone(),
+            parent_state_id: if step_idx == 0 {
+                None
+            } else {
+                Some(current_state_id.saturating_sub(1))
+            },
+            label: TrajectoryLabel::Positive,
+            depth_from_root: step.depth,
+            remaining_depth,
+            llm_log_prob: 0.0,
+            ebm_score: 0.0,
+            is_proof_complete: false,
+            timestamp_ms: 0,
+        });
+        outcome.positives += 1;
+
+        // Generate LLM candidates at this proof state
+        let candidates = match inference
+            .generate_candidates(&state_pp, candidates_per_step)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::debug!(
+                    theorem = theorem_name,
+                    step = step_idx,
+                    error = %e,
+                    "Failed to generate candidates"
+                );
+                Vec::new()
+            }
+        };
+
+        let gt_normalized = normalize_tactic(&step.tactic);
+
+        // Try each non-ground-truth candidate
+        for candidate in &candidates {
+            if normalize_tactic(&candidate.text) == gt_normalized {
+                continue; // Skip ground-truth matches
+            }
+
+            match handle
+                .run_tactic(current_state_id, Some(0), &candidate.text)
+                .await
+            {
+                Ok(TacticResult::ProofComplete { .. }) => {
+                    // Alternative proof found — record as Positive
+                    outcome.records.push(TrajectoryRecord {
+                        theorem_name: theorem_name.to_string(),
+                        state_id: current_state_id,
+                        state_pp: state_pp.clone(),
+                        tactic_applied: candidate.text.clone(),
+                        parent_state_id: if step_idx == 0 {
+                            None
+                        } else {
+                            Some(current_state_id.saturating_sub(1))
+                        },
+                        label: TrajectoryLabel::Positive,
+                        depth_from_root: step.depth,
+                        remaining_depth,
+                        llm_log_prob: candidate.log_prob,
+                        ebm_score: 0.0,
+                        is_proof_complete: true,
+                        timestamp_ms: 0,
+                    });
+                    outcome.positives += 1;
+                    outcome.alternative_proofs += 1;
+                }
+                Ok(TacticResult::Success { goals, .. }) if goals.is_empty() => {
+                    // Empty goals = proof complete (guard for edge case)
+                    outcome.records.push(TrajectoryRecord {
+                        theorem_name: theorem_name.to_string(),
+                        state_id: current_state_id,
+                        state_pp: state_pp.clone(),
+                        tactic_applied: candidate.text.clone(),
+                        parent_state_id: if step_idx == 0 {
+                            None
+                        } else {
+                            Some(current_state_id.saturating_sub(1))
+                        },
+                        label: TrajectoryLabel::Positive,
+                        depth_from_root: step.depth,
+                        remaining_depth,
+                        llm_log_prob: candidate.log_prob,
+                        ebm_score: 0.0,
+                        is_proof_complete: true,
+                        timestamp_ms: 0,
+                    });
+                    outcome.positives += 1;
+                    outcome.alternative_proofs += 1;
+                }
+                Ok(TacticResult::Success { goals, .. }) => {
+                    // Divergent path — record the resulting state as Negative
+                    let neg_state_pp = goals
+                        .first()
+                        .map(|g| g.raw.clone())
+                        .unwrap_or_default();
+                    outcome.records.push(TrajectoryRecord {
+                        theorem_name: theorem_name.to_string(),
+                        state_id: current_state_id,
+                        state_pp: neg_state_pp,
+                        tactic_applied: candidate.text.clone(),
+                        parent_state_id: if step_idx == 0 {
+                            None
+                        } else {
+                            Some(current_state_id.saturating_sub(1))
+                        },
+                        label: TrajectoryLabel::Negative,
+                        depth_from_root: step.depth + 1,
+                        remaining_depth: -1,
+                        llm_log_prob: candidate.log_prob,
+                        ebm_score: 0.0,
+                        is_proof_complete: false,
+                        timestamp_ms: 0,
+                    });
+                    outcome.negatives += 1;
+                }
+                Ok(TacticResult::Failed { .. }) => {
+                    // Tactic didn't apply — skip
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        theorem = theorem_name,
+                        candidate = candidate.text,
+                        error = %e,
+                        "Candidate tactic error"
+                    );
+                }
+            }
+
+            // Early stop if we have enough negatives
+            if outcome.negatives >= target_negatives {
+                break;
+            }
+        }
+
+        // Early stop across steps
+        if outcome.negatives >= target_negatives {
+            break;
+        }
+
+        // Apply ground-truth tactic to advance along the proof path
+        let advance_result = match handle
+            .run_tactic(current_state_id, Some(0), &step.tactic)
+            .await
+        {
+            Ok(r) => Some(r),
+            Err(_) if namespace.is_some() => {
+                // Retry with open namespace
+                let open_tactic = format!(
+                    "open {} in {}",
+                    namespace.as_ref().unwrap(),
+                    &step.tactic
+                );
+                match handle
+                    .run_tactic(current_state_id, Some(0), &open_tactic)
+                    .await
+                {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        tracing::warn!(
+                            theorem = theorem_name,
+                            step = step_idx,
+                            tactic = step.tactic,
+                            error = %e,
+                            "Ground-truth tactic failed even with open namespace"
+                        );
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    theorem = theorem_name,
+                    step = step_idx,
+                    tactic = step.tactic,
+                    error = %e,
+                    "Ground-truth tactic failed"
+                );
+                None
+            }
+        };
+
+        match advance_result {
+            Some(TacticResult::Success { state_id, goals }) => {
+                current_state_id = state_id;
+                current_goals = goals;
+            }
+            Some(TacticResult::ProofComplete { .. }) => {
+                // Proof is done — no more steps to walk
+                outcome.completed = true;
+                break;
+            }
+            Some(TacticResult::Failed { message }) => {
+                tracing::warn!(
+                    theorem = theorem_name,
+                    step = step_idx,
+                    tactic = step.tactic,
+                    error = message,
+                    "Ground-truth tactic was rejected by Lean"
+                );
+                break;
+            }
+            None => {
+                // Error already logged above
+                break;
+            }
+        }
+    }
+
+    // If we walked all steps without early break, mark completed
+    if outcome.steps_walked == total_steps && !outcome.completed {
+        outcome.completed = true;
+    }
+
+    outcome
+}
+
+/// Run the generate-negatives pipeline: walk known-good proof paths and generate
+/// LLM candidates at each step, classifying them as Positive or Negative.
+pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let concurrency = args.concurrency.max(1);
+
+    // 1. Load config and build Lean pool
+    let toml = load_search_toml(&args.config)?;
+    let imports: Vec<String> = args.imports.clone();
+    let lean_config =
+        build_lean_pool_config(&toml.lean_pool, args.num_workers, Some(&imports))?;
+    tracing::info!(
+        num_workers = lean_config.num_workers,
+        "Starting Lean worker pool"
+    );
+    let pool = Arc::new(LeanPool::new(lean_config).await?);
+
+    // 2. Connect to SGLang server
+    tracing::info!(url = args.server_url, "Connecting to SGLang inference server");
+    let sglang_config = SglangConfig {
+        server_url: args.server_url.clone(),
+        temperature: args.temperature,
+        top_p: 0.95,
+        max_tactic_tokens: 128,
+        hidden_size: 4096,
+    };
+    let client = SglangClient::new(sglang_config).await?;
+    let inference = InferenceHandle::new(client);
+
+    // 3. Load tactic pairs grouped by theorem
+    tracing::info!(
+        path = %args.tactic_pairs.display(),
+        "Loading tactic pairs"
+    );
+    let grouped = ebm::load_tactic_pairs_grouped(&args.tactic_pairs, args.num_theorems)?;
+    let total = grouped.len();
+    tracing::info!(theorems = total, "Loaded theorems for negative generation");
+
+    // 4. Set up concurrency + writer + CTRL-C handler
+    let mut writer = TrajectoryWriter::new(args.output.clone());
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let sig_flag = interrupted.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        sig_flag.store(true, Ordering::Relaxed);
+        tracing::warn!("Interrupted by CTRL-C, finishing in-flight theorems");
+    });
+
+    let pb = ProgressBar::new(total as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+            .expect("valid progress bar template")
+            .progress_chars("=> "),
+    );
+
+    // 5. Spawn per-theorem tasks
+    let mut join_set = tokio::task::JoinSet::new();
+    let candidates_per_step = args.candidates_per_step;
+    let target_negatives = args.target_negatives;
+
+    for (theorem_name, steps) in grouped {
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        pb.set_message(theorem_name.clone());
+
+        let pool = Arc::clone(&pool);
+        let inference = inference.clone();
+        let interrupted = Arc::clone(&interrupted);
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            if interrupted.load(Ordering::Relaxed) {
+                return NegGenOutcome {
+                    theorem_name,
+                    records: Vec::new(),
+                    steps_walked: 0,
+                    completed: false,
+                    positives: 0,
+                    negatives: 0,
+                    alternative_proofs: 0,
+                };
+            }
+
+            // Per-theorem timeout (120s)
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                process_theorem(
+                    &pool,
+                    &inference,
+                    &theorem_name,
+                    &steps,
+                    candidates_per_step,
+                    target_negatives,
+                ),
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    tracing::warn!(theorem = theorem_name, "Timed out after 120s");
+                    NegGenOutcome {
+                        theorem_name,
+                        records: Vec::new(),
+                        steps_walked: 0,
+                        completed: false,
+                        positives: 0,
+                        negatives: 0,
+                        alternative_proofs: 0,
+                    }
+                }
+            }
+        });
+    }
+
+    // 6. Collect results
+    let mut total_positives: usize = 0;
+    let mut total_negatives: usize = 0;
+    let mut total_alt_proofs: usize = 0;
+    let mut completed_count: usize = 0;
+    let mut skipped_count: usize = 0;
+    let mut processed_count: usize = 0;
+
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(outcome) => {
+                processed_count += 1;
+                total_positives += outcome.positives;
+                total_negatives += outcome.negatives;
+                total_alt_proofs += outcome.alternative_proofs;
+                if outcome.completed {
+                    completed_count += 1;
+                } else if outcome.steps_walked == 0 {
+                    skipped_count += 1;
+                }
+                if !outcome.records.is_empty() {
+                    writer.record_all(outcome.records);
+                }
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Generate-negatives task panicked");
+            }
+        }
+
+        pb.inc(1);
+
+        // Auto-save every 50 theorems
+        if processed_count % 50 == 0 && processed_count > 0 {
+            writer.flush_partial()?;
+            tracing::info!(processed = processed_count, "Auto-saved checkpoint");
+        }
+    }
+
+    pb.finish_with_message("done");
+
+    // 7. Write final Parquet
+    let record_count = writer.len();
+    writer.finish()?;
+
+    // Shutdown pool
+    pool.shutdown().await;
+
+    // 8. Print summary
+    let elapsed = start.elapsed();
+    let partial_note = if interrupted.load(Ordering::Relaxed) {
+        " (Partial — interrupted by CTRL-C)"
+    } else {
+        ""
+    };
+
+    println!();
+    println!("══════════════════════════════════════════");
+    println!(" Generate-Negatives Results{partial_note}");
+    println!("──────────────────────────────────────────");
+    println!(" Theorems attempted:  {processed_count}");
+    println!(" Completed:           {completed_count}");
+    println!(" Skipped (start fail):{skipped_count}");
+    println!(" Positives:           {total_positives} (ground-truth + alternative)");
+    println!(" Negatives:           {total_negatives}");
+    println!(" Alternative proofs:  {total_alt_proofs}");
+    println!(" Total records:       {record_count}");
+    println!(" Output:              {}", args.output.display());
+    println!(" Wall time:           {:.1}s", elapsed.as_secs_f64());
+    println!(" Concurrency:         {concurrency}");
+    println!(" Candidates/step:     {candidates_per_step}");
+    println!(" Target negs/theorem: {target_negatives}");
+    println!("══════════════════════════════════════════");
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_infer_open_namespace() {
+        assert_eq!(
+            infer_open_namespace("Polynomial.natDegree_cyclotomic'"),
+            Some("Polynomial".to_string())
+        );
+        assert_eq!(
+            infer_open_namespace("MeasureTheory.Measure.hahn"),
+            Some("MeasureTheory.Measure".to_string())
+        );
+        assert_eq!(infer_open_namespace("simple_name"), None);
+        assert_eq!(infer_open_namespace(""), None);
+    }
+
+    #[test]
+    fn test_normalize_tactic() {
+        assert_eq!(normalize_tactic("intro  h"), "intro h");
+        assert_eq!(normalize_tactic("  simp [add_comm]  "), "simp [add_comm]");
+        assert_eq!(
+            normalize_tactic("rw\t[Nat.add_comm]\n"),
+            "rw [Nat.add_comm]"
+        );
+        assert_eq!(normalize_tactic("exact h"), "exact h");
+    }
 }

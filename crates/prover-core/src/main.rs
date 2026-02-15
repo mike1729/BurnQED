@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use pipeline::{CompareArgs, EvalArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
+use pipeline::{CompareArgs, EvalArgs, GenerateNegativesArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
 
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
@@ -118,6 +118,42 @@ enum Command {
         /// Paths to evaluation result JSON files.
         #[arg(long, required = true, num_args = 1..)]
         results: Vec<PathBuf>,
+    },
+    /// Generate high-quality contrastive negatives by walking known-good proof paths.
+    GenerateNegatives {
+        /// Path to tactic pairs JSONL file (from LeanDojo traces).
+        #[arg(long)]
+        tactic_pairs: PathBuf,
+        /// URL of the SGLang inference server (e.g., http://localhost:30000).
+        #[arg(long)]
+        server_url: String,
+        /// Path for the output trajectory Parquet file.
+        #[arg(long)]
+        output: PathBuf,
+        /// Maximum number of theorems to process.
+        #[arg(long)]
+        num_theorems: Option<usize>,
+        /// Number of LLM candidates to generate per proof step.
+        #[arg(long, default_value_t = 8)]
+        candidates_per_step: usize,
+        /// Target number of negatives per theorem before early stop.
+        #[arg(long, default_value_t = 15)]
+        target_negatives: usize,
+        /// Sampling temperature for tactic generation.
+        #[arg(long, default_value_t = 1.0)]
+        temperature: f64,
+        /// Lean modules to import (e.g., "Init", "Mathlib").
+        #[arg(long, value_delimiter = ',', default_values_t = vec!["Init".to_string(), "Mathlib".to_string()])]
+        imports: Vec<String>,
+        /// Number of theorems to process in parallel.
+        #[arg(long, default_value_t = 6)]
+        concurrency: usize,
+        /// Override the number of Lean workers.
+        #[arg(long)]
+        num_workers: Option<usize>,
+        /// Path to search config TOML file.
+        #[arg(long, default_value = "configs/search.toml")]
+        config: PathBuf,
     },
     /// Train the Energy-Based Model from trajectory data.
     TrainEbm {
@@ -246,6 +282,34 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Command::Compare { results } => pipeline::run_compare(CompareArgs { results }),
+        Command::GenerateNegatives {
+            tactic_pairs,
+            server_url,
+            output,
+            num_theorems,
+            candidates_per_step,
+            target_negatives,
+            temperature,
+            imports,
+            concurrency,
+            num_workers,
+            config,
+        } => {
+            pipeline::run_generate_negatives(GenerateNegativesArgs {
+                config,
+                server_url,
+                tactic_pairs,
+                output,
+                num_theorems,
+                candidates_per_step,
+                target_negatives,
+                temperature,
+                imports,
+                concurrency,
+                num_workers,
+            })
+            .await
+        }
         Command::TrainEbm {
             trajectories,
             output_dir,

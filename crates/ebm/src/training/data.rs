@@ -99,10 +99,14 @@ pub struct ContrastiveSample {
 
 /// Samples contrastive batches from trajectory data.
 ///
-/// Implements a negative mining strategy with three categories:
-/// - **Hard (50%)**: dead-end states from the same theorem
-/// - **Medium (30%)**: other positive states used as negatives (off-path siblings)
-/// - **Easy (20%)**: random states from other theorems
+/// Implements a negative mining strategy with two categories:
+/// - **Hard (70%)**: dead-end states from the same theorem
+/// - **Easy (30%)**: random states from other theorems
+///
+/// Medium negatives (positive states used as negatives) are disabled by default
+/// because tactic pair augmentation adds many positive-only records. Using
+/// positives as negatives creates contradictory gradients and collapses training.
+/// Use `with_ratios()` to override if needed.
 pub struct ContrastiveSampler {
     records: Vec<ProofStateRecord>,
     index: ContrastiveIndex,
@@ -131,8 +135,8 @@ impl ContrastiveSampler {
             records,
             index,
             k_negatives,
-            hard_ratio: 0.5,
-            medium_ratio: 0.3,
+            hard_ratio: 0.7,
+            medium_ratio: 0.0,
         })
     }
 
@@ -299,10 +303,20 @@ pub fn load_records_from_parquet(
 #[derive(serde::Deserialize)]
 struct TacticPairJson {
     state: String,
-    #[allow(dead_code)]
     tactic: String,
     theorem: String,
     depth: u32,
+}
+
+/// A single step along a known-good proof path, used by the generate-negatives pipeline.
+#[derive(Debug, Clone)]
+pub struct TacticStep {
+    /// Pretty-printed proof state at this step.
+    pub state: String,
+    /// Ground-truth tactic applied at this step.
+    pub tactic: String,
+    /// 0-indexed depth from the proof root.
+    pub depth: u32,
 }
 
 /// Load ground-truth proof states from a tactic pairs JSONL file.
@@ -373,6 +387,83 @@ pub fn load_tactic_pairs(
     );
 
     Ok(records)
+}
+
+/// Load tactic pairs from a JSONL file, grouped by theorem with steps sorted by depth.
+///
+/// Returns `Vec<(theorem_name, steps)>` for deterministic iteration. Filters out
+/// theorems with non-contiguous depths (gaps indicate incomplete traces). If
+/// `max_theorems` is set, randomly samples that many theorems from the result.
+pub fn load_tactic_pairs_grouped(
+    path: &Path,
+    max_theorems: Option<usize>,
+) -> anyhow::Result<Vec<(String, Vec<TacticStep>)>> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| anyhow::anyhow!("Failed to open tactic pairs file {}: {e}", path.display()))?;
+    let reader = std::io::BufReader::new(file);
+
+    // Parse all records grouped by theorem
+    let mut by_theorem: HashMap<String, Vec<TacticStep>> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let pair: TacticPairJson = serde_json::from_str(&line)
+            .map_err(|e| anyhow::anyhow!("Failed to parse tactic pair JSON: {e}"))?;
+
+        by_theorem
+            .entry(pair.theorem)
+            .or_default()
+            .push(TacticStep {
+                state: pair.state,
+                tactic: pair.tactic,
+                depth: pair.depth,
+            });
+    }
+
+    // Sort each theorem's steps by depth and filter out non-contiguous traces
+    let mut result: Vec<(String, Vec<TacticStep>)> = by_theorem
+        .into_iter()
+        .filter_map(|(name, mut steps)| {
+            steps.sort_by_key(|s| s.depth);
+
+            // Check for contiguous depths: 0, 1, 2, ...
+            let contiguous = steps
+                .iter()
+                .enumerate()
+                .all(|(i, s)| s.depth == i as u32);
+            if !contiguous {
+                tracing::debug!(theorem = name, "Skipping theorem with non-contiguous depths");
+                return None;
+            }
+
+            Some((name, steps))
+        })
+        .collect();
+
+    // Sort by theorem name for deterministic ordering
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Sample if max_theorems is set
+    if let Some(max) = max_theorems {
+        if max < result.len() {
+            let mut rng = rand::thread_rng();
+            result.as_mut_slice().shuffle(&mut rng);
+            result.truncate(max);
+            // Re-sort for deterministic iteration after sampling
+            result.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+    }
+
+    tracing::info!(
+        theorems = result.len(),
+        total_steps = result.iter().map(|(_, s)| s.len()).sum::<usize>(),
+        "Loaded tactic pairs grouped by theorem"
+    );
+
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -587,6 +678,28 @@ mod tests {
     }
 
     #[test]
+    fn test_default_ratios_no_medium_negatives() {
+        // With default ratios (hard=0.7, medium=0.0), no positive state
+        // should ever appear as a negative.
+        let records = make_test_records();
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 4).unwrap();
+
+        let mut rng = rand::thread_rng();
+        for _ in 0..100 {
+            let sample = sampler.sample(&mut rng);
+            for neg in &sample.negatives {
+                assert_eq!(
+                    neg.label, "negative",
+                    "Default ratios should never use positive states as negatives, \
+                     but got positive state '{}' from theorem '{}'",
+                    neg.state_pp, neg.theorem_name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_unique_states() {
         let mut records = make_test_records(); // 10 records with 10 unique state_pp values
         // Duplicate some state_pp values
@@ -611,5 +724,75 @@ mod tests {
         let unique = sampler.unique_states();
         // Original 10 unique states, duplicates should be deduped
         assert_eq!(unique.len(), 10);
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_grouped_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        let content = r#"{"state":"⊢ True","tactic":"trivial","theorem":"True_self","depth":0}
+{"state":"⊢ True ∧ True","tactic":"constructor","theorem":"True_self","depth":1}
+{"state":"⊢ False → False","tactic":"intro h","theorem":"false_imp","depth":0}
+{"state":"h : False\n⊢ False","tactic":"exact h","theorem":"false_imp","depth":1}
+{"state":"⊢ 1 + 1 = 2","tactic":"norm_num","theorem":"one_plus_one","depth":0}
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let grouped = load_tactic_pairs_grouped(&path, None).unwrap();
+        assert_eq!(grouped.len(), 3);
+
+        // Sorted by theorem name
+        assert_eq!(grouped[0].0, "True_self");
+        assert_eq!(grouped[1].0, "false_imp");
+        assert_eq!(grouped[2].0, "one_plus_one");
+
+        // True_self has 2 steps sorted by depth
+        assert_eq!(grouped[0].1.len(), 2);
+        assert_eq!(grouped[0].1[0].depth, 0);
+        assert_eq!(grouped[0].1[0].tactic, "trivial");
+        assert_eq!(grouped[0].1[1].depth, 1);
+        assert_eq!(grouped[0].1[1].tactic, "constructor");
+
+        // one_plus_one has 1 step
+        assert_eq!(grouped[2].1.len(), 1);
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_grouped_filters_gaps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        // "gappy" has depths [0, 2] — gap at 1 → should be excluded
+        let content = r#"{"state":"s0","tactic":"t0","theorem":"gappy","depth":0}
+{"state":"s2","tactic":"t2","theorem":"gappy","depth":2}
+{"state":"⊢ True","tactic":"trivial","theorem":"contiguous","depth":0}
+{"state":"⊢ True ∧ True","tactic":"constructor","theorem":"contiguous","depth":1}
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let grouped = load_tactic_pairs_grouped(&path, None).unwrap();
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].0, "contiguous");
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_grouped_sampling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        let mut content = String::new();
+        for i in 0..5 {
+            content.push_str(&format!(
+                r#"{{"state":"⊢ s{i}","tactic":"t{i}","theorem":"thm_{i}","depth":0}}"#
+            ));
+            content.push('\n');
+        }
+        std::fs::write(&path, content).unwrap();
+
+        let grouped = load_tactic_pairs_grouped(&path, Some(2)).unwrap();
+        assert_eq!(grouped.len(), 2);
+        // Each entry should still be a valid theorem with steps
+        for (name, steps) in &grouped {
+            assert!(name.starts_with("thm_"));
+            assert_eq!(steps.len(), 1);
+        }
     }
 }
