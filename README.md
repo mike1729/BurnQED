@@ -35,7 +35,7 @@ Best-first search expands nodes by combined LLM log-probability and EBM energy s
 BurnQED/
 ├── crates/
 │   ├── lean-repl/       # Async Pantograph client, worker pool, ProofHandle pattern
-│   ├── policy/          # LLM tactic generation (candle), tokenizer, encode_only()
+│   ├── policy/          # SGLang HTTP client for tactic generation + hidden-state extraction
 │   ├── search/          # Best-first proof search engine, trait-based
 │   ├── trajectory/      # Parquet I/O for search trajectories
 │   ├── ebm/             # Energy-Based Model: SpectralNorm MLP, training, inference
@@ -246,19 +246,18 @@ cargo test -p lean-repl -- --ignored --test-threads=1    # ~60-90s
 cargo test -p search -- --ignored --test-threads=1       # ~60s
 cargo test -p prover-core -- --ignored --test-threads=1  # ~15s
 
-# LLM integration tests (require model weights)
-MODEL_PATH=/path/to/model cargo test -p policy -- --ignored --test-threads=1
+# Policy integration tests (require running SGLang server)
+cargo test -p policy -- --ignored --test-threads=1
 ```
 
 ## Key Dependencies
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `candle-core` / `candle-nn` | 0.8 | LLM inference (DeepSeek-Prover-V2-7B) |
 | `burn` | 0.16 | EBM training and inference (NdArray backend) |
+| `reqwest` | 0.12 | HTTP client for SGLang inference server |
 | `tokio` | 1 | Async runtime for Lean worker pool |
 | `arrow` / `parquet` | 53 | Trajectory data I/O |
-| `tokenizers` | 0.21 | HuggingFace tokenizer bindings |
 | `clap` | 4 | CLI argument parsing |
 
 ## License

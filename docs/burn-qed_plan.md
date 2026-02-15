@@ -12,7 +12,7 @@
 |---------|----------|-----------|-----------|
 | LLM fine-tuning | Python | PyTorch + HuggingFace + PEFT | Mature LoRA tooling, no reason to rewrite |
 | **EBM training** | **Rust** | **burn-rs** | **Learn the framework, contribute missing pieces upstream** |
-| LLM inference in search | Rust | candle | candle-transformers has DeepSeek/Llama arches |
+| LLM inference in search | Python/Rust | SGLang server + reqwest HTTP client | GPU-optimized batching, hidden-state extraction |
 | EBM inference in search | Rust | burn-rs | Same crate as training — zero friction |
 | Search engine | Rust | tokio + custom | Zero-cost async, concurrent Lean REPL management |
 | Trajectory I/O | Rust | arrow-rs / parquet | Efficient columnar storage between iterations |
@@ -23,7 +23,7 @@
 ```
 ┌─────────────────────────────────────────────────┐
 │          DeepSeek-Prover-V2-7B                  │
-│              (candle, frozen)                    │
+│         (SGLang server, frozen)                 │
 │                                                 │
 │  ┌───────────────────────────────────────┐      │
 │  │       Transformer Backbone            │      │
@@ -33,37 +33,37 @@
 │    ┌───────▼──────┐  ┌─────▼──────────┐        │
 │    │   LM Head    │  │  Mean Pool     │        │
 │    │  (policy)    │  │  → Vec<f32>    │        │
-│    │  generates   │  │  (detached)    │        │
-│    │  tactics     │  └──────┬─────────┘        │
+│    │  /generate   │  │  /encode       │        │
+│    │  endpoint    │  └──────┬─────────┘        │
 │    └──────────────┘         │                   │
 └─────────────────────────────┼───────────────────┘
-                              │ detached embeddings
+                              │ detached embeddings (HTTP)
                               ▼
-                ┌───────────────────────┐
-                │  Energy Head          │
-                │  (burn-rs, trainable) │
-                │  SpectralNorm MLP     │
-                │  4096 → 512 → 256 → 1│
-                │                       │
-                │  ← ONLY THIS TRAINS → │
-                └───────────────────────┘
+                ┌──────────────────────────────┐
+                │  Energy Head                 │
+                │  (burn-rs, trainable)        │
+                │  SpectralNorm MLP            │
+                │  4096 → 2048 → 1024 → 512→1 │
+                │                              │
+                │  ← ONLY THIS TRAINS →        │
+                └──────────────────────────────┘
 ```
 
-This is the AlphaZero/MuZero architecture: one network with a policy head and a value head sharing the same trunk.
+This is the AlphaZero/MuZero architecture: one network with a policy head and a value head sharing the same trunk. LLM inference is delegated to an SGLang server for GPU-optimized batching; the Rust side communicates via HTTP.
 
 ### 1.3 Data Flow (Revised)
 
 ```
-Python: LLM fine-tune → export safetensors
+Python: LLM fine-tune → export safetensors → restart SGLang server
 Python: One-time Mathlib trace → theorem index + tactic pairs
-Rust (candle): Load LLM safetensors → encode_only() provides embeddings
-Rust (burn): Train energy head on detached embeddings from candle
-Rust (search): Run search on 75K theorems → write Parquet trajectories
+Rust (reqwest → SGLang): /encode endpoint provides embeddings as Vec<f32>
+Rust (burn): Train energy head on embeddings from SGLang
+Rust (search → SGLang): Run search on 75K theorems → write Parquet trajectories
 Rust (burn): Retrain energy head on accumulated trajectories
 ...repeat
 ```
 
-The only Python-to-Rust handoff each iteration is the LLM safetensors. The EBM lives entirely in Rust.
+The Rust side communicates with SGLang via HTTP. The EBM head lives entirely in Rust.
 
 ### 1.4 Key Architecture Decisions (Settled After Two Review Rounds)
 
@@ -71,15 +71,14 @@ The only Python-to-Rust handoff each iteration is the LLM safetensors. The EBM l
 
 | Aspect | Original (v3) | Revised (final) |
 |--------|---------------|-----------------|
-| EBM encoder | Separate 1.3B (DeepSeek-Coder) | Shared 7B (DeepSeek-Prover) |
-| Encoder framework | tch (TorchScript) | candle (same as policy) |
-| GPU memory for models | ~17 GB (7B + 1.3B) | ~14 GB (7B only) |
+| EBM encoder | Separate 1.3B (DeepSeek-Coder) | Shared 7B (DeepSeek-Prover) via SGLang |
+| Encoder framework | tch (TorchScript) | SGLang server (HTTP /encode endpoint) |
+| GPU memory for models | ~17 GB (7B + 1.3B) | ~14 GB (7B only, served by SGLang) |
 | Encoder quality on Lean | Code model (mediocre) | Lean-specialized (excellent) |
 | EBM training complexity | Needs per-param-group optimizer | Single optimizer on head only |
-| PR #3 (grouped optimizer) | Required for our use case | Nice-to-have, not blocking |
-| Tokenizer | Two (LLM + encoder) | One (shared) |
-| Python encoder export | Required (TorchScript/ONNX) | Not needed (candle loads HF directly) |
-| EBM inference during search | Separate 1.3B forward passes | 7B forward passes (more expensive per call) |
+| Tokenizer | Two (LLM + encoder) | One (managed by SGLang server) |
+| Python encoder export | Required (TorchScript/ONNX) | Not needed (SGLang serves model directly) |
+| EBM inference during search | Separate 1.3B forward passes | 7B /encode calls (batched by SGLang) |
 
 **Latency trade-off analysis:**
 
@@ -91,7 +90,7 @@ The only Python-to-Rust handoff each iteration is the LLM safetensors. The EBM l
 
 The shared backbone is slower but the better representation quality of the Lean-native 7B model likely outweighs this for hard theorems. Made configurable — start with shared 7B, fall back to dedicated 1.3B if profiling shows bottleneck.
 
-**No ONNX import.** Both reviewers flagged burn-import's ONNX support as brittle for transformers with RoPE/GQA. With shared backbone, candle loads HF weights directly.
+**No ONNX import.** Both reviewers flagged burn-import's ONNX support as brittle for transformers with RoPE/GQA. With shared backbone served by SGLang, no Rust-side model loading is needed.
 
 **No dual tokenizer.** Custom Lean tokenizer was considered (bag-of-embeddings path) but cut — without self-attention it adds noise, not signal. If context length becomes an issue, use smart truncation (keep goal, truncate hypotheses) rather than parallel tokenizer path. Custom tokenizer training remains as future option for native burn-rs encoder.
 
@@ -306,7 +305,7 @@ impl InfoNceLoss {
 
 #### PR #3: Per-Parameter-Group Optimizer (Deprioritized)
 
-**Status:** No longer needed for our use case with the shared backbone architecture (encoder is in candle, only energy head trains in burn-rs). But still a high-impact contribution for the burn-rs ecosystem.
+**Status:** No longer needed for our use case with the shared backbone architecture (encoder served by SGLang, only energy head trains in burn-rs). But still a high-impact contribution for the burn-rs ecosystem.
 
 **Proposed approach (path of least resistance):**
 
@@ -460,10 +459,10 @@ lean-prover/
 │   │       ├── protocol.rs           # Pantograph JSON request/response serde types
 │   │       └── types.rs              # Types + discover_pantograph() auto-discovery
 │   │
-│   ├── policy/                         # LLM tactic generator (candle)
+│   ├── policy/                         # SGLang HTTP client (tactic gen + encode)
 │   │   └── src/
-│   │       ├── model.rs               # Tactic generation + encode_only()
-│   │       └── tokenizer.rs
+│   │       ├── model.rs               # InferenceHandle, SglangClient
+│   │       └── types.rs               # PolicyConfig, GeneratedTactic, Embedding
 │   │
 │   ├── ebm/                            # EBM: model + training + inference (ALL burn-rs)
 │   │   ├── Cargo.toml
@@ -500,7 +499,7 @@ lean-prover/
 ├── python/                             # LLM training + data prep ONLY
 │   ├── training/
 │   │   ├── train_llm.py
-│   │   └── export_llm.py              # safetensors export for candle
+│   │   └── export_llm.py              # safetensors export for SGLang
 │   ├── data/
 │   │   ├── trace_mathlib.py
 │   │   ├── prepare_tactic_pairs.py
@@ -526,20 +525,16 @@ Note the `burn-contrib` crate: this holds the generic reusable modules that will
 members = ["crates/*"]
 
 [workspace.dependencies]
-# LLM inference (candle)
-candle-core = "0.8"
-candle-nn = "0.8"
-candle-transformers = "0.8"
-safetensors = "0.4"
+# LLM inference (SGLang HTTP client)
+reqwest = { version = "0.12", features = ["json"] }
 
 # EBM training + inference (burn)
 burn = { version = "0.16", features = ["train", "autodiff", "metrics", "dataset"] }
-burn-tch = "0.16"              # LibTorch/CUDA backend for training
-burn-ndarray = "0.16"          # CPU fallback for testing
-burn-import = "0.16"           # ONNX encoder import (fallback)
+burn-ndarray = "0.16"          # CPU backend (NdArray — avoids WGPU Windows issues)
 
-# Tokenization
-tokenizers = "0.21"            # HuggingFace tokenizers, native Rust
+# Trajectory I/O
+arrow = "53"
+parquet = "53"
 
 # Async
 tokio = { version = "1", features = ["full"] }
@@ -568,8 +563,8 @@ ordered-float = "4"
 # configs/models.toml
 
 [encoder]
-# "shared" = use the policy model's backbone (7B, candle)
-# "dedicated" = load a separate encoder (TorchScript)
+# "shared" = use the policy model's backbone (7B, via SGLang /encode)
+# "dedicated" = load a separate encoder (not currently used)
 mode = "shared"
 
 # Only used if mode = "shared"
@@ -779,101 +774,18 @@ impl<B: Backend> EnergyHead<B> {
 
 ### 4.3 Encoder Backend (Configurable: Shared 7B or Dedicated 1.3B)
 
-```rust
-// crates/ebm/src/model/encoder.rs
+> **Implementation note:** The actual implementation uses SGLang's HTTP `/encode` endpoint for shared-backbone encoding instead of in-process candle/tch. The `EncoderBackend` enum in `crates/ebm/src/model/encoder.rs` is a config enum; the real encoding is done via `InferenceHandle::encode_blocking()` in the policy crate. See `crates/policy/src/model.rs`.
 
-pub enum EncoderBackend {
-    /// Share the policy model's backbone (7B, loaded in candle).
-    /// Higher quality, uses same model already in memory.
-    /// Slower for child state scoring (separate forward passes needed).
-    SharedPolicy {
-        policy_model: Arc<PolicyModel>,  // Reference to candle LLM
-    },
-    /// Separate smaller encoder (1.3B, loaded via TorchScript).
-    /// Lower quality, but faster dedicated inference.
-    /// Fallback if 7B is too slow for search budget.
-    Dedicated {
-        module: tch::CModule,
-    },
-}
+### 4.4 Encode-Only Mode
 
-impl EncoderBackend {
-    /// Extract hidden state representation for a proof state.
-    /// Returns: (batch, d_model) pooled representation
-    pub fn encode(&self, input_ids: &[u32], attention_mask: &[u32]) -> Vec<f32> {
-        match self {
-            Self::SharedPolicy { policy_model } => {
-                // Run the 7B model in encoder-only mode:
-                // forward pass to get hidden states, then mean-pool.
-                // No autoregressive generation.
-                policy_model.encode_only(input_ids, attention_mask)
-            }
-            Self::Dedicated { module } => {
-                // Run the separate 1.3B TorchScript model
-                let ids_tensor = TchTensor::of_slice(input_ids).reshape(&[1, -1]);
-                let mask_tensor = TchTensor::of_slice(attention_mask).reshape(&[1, -1]);
-                let hidden = module.forward_ts(&[&ids_tensor, &mask_tensor]).unwrap();
-                // Mean pooling
-                let mask_f = mask_tensor.to_kind(tch::Kind::Float).unsqueeze(-1);
-                let masked = &hidden * &mask_f;
-                let summed = masked.sum_dim_intlist(&[1i64][..], false, tch::Kind::Float);
-                let counts = mask_f.sum_dim_intlist(&[1i64][..], false, tch::Kind::Float).clamp_min(1e-9);
-                let pooled = summed / counts;
-                Vec::from(pooled.flatten(0, -1))
-            }
-        }
-    }
-}
-```
-
-### 4.4 The candle Side: Encode-Only Mode
+> **Implementation note:** The original plan called for candle in-process inference. The actual implementation uses an SGLang server with an HTTP `/encode` endpoint that returns mean-pooled hidden states as `Vec<f32>`. See `crates/policy/src/model.rs` (`InferenceHandle::encode_blocking()`). The code sample below is the original plan sketch and was not implemented as written.
 
 ```rust
-// crates/policy/src/model.rs — ADD encode-only method
-
-impl TacticGenerator {
-    /// Run the model as an encoder only: no autoregressive generation.
-    /// Returns the mean-pooled hidden state of the last layer.
-    /// Used for EBM value function scoring.
-    pub fn encode_only(&self, proof_state: &str) -> Vec<f32> {
-        let input_ids = self.tokenize(proof_state);
-        let input_tensor = Tensor::new(&input_ids[..], &self.device)
-            .unwrap()
-            .unsqueeze(0)
-            .unwrap();
-
-        // Forward through transformer blocks only (no LM head).
-        // candle-transformers' Llama model has:
-        //   embed_tokens → [transformer_blocks] → norm → lm_head
-        //
-        // We want to stop after norm, before lm_head.
-        // Implementation: fork the model's forward to return hidden states.
-        let hidden = self.forward_to_hidden(&input_tensor);
-        // hidden: (1, seq_len, d_model)
-
-        // Mean pooling
-        let seq_len = hidden.dim(1).unwrap();
-        let pooled = hidden
-            .sum(1).unwrap()
-            .squeeze(0).unwrap()
-            .affine(1.0 / seq_len as f64, 0.0).unwrap();
-
-        pooled.to_vec1::<f32>().unwrap()
-    }
-
-    /// Forward through transformer blocks only (no LM head).
-    fn forward_to_hidden(&self, input: &Tensor) -> Tensor {
-        // candle-transformers' Llama struct exposes its layers.
-        // We call them directly and stop before the LM head.
-        //
-        // If candle-transformers doesn't expose layers, we need
-        // a thin wrapper or fork.
-        todo!("Implement based on candle-transformers Llama internals")
-    }
-}
+// HISTORICAL PLAN — actual implementation uses SGLang HTTP /encode endpoint
+// See crates/policy/src/model.rs for the real implementation
 ```
 
-### 4.5 Tensor Bridge: candle ↔ burn
+### 4.5 Tensor Bridge: SGLang → burn
 
 ```rust
 fn tch_to_burn<B: Backend>(tch_tensor: &TchTensor, device: &B::Device) -> Tensor<B, 2> {
@@ -1225,7 +1137,7 @@ fn tokenize_and_pad<B: Backend>(
 
 ### 6.1 Training Loop (Revised for Shared Backbone)
 
-With the shared backbone, the encoder lives in candle (frozen). Only the energy head trains in burn-rs. This means a single AdamW optimizer with a single learning rate — no grouped optimizer workaround needed.
+With the shared backbone served by SGLang (frozen), only the energy head trains in burn-rs. This means a single AdamW optimizer with a single learning rate — no grouped optimizer workaround needed.
 
 ```rust
 // crates/ebm/src/training/trainer.rs
@@ -1274,7 +1186,7 @@ impl<B: AutodiffBackend> EBMTrainer<B> {
     pub fn train(
         &mut self,
         mut model: EnergyHead<B>,
-        encoder: &TacticGenerator,     // candle model, frozen, used as encoder
+        encoder: &InferenceHandle,      // SGLang client, frozen, used as encoder
         dataset: &TrajectoryDataset,
     ) -> EnergyHead<B> {
         let index = dataset.build_index();
@@ -1286,7 +1198,7 @@ impl<B: AutodiffBackend> EBMTrainer<B> {
         for step in 0..self.config.total_steps {
             let lr = self.lr_schedule(step);
 
-            // Step 1: Encode all states with the frozen 7B model (candle, no gradients)
+            // Step 1: Encode all states with the frozen 7B model (SGLang, no gradients)
             let batch = self.sample_contrastive_batch(dataset, &index, &mut rng);
 
             let pos_embeddings: Vec<Vec<f32>> = batch.pos_states.iter()
@@ -1902,7 +1814,7 @@ Calibrated for one person developing on a MacBook (M-series, 32-64GB), deploying
 
 - Rust compilation and unit testing (fast — Rust compiles well on ARM)
 - burn-rs with `burn-ndarray` backend (CPU, for testing EBM forward/backward)
-- candle on CPU or Metal (slow inference, but enough to test tactic generation on 1 theorem)
+- SGLang on CPU or small GPU (slow inference, but enough to test tactic generation on 1 theorem)
 - Lean 4 + Pantograph locally (test REPL protocol)
 - Python data scripts, tokenizer training
 - Full integration test of the search loop on CPU (slow but functional)
@@ -1920,7 +1832,7 @@ Calibrated for one person developing on a MacBook (M-series, 32-64GB), deploying
 |-------|------|----------------|------------------------|----------------|
 | **0: Setup** | 1 | Everything compiles | Cargo workspace, all crate stubs | Dependency resolution |
 | **1: Lean REPL** | 5 | Apply tactics programmatically | Worker pool, protocol, recycling | Pantograph protocol quirks, hangs |
-| **2: LLM in candle** | 6 | Core search loop running | candle model loading, tokenizer, encode_only() | Weight format mismatches, shape errors |
+| **2: LLM via SGLang** | 6 | Core search loop running | SGLang HTTP client, tactic generation, encode endpoint | Server connectivity, response parsing |
 | **3: Search engine** | 5 | LLM-only prover with trajectory collection | Priority queue, Parquet writer, search loop | Lean integration bugs, crash recovery |
 | **4: EBM in burn-rs** | 10 | Value-guided search improving solve rate | All model code, training loop, losses, metrics | Tensor shape mismatches, training instability |
 | **5: Expert iteration** | 16 | 5 iterations, benchmark results | Iteration scripts, evaluation harness | Mostly waiting for GPUs |
@@ -1984,8 +1896,8 @@ EBM training in burn-rs should be comparable to PyTorch speed when using the `bu
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| burn-rs ONNX import can't handle complex transformers | N/A | **Eliminated** — shared backbone uses candle, not ONNX |
-| candle can't load DeepSeek-Prover-V2-7B | High | Verify weight format early (Phase 2 day 1). Fallback: vLLM in Python for inference, call via HTTP from Rust. |
+| burn-rs ONNX import can't handle complex transformers | N/A | **Eliminated** — shared backbone served by SGLang, not ONNX |
+| SGLang can't serve DeepSeek-Prover-V2-7B | Low | SGLang natively supports DeepSeek. Tested and working. |
 | `GradientsParams` doesn't expose parameter names for grouped LR | N/A | **Eliminated** — only energy head trains, single optimizer |
 | SpectralNorm's u/v vectors need to persist but aren't `Param` | Medium | **Option C** (random reinit) for our code. **Param + detach** for upstream PR. Propose `Buffer` concept. |
 | burn-rs training is slower than PyTorch | Low | Unlikely with `burn-tch` backend (same CUDA kernels). If it happens, profile with `nsys` and optimize the data pipeline (often the bottleneck). |
@@ -2001,7 +1913,7 @@ EBM training in burn-rs should be comparable to PyTorch speed when using the `bu
 
 ```
 Search loop doesn't hit >10 iter/sec?
-├── Bottleneck is LLM inference → int8 quantization in candle, or vLLM
+├── Bottleneck is LLM inference → SGLang quantization (AWQ/GPTQ), or increase concurrency
 ├── Bottleneck is Lean REPL → increase worker count, reduce timeout
 └── Bottleneck is Lean startup → pre-warm workers, reuse environments
 
@@ -2030,13 +1942,13 @@ EBM doesn't improve solve rate?
 
 ### Medium-term
 
-- **Native burn-rs transformer encoder:** Instead of candle import, implement the full encoder in burn-rs. Removes candle dependency entirely and gives full control over fine-tuning the encoder during EBM training. Major upstream contribution.
+- **Native burn-rs transformer encoder:** Implement the full encoder in burn-rs instead of relying on SGLang. Removes HTTP round-trip latency and gives full control over fine-tuning the encoder during EBM training. Major upstream contribution.
 - **Distributed EBM training:** burn-rs doesn't have native DDP yet. Implementing data-parallel training would be a flagship PR.
 - **Custom Lean tokenizer + small encoder:** Train BPE tokenizer on Mathlib proof states (8192 vocab, preserving `∀`, `⊢`, `→` etc.), then train a 125M encoder from scratch in burn-rs. Better compression, fully Rust.
 
 ### Long-term
 
-- **Train everything in Rust:** LLM fine-tuning in candle (it supports training), EBM in burn-rs, search in tokio. Zero Python dependency. The dream but premature — Python's HuggingFace ecosystem for LLM LoRA is still too convenient to replicate.
+- **Train everything in Rust:** LLM fine-tuning in burn-rs or candle (both support training), EBM in burn-rs, search in tokio. Zero Python dependency. The dream but premature — Python's HuggingFace ecosystem for LLM LoRA is still too convenient to replicate.
 
 ---
 
@@ -2051,7 +1963,7 @@ EBM doesn't improve solve rate?
 - [x] Write unit + integration tests for the REPL protocol (20 unit, 10 integration, 2 doc)
 - [x] Auto-discovery: `LeanPoolConfig::with_bundled_pantograph()` — no env var needed
 - [x] ProofHandle pattern: state ID routing correctness with concurrent multi-step proofs
-- [ ] Download DeepSeek-Prover-V2-7B weights
-- [ ] Verify candle can load the model (even if inference is slow on CPU)
+- [x] Download DeepSeek-Prover-V2-7B weights
+- [x] Verify SGLang serves the model correctly
 
 Phases 0-1 are complete. The search loop milestone (Phase 2 end) is the true gate — everything else is incremental.

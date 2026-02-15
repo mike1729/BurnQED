@@ -79,7 +79,7 @@ E_θ(x) = EnergyHead(Encoder(x))
 Where:
 - `x` is a proof state string (e.g., `"n : Nat ⊢ n + 0 = n"`)
 - `Encoder(x)` is the frozen 7B DeepSeek model. It reads the text and produces a 4096-dimensional vector that captures the "meaning" of the proof state. This is the `encode_only()` function from Phase 2.
-- `EnergyHead` is a small MLP (4096 → 512 → 256 → 1) that maps the encoding to a scalar energy. **This is the only part we train.**
+- `EnergyHead` is a small MLP (4096 → 2048 → 1024 → 512 → 1) that maps the encoding to a scalar energy. **This is the only part we train.**
 
 Why freeze the encoder? The 7B model has 7 billion parameters. The energy head has ~5 million. Training 7B parameters requires enormous compute and risks catastrophic forgetting. Training 5M parameters is fast and safe. The 7B encoder already produces excellent representations of mathematical text — we just need to learn a simple function on top of those representations.
 
@@ -315,18 +315,19 @@ The temperature has 1 parameter. It's trivial computationally but important for 
 ### 4.4 Parameter count
 
 ```
-Layer 1: 4096 × 512 + 512 = 2,097,664
-Layer 2: 512 × 256 + 256  = 131,328
-Layer 3: 256 × 1           = 256
-Temperature:                = 1
-Total:                      ≈ 2.23M parameters
+Layer 1: 4096 × 2048 + 2048 = 8,390,656
+Layer 2: 2048 × 1024 + 1024 = 2,098,176
+Layer 3: 1024 × 512 + 512   = 524,800
+Layer 4: 512 × 1             = 512
+Temperature:                  = 1
+Total:                        ≈ 11M parameters
 ```
 
 This is tiny compared to the 7B encoder. Training it is fast — minutes on a GPU, not hours.
 
 ### 4.5 Why this architecture?
 
-**Why 3 layers?** Two hidden layers with decreasing width (512 → 256) give enough capacity to learn a nonlinear energy landscape while being small enough to train quickly. One layer would be too linear. Four+ layers add complexity without clear benefit for this task.
+**Why 4 layers?** Three hidden layers with decreasing width (2048 → 1024 → 512) give enough capacity to learn a nonlinear energy landscape while being small enough to train quickly. The wider layers (vs the original 3-layer 512→256 design) better capture the rich structure of the 4096-dim encoder embeddings.
 
 **Why spectral norm on every layer?** The product of Lipschitz constants gives the network's overall Lipschitz constant. If any layer isn't normalized, the product can blow up. Normalizing all layers ensures the whole network is well-behaved.
 
@@ -387,10 +388,10 @@ For each training step:
    - Each example: 1 positive + K negatives (K=4 default)
    - Using the hard/medium/easy mix from Section 5
 
-2. ENCODE (slow, frozen, candle):
+2. ENCODE (slow, frozen, SGLang /encode endpoint):
    For each of the batch_size × (1 + K) proof state strings:
-     embedding = TacticGenerator.encode_only(state)  →  Vec<f32>, dim 4096
-   This is the bottleneck — each encode_only() call runs a 7B model forward pass.
+     embedding = InferenceHandle.encode_blocking(state)  →  Vec<f32>, dim 4096
+   This is the bottleneck — each encode call runs a 7B model forward pass on the GPU server.
    batch_size=32, K=4: that's 32 × 5 = 160 encoder calls per step.
 
 3. CONVERT:
@@ -456,40 +457,40 @@ Warmup prevents early instability (large random gradients at initialization). Co
 
 ---
 
-## Part 7: The candle ↔ burn Bridge
+## Part 7: The SGLang → burn Bridge
 
-### 7.1 Why two frameworks?
+### 7.1 Why two systems?
 
-- **candle**: loads and runs the 7B LLM. It handles model loading, tokenization, and transformer forward passes. It's optimized for inference of large models.
+- **SGLang**: serves the 7B LLM as a GPU inference server. It handles model loading, tokenization, batching, and transformer forward passes. Accessed from Rust via HTTP.
 - **burn-rs**: trains the energy head. It provides autodiff (automatic differentiation), optimizers, and a training loop. It's designed for training.
 
-The 7B model is frozen — it never trains. So we use candle for it (better inference performance). The energy head needs gradients — so we use burn-rs (better training support).
+The 7B model is frozen — it never trains. So we use SGLang for it (GPU-optimized inference with batching). The energy head needs gradients — so we use burn-rs (training support).
 
-The bridge between them is simple: candle produces `Vec<f32>` embeddings, which we convert to burn `Tensor<B, 2>` via `Tensor::from_data()`. This is a memory copy, not a GPU transfer (unless the devices differ), and takes microseconds.
+The bridge between them is simple: SGLang's `/encode` endpoint returns `Vec<f32>` embeddings, which we convert to burn `Tensor<B, 2>` via `Tensor::from_data()`. This is a memory copy and takes microseconds.
 
 ### 7.2 Why not just use one framework?
 
 You could, but:
-- burn-rs can't easily load HuggingFace safetensors models (candle is built for this)
-- candle doesn't have a full training loop with optimizers and autodiff (burn-rs is built for this)
+- burn-rs can't easily load HuggingFace safetensors models or serve 7B LLMs efficiently
+- SGLang doesn't provide autodiff or a training loop
 
-Using each framework for its strength is cleaner than fighting either one.
+Using each system for its strength is cleaner than fighting either one.
 
 ### 7.3 Gradient flow across the bridge
 
 This is critical to understand: **gradients do NOT flow through the bridge.**
 
 ```
-                candle (frozen)          bridge        burn-rs (trainable)
+                SGLang (frozen)           bridge        burn-rs (trainable)
 proof_state  →  [7B transformer]  →  Vec<f32>  →  [burn Tensor]  →  [EnergyHead]  →  energy
-                                                                          ↑
+                 (HTTP /encode)                                            ↑
                                                       gradients stop here at the bridge
                                       gradients flow: energy → EnergyHead params
 ```
 
-When burn-rs computes `loss.backward()`, it traces gradients back through the EnergyHead's parameters (weight, bias, log_temperature) but stops at the input tensor. The input tensor was created from raw floats — it has no gradient history from candle. This is exactly what we want: the encoder is frozen.
+When burn-rs computes `loss.backward()`, it traces gradients back through the EnergyHead's parameters (weight, bias, log_temperature) but stops at the input tensor. The input tensor was created from raw floats — it has no gradient history from SGLang. This is exactly what we want: the encoder is frozen.
 
-In ML terminology, this is equivalent to `.detach()` in PyTorch. But we get it for free because the frameworks don't share a computation graph.
+In ML terminology, this is equivalent to `.detach()` in PyTorch. But we get it for free because the systems don't share a computation graph.
 
 ---
 
@@ -663,7 +664,7 @@ Before starting Phase 4, you should be able to answer these:
 
 ### Implementation
 
-9. Where do gradients flow in our system? (Only through the EnergyHead parameters. The encoder embeddings are detached at the candle→burn bridge.)
+9. Where do gradients flow in our system? (Only through the EnergyHead parameters. The encoder embeddings are detached at the SGLang→burn bridge.)
 
 10. What burn-rs backend do we use for training vs. inference? (Training: Autodiff<B>. Inference: B directly. The model must be converted between them.)
 
@@ -693,7 +694,7 @@ Before starting Phase 4, you should be able to answer these:
 | Depth regression | Prompt 4.3 — `depth_regression_loss()` |
 | Hard/medium/easy negatives | Prompt 4.4 — `ContrastiveSampler.sample()` |
 | Training health monitoring | Prompt 4.5 — `EBMMetrics.health_check()` |
-| candle→burn tensor bridge | Prompt 4.6 — `embeddings_to_burn_tensor()` |
+| SGLang→burn tensor bridge | Prompt 4.6 — `embeddings_to_burn_tensor()` |
 | Training loop with LR schedule | Prompt 4.7 — `train()` function |
 | Inference scoring for search | Prompt 4.8 — `EBMScorer` |
 | Full pipeline test | Prompt 4.10 — integration test |
@@ -715,7 +716,7 @@ No. The LLM trains on (state, tactic) pairs. The EBM trains on (positive state, 
 It constrains the model, but the constraint is beneficial. Without it, the model can achieve arbitrarily low loss by amplifying energy differences — which looks good on the training objective but doesn't generalize. Spectral norm forces the model to learn meaningful features rather than just scaling up outputs.
 
 **"The encoder must be differentiable for EBM training."**
-No. We use the encoder's outputs (embeddings) as fixed inputs to the energy head. Gradients only flow through the energy head. This is why we can use candle (no autodiff) for the encoder and burn-rs (autodiff) for the energy head.
+No. We use the encoder's outputs (embeddings) as fixed inputs to the energy head. Gradients only flow through the energy head. This is why we can use SGLang (frozen inference server) for the encoder and burn-rs (autodiff) for the energy head.
 
 **"More negatives per example = always better."**
 Not exactly. More negatives (K) make the InfoNCE bound tighter, but they also slow training (more encoder calls). And with too many negatives, the easy ones dominate and the model doesn't learn from the hard ones. K=4 is a practical sweet spot.
