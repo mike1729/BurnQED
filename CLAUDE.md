@@ -173,14 +173,14 @@ DeepSeek-Prover-V2-7B (SGLang server)
                                     │
                                     ▼
                     Energy Head (burn-rs, trainable)
-                    SpectralNorm MLP: 4096 → 512 → 256 → 1
+                    SpectralNorm MLP: 4096 → 2048 → 1024 → 512 → 1
                     Output: scalar energy (lower = more provable)
 
 Lean 4 REPL Pool (tokio, Pantograph JSON protocol)
 └── Verifies tactics against proof states, returns new goals
 ```
 
-Single shared 7B backbone serves both policy and value function (AlphaZero-style). The energy head (~5M params) is the only component trained in Rust via burn-rs. LLM fine-tuning happens in Python with HuggingFace PEFT/LoRA.
+Single shared 7B backbone serves both policy and value function (AlphaZero-style). The energy head (~11M params) is the only component trained in Rust via burn-rs. LLM fine-tuning happens in Python with HuggingFace PEFT/LoRA.
 
 ## Settled Architecture Decisions — Do NOT Change
 
@@ -433,7 +433,7 @@ A trait-based best-first search engine that can:
 
 **EBM Model (`crates/ebm/`):**
 - `SpectralNormLinear` (Option C: random reinit, 5 power iterations)
-- `EnergyHead`: 4096→512→256→1 MLP with SiLU, dropout, learnable log_temperature
+- `EnergyHead`: 4096→2048→1024→512→1 MLP (4-layer) with SiLU, dropout, learnable log_temperature
 - `bridge.rs`: Vec<f32> ↔ burn Tensor conversions
 - `EncoderBackend` enum (Shared/Dedicated) for config-driven encoder selection
 
@@ -465,6 +465,7 @@ A trait-based best-first search engine that can:
 - **Label logic**: `TrajectoryWriter::from_search_result()` — proved theorems get Positive labels on the proof path (root→QED), Negative on dead ends. Unproved theorems are all Negative.
 - **SearchStats**: Each `SearchResult` includes `stats: SearchStats` with per-search timing (Lean time, generation time), node counts (expanded, pruned, terminal), and peak frontier size.
 - **Parquet → EBM training**: `cargo run -p prover-core -- train-ebm --trajectories ... --server-url ...` reads trajectory Parquet files, creates `ContrastiveSampler`, trains EBM via `ebm::train()`, saves checkpoint + `energy_head_config.json`.
+- **Generate negatives**: `cargo run -p prover-core -- generate-negatives --tactic-pairs data/tactic_pairs/train.jsonl --server-url ... --output negatives.parquet --min-steps 3` — walks LeanDojo proof traces in Pantograph, generates LLM candidates at each step, classifies as Positive/Negative. Multi-tactic chains are walked and relabeled Positive if they complete the proof. Use `--min-steps` to filter to deeper proofs for better depth distribution.
 
 ## Testing Policy
 

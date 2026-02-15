@@ -9,18 +9,18 @@
 
 **Lean 4 theorem prover combining LLM policy with Energy-Based Model value function, trained via expert iteration.**
 
-A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic generation (policy) and mean-pooled state embeddings (value), AlphaZero-style. A small EBM head (~5M params) is the only component trained in Rust. LLM fine-tuning runs in Python with LoRA/PEFT.
+A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic generation (policy) and mean-pooled state embeddings (value), AlphaZero-style. A small EBM head (~11M params) is the only component trained in Rust. LLM fine-tuning runs in Python with LoRA/PEFT.
 
 ## Architecture
 
 ```
-DeepSeek-Prover-V2-7B (candle, frozen)
+DeepSeek-Prover-V2-7B (SGLang server)
 ├── Policy head: autoregressive tactic generation (LM head)
-└── Mean-pool hidden states → detached Vec<f32>
+└── Mean-pool hidden states → Vec<f32> via /encode endpoint
                                     │
                                     ▼
                     Energy Head (burn-rs, trainable)
-                    SpectralNorm MLP: 4096 → 512 → 256 → 1
+                    SpectralNorm MLP: 4096 → 2048 → 1024 → 512 → 1
                     Output: scalar energy (lower = more provable)
 
 Lean 4 REPL Pool (tokio, Pantograph JSON protocol)
@@ -42,8 +42,9 @@ BurnQED/
 │   ├── prover-core/     # CLI binary tying everything together
 │   └── burn-contrib/    # Upstream burn-rs PR modules (stub)
 ├── python/
-│   ├── training/        # LoRA fine-tuning (train_llm.py, merge_lora.py)
-│   └── data/            # Mathlib tracing, tactic pair extraction
+│   ├── inference_server.py  # Custom SGLang server with in-process mean-pooling
+│   ├── training/            # LoRA fine-tuning (train_llm.py, merge_lora.py)
+│   └── data/                # Mathlib tracing, tactic pair extraction
 ├── scripts/             # Setup, baseline, iteration, resume orchestration
 ├── configs/             # search.toml, models.toml
 ├── data/                # test_theorems.json, theorem indices
@@ -91,7 +92,7 @@ All commands are subcommands of `cargo run --release -p prover-core --`:
 
 ```bash
 cargo run --release -p prover-core -- search \
-    --model-path models/deepseek-prover-v2-7b \
+    --server-url http://localhost:30000 \
     --theorems data/test_theorems.json \
     --output trajectories/run.parquet \
     --ebm-path checkpoints/ebm \       # optional: EBM value guidance
@@ -103,11 +104,29 @@ cargo run --release -p prover-core -- search \
 
 Use `--dry-run` to validate environment setup without searching.
 
+### `generate-negatives` — Generate contrastive training data
+
+Walks LeanDojo proof traces in Pantograph, generates LLM candidates at each step, and classifies results as Positive (ground-truth or alternative proof) or Negative (divergent path).
+
+```bash
+cargo run --release -p prover-core -- generate-negatives \
+    --tactic-pairs data/tactic_pairs/train.jsonl \
+    --server-url http://localhost:30000 \
+    --output negatives.parquet \
+    --num-theorems 5000 \             # optional: sample N theorems
+    --min-steps 3 \                   # optional: filter to multi-step proofs
+    --candidates-per-step 8 \         # LLM candidates per proof step
+    --target-negatives 15 \           # early stop per theorem
+    --temperature 1.0
+```
+
+Multi-tactic chains are walked: if the model generates a full proof attempt, intermediate states are buffered and labeled Positive if the chain completes the proof, Negative otherwise.
+
 ### `eval` — Multi-budget evaluation
 
 ```bash
 cargo run --release -p prover-core -- eval \
-    --model-path models/deepseek-prover-v2-7b \
+    --server-url http://localhost:30000 \
     --theorems data/minif2f_test.json \
     --budgets 100,300,600 \
     --pass-n 8 \
@@ -120,7 +139,7 @@ cargo run --release -p prover-core -- eval \
 ```bash
 cargo run --release -p prover-core -- train-ebm \
     --trajectories trajectories/iter_0.parquet \
-    --llm-path models/deepseek-prover-v2-7b \
+    --server-url http://localhost:30000 \
     --output-dir checkpoints/ebm/iter_1 \
     --steps 50000 \
     --save-embeddings checkpoints/ebm/iter_1/embeddings.parquet
@@ -203,8 +222,9 @@ mode = "shared"           # Use policy backbone for EBM embeddings
 shared_hidden_dim = 4096  # DeepSeek-Prover-V2-7B hidden size
 
 [energy_head]
-d_hidden1 = 512
-d_hidden2 = 256
+d_hidden1 = 2048
+d_hidden2 = 1024
+d_hidden3 = 512
 dropout = 0.1
 n_power_iterations = 5
 

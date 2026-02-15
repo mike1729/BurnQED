@@ -397,6 +397,7 @@ pub fn load_tactic_pairs(
 pub fn load_tactic_pairs_grouped(
     path: &Path,
     max_theorems: Option<usize>,
+    min_steps: Option<usize>,
 ) -> anyhow::Result<Vec<(String, Vec<TacticStep>)>> {
     let file = std::fs::File::open(path)
         .map_err(|e| anyhow::anyhow!("Failed to open tactic pairs file {}: {e}", path.display()))?;
@@ -442,6 +443,18 @@ pub fn load_tactic_pairs_grouped(
             Some((name, steps))
         })
         .collect();
+
+    // Filter by minimum number of proof steps
+    if let Some(min) = min_steps {
+        let before = result.len();
+        result.retain(|(_, steps)| steps.len() >= min);
+        tracing::info!(
+            before,
+            after = result.len(),
+            min_steps = min,
+            "Filtered theorems by minimum step count"
+        );
+    }
 
     // Sort by theorem name for deterministic ordering
     result.sort_by(|a, b| a.0.cmp(&b.0));
@@ -738,7 +751,7 @@ mod tests {
 "#;
         std::fs::write(&path, content).unwrap();
 
-        let grouped = load_tactic_pairs_grouped(&path, None).unwrap();
+        let grouped = load_tactic_pairs_grouped(&path, None, None).unwrap();
         assert_eq!(grouped.len(), 3);
 
         // Sorted by theorem name
@@ -769,7 +782,7 @@ mod tests {
 "#;
         std::fs::write(&path, content).unwrap();
 
-        let grouped = load_tactic_pairs_grouped(&path, None).unwrap();
+        let grouped = load_tactic_pairs_grouped(&path, None, None).unwrap();
         assert_eq!(grouped.len(), 1);
         assert_eq!(grouped[0].0, "contiguous");
     }
@@ -787,12 +800,40 @@ mod tests {
         }
         std::fs::write(&path, content).unwrap();
 
-        let grouped = load_tactic_pairs_grouped(&path, Some(2)).unwrap();
+        let grouped = load_tactic_pairs_grouped(&path, Some(2), None).unwrap();
         assert_eq!(grouped.len(), 2);
         // Each entry should still be a valid theorem with steps
         for (name, steps) in &grouped {
             assert!(name.starts_with("thm_"));
             assert_eq!(steps.len(), 1);
         }
+    }
+
+    #[test]
+    fn test_load_tactic_pairs_grouped_min_steps() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pairs.jsonl");
+        // thm_short: 1 step, thm_medium: 2 steps, thm_long: 3 steps
+        let content = r#"{"state":"s0","tactic":"t0","theorem":"thm_short","depth":0}
+{"state":"s0","tactic":"t0","theorem":"thm_medium","depth":0}
+{"state":"s1","tactic":"t1","theorem":"thm_medium","depth":1}
+{"state":"s0","tactic":"t0","theorem":"thm_long","depth":0}
+{"state":"s1","tactic":"t1","theorem":"thm_long","depth":1}
+{"state":"s2","tactic":"t2","theorem":"thm_long","depth":2}
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        // min_steps=2 should keep thm_medium and thm_long
+        let grouped = load_tactic_pairs_grouped(&path, None, Some(2)).unwrap();
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].0, "thm_long");
+        assert_eq!(grouped[0].1.len(), 3);
+        assert_eq!(grouped[1].0, "thm_medium");
+        assert_eq!(grouped[1].1.len(), 2);
+
+        // min_steps=3 should keep only thm_long
+        let grouped = load_tactic_pairs_grouped(&path, None, Some(3)).unwrap();
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].0, "thm_long");
     }
 }

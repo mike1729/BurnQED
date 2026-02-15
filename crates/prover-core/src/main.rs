@@ -133,6 +133,9 @@ enum Command {
         /// Maximum number of theorems to process.
         #[arg(long)]
         num_theorems: Option<usize>,
+        /// Minimum number of proof steps per theorem (filters out short proofs).
+        #[arg(long)]
+        min_steps: Option<usize>,
         /// Number of LLM candidates to generate per proof step.
         #[arg(long, default_value_t = 8)]
         candidates_per_step: usize,
@@ -287,6 +290,7 @@ async fn main() -> anyhow::Result<()> {
             server_url,
             output,
             num_theorems,
+            min_steps,
             candidates_per_step,
             target_negatives,
             temperature,
@@ -301,6 +305,7 @@ async fn main() -> anyhow::Result<()> {
                 tactic_pairs,
                 output,
                 num_theorems,
+                min_steps,
                 candidates_per_step,
                 target_negatives,
                 temperature,

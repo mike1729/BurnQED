@@ -275,6 +275,8 @@ pub struct GenerateNegativesArgs {
     pub output: PathBuf,
     /// Maximum number of theorems to process.
     pub num_theorems: Option<usize>,
+    /// Minimum number of proof steps per theorem (filters short proofs).
+    pub min_steps: Option<usize>,
     /// Number of LLM candidates to generate per proof step.
     pub candidates_per_step: usize,
     /// Target number of negatives per theorem before early stop.
@@ -1653,7 +1655,8 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
         path = %args.tactic_pairs.display(),
         "Loading tactic pairs"
     );
-    let grouped = ebm::load_tactic_pairs_grouped(&args.tactic_pairs, args.num_theorems)?;
+    let grouped =
+        ebm::load_tactic_pairs_grouped(&args.tactic_pairs, args.num_theorems, args.min_steps)?;
     let total = grouped.len();
     tracing::info!(theorems = total, "Loaded theorems for negative generation");
 
