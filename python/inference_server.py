@@ -78,7 +78,7 @@ def _build_engine(model_path: str, tp: int = 1, mem_fraction: float = 0.85):
     engine = sgl.Engine(
         model_path=model_path,
         enable_return_hidden_states=True,
-        tensor_parallel_size=tp,
+        tp_size=tp,
         mem_fraction_static=mem_fraction,
         trust_remote_code=True,
     )
