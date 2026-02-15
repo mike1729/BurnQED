@@ -146,7 +146,7 @@ enum Command {
         #[arg(long, default_value_t = 32)]
         batch_size: usize,
         /// Number of negative samples per positive.
-        #[arg(long, default_value_t = 4)]
+        #[arg(long, default_value_t = 7)]
         k_negatives: usize,
         /// Path to precomputed embedding cache (Parquet). If omitted, precomputes from SGLang.
         #[arg(long)]

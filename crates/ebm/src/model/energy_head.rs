@@ -5,14 +5,15 @@ use crate::model::spectral_norm::{SpectralNormLinear, SpectralNormLinearConfig};
 
 /// Configuration for the EnergyHead MLP.
 ///
-/// Maps encoder hidden states (d_encoder) to scalar energy via a 3-layer
+/// Maps encoder hidden states (d_encoder) to scalar energy via a 4-layer
 /// spectral-normed SiLU MLP with dropout and learnable temperature.
 ///
 /// ```text
 /// (batch, d_encoder)
 ///   → SpectralNormLinear(d_encoder→d_hidden1) → SiLU → Dropout
 ///   → SpectralNormLinear(d_hidden1→d_hidden2) → SiLU → Dropout
-///   → SpectralNormLinear(d_hidden2→1, no bias) → squeeze
+///   → SpectralNormLinear(d_hidden2→d_hidden3) → SiLU → Dropout
+///   → SpectralNormLinear(d_hidden3→1, no bias) → squeeze
 ///   → raw_energy / exp(log_temperature)
 ///   → energy: (batch,)
 /// ```
@@ -21,11 +22,14 @@ pub struct EnergyHeadConfig {
     /// Encoder output dimension (e.g. 4096 for DeepSeek-Prover-V2-7B).
     pub d_encoder: usize,
     /// First hidden layer dimension.
-    #[config(default = 512)]
+    #[config(default = 2048)]
     pub d_hidden1: usize,
     /// Second hidden layer dimension.
-    #[config(default = 256)]
+    #[config(default = 1024)]
     pub d_hidden2: usize,
+    /// Third hidden layer dimension.
+    #[config(default = 512)]
+    pub d_hidden3: usize,
     /// Dropout probability applied after each SiLU activation.
     #[config(default = 0.1)]
     pub dropout: f64,
@@ -41,12 +45,16 @@ pub struct EnergyHead<B: Backend> {
     sn_linear1: SpectralNormLinear<B>,
     /// Second spectral-normed linear: d_hidden1 → d_hidden2.
     sn_linear2: SpectralNormLinear<B>,
-    /// Output spectral-normed linear: d_hidden2 → 1 (no bias).
+    /// Third spectral-normed linear: d_hidden2 → d_hidden3.
     sn_linear3: SpectralNormLinear<B>,
+    /// Output spectral-normed linear: d_hidden3 → 1 (no bias).
+    sn_linear4: SpectralNormLinear<B>,
     /// Dropout after first SiLU.
     dropout1: burn::nn::Dropout,
     /// Dropout after second SiLU.
     dropout2: burn::nn::Dropout,
+    /// Dropout after third SiLU.
+    dropout3: burn::nn::Dropout,
     /// Log-temperature parameter. Energy is divided by exp(log_temperature).
     /// Initialized to 0 so initial temperature = 1.
     log_temperature: Param<Tensor<B, 1>>,
@@ -58,11 +66,13 @@ impl EnergyHeadConfig {
         EnergyHead {
             sn_linear1: SpectralNormLinearConfig::new(self.d_encoder, self.d_hidden1).init(device),
             sn_linear2: SpectralNormLinearConfig::new(self.d_hidden1, self.d_hidden2).init(device),
-            sn_linear3: SpectralNormLinearConfig::new(self.d_hidden2, 1)
+            sn_linear3: SpectralNormLinearConfig::new(self.d_hidden2, self.d_hidden3).init(device),
+            sn_linear4: SpectralNormLinearConfig::new(self.d_hidden3, 1)
                 .with_bias(false)
                 .init(device),
             dropout1: burn::nn::DropoutConfig::new(self.dropout).init(),
             dropout2: burn::nn::DropoutConfig::new(self.dropout).init(),
+            dropout3: burn::nn::DropoutConfig::new(self.dropout).init(),
             log_temperature: Param::from_tensor(Tensor::zeros([1], device)),
         }
     }
@@ -82,7 +92,11 @@ impl<B: Backend> EnergyHead<B> {
         let x = burn::tensor::activation::silu(x);
         let x = self.dropout2.forward(x);
 
-        let raw_energy: Tensor<B, 1> = self.sn_linear3.forward(x).squeeze::<1>(1);
+        let x = self.sn_linear3.forward(x);
+        let x = burn::tensor::activation::silu(x);
+        let x = self.dropout3.forward(x);
+
+        let raw_energy: Tensor<B, 1> = self.sn_linear4.forward(x).squeeze::<1>(1);
         let temperature = self.log_temperature.val().exp();
         raw_energy / temperature
     }
@@ -117,6 +131,7 @@ mod tests {
         let model = EnergyHeadConfig::new(32)
             .with_d_hidden1(16)
             .with_d_hidden2(8)
+            .with_d_hidden3(4)
             .init::<TestBackend>(&device);
         let input = Tensor::<TestBackend, 2>::random(
             [4, 32],
@@ -133,6 +148,7 @@ mod tests {
         let model = EnergyHeadConfig::new(32)
             .with_d_hidden1(16)
             .with_d_hidden2(8)
+            .with_d_hidden3(4)
             .with_dropout(0.0)
             .init::<TestBackend>(&device);
 
@@ -165,6 +181,7 @@ mod tests {
         let model = EnergyHeadConfig::new(32)
             .with_d_hidden1(16)
             .with_d_hidden2(8)
+            .with_d_hidden3(4)
             .init::<TestAutodiffBackend>(&device);
 
         let input = Tensor::<TestAutodiffBackend, 2>::random(
@@ -207,6 +224,16 @@ mod tests {
             "sn_linear3 gradient is zero — gradient not flowing"
         );
 
+        // Check gradient flows to layer 4 (output)
+        let grad4 = grads
+            .get::<NdArray<f32>, 2>(model.sn_linear4.weight.id)
+            .expect("sn_linear4 weight should have gradient");
+        let grad4_sum: f32 = grad4.abs().sum().into_scalar().elem();
+        assert!(
+            grad4_sum > 0.0,
+            "sn_linear4 gradient is zero — gradient not flowing"
+        );
+
         // Check gradient flows to log_temperature
         let temp_grad = grads
             .get::<NdArray<f32>, 1>(model.log_temperature.id)
@@ -235,9 +262,11 @@ mod tests {
         let model = EnergyHead {
             sn_linear1: sn_config(32, 16, true).init::<TestBackend>(&device),
             sn_linear2: sn_config(16, 8, true).init::<TestBackend>(&device),
-            sn_linear3: sn_config(8, 1, false).init::<TestBackend>(&device),
+            sn_linear3: sn_config(8, 4, true).init::<TestBackend>(&device),
+            sn_linear4: sn_config(4, 1, false).init::<TestBackend>(&device),
             dropout1: burn::nn::DropoutConfig::new(0.0).init(),
             dropout2: burn::nn::DropoutConfig::new(0.0).init(),
+            dropout3: burn::nn::DropoutConfig::new(0.0).init(),
             log_temperature: Param::from_tensor(Tensor::zeros([1], &device)),
         };
 
@@ -255,8 +284,10 @@ mod tests {
             sn_linear1: model.sn_linear1,
             sn_linear2: model.sn_linear2,
             sn_linear3: model.sn_linear3,
+            sn_linear4: model.sn_linear4,
             dropout1: model.dropout1,
             dropout2: model.dropout2,
+            dropout3: model.dropout3,
             log_temperature: Param::from_tensor(Tensor::from_floats(
                 [2.0_f32.ln()],
                 &device,
@@ -282,11 +313,12 @@ mod tests {
         let model = EnergyHeadConfig::new(4096).init::<TestBackend>(&device);
         let count = model.num_params();
 
-        // Layer 1: 4096*512 (weight) + 512 (bias) = 2,097,664
-        // Layer 2: 512*256 (weight) + 256 (bias) = 131,328
-        // Layer 3: 256*1 (weight, no bias) = 256
+        // Layer 1: 4096*2048 (weight) + 2048 (bias) = 8,390,656
+        // Layer 2: 2048*1024 (weight) + 1024 (bias) = 2,098,176
+        // Layer 3: 1024*512 (weight) + 512 (bias) = 524,800
+        // Layer 4: 512*1 (weight, no bias) = 512
         // log_temperature: 1
-        // Total: 2,229,249
-        assert_eq!(count, 2_229_249, "Expected 2,229,249 params, got {count}");
+        // Total: 11,014,145
+        assert_eq!(count, 11_014_145, "Expected 11,014,145 params, got {count}");
     }
 }

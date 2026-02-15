@@ -47,7 +47,7 @@ pub struct EBMTrainingConfig {
     #[config(default = 5_000)]
     pub checkpoint_interval: usize,
     /// Number of negative samples per positive.
-    #[config(default = 4)]
+    #[config(default = 7)]
     pub k_negatives: usize,
     /// Batch size (number of contrastive samples per step).
     #[config(default = 32)]
