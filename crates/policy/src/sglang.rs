@@ -12,6 +12,7 @@
 //!     --port 30000
 //! ```
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use reqwest::Client;
@@ -20,6 +21,11 @@ use url::Url;
 
 use crate::prompt::{extract_first_tactic, format_tactic_message};
 use crate::types::{Embedding, GeneratedTactic};
+
+/// Server encode capability, probed once on first encode call.
+const ENCODE_UNKNOWN: u8 = 0;
+const ENCODE_POOLED: u8 = 1;
+const ENCODE_LEGACY: u8 = 2;
 
 /// Configuration for connecting to an SGLang server.
 #[derive(Debug, Clone)]
@@ -37,11 +43,23 @@ pub struct SglangConfig {
 }
 
 /// HTTP client for SGLang inference server.
+///
+/// Supports two encoding paths:
+/// - **Pooled** (`/encode`): Custom server mean-pools hidden states in-process,
+///   returning a compact `(hidden_size,)` embedding (~16KB). ~7x faster.
+/// - **Legacy** (`/generate` + `return_hidden_states`): SGLang HTTP server returns
+///   the full `(1, num_tokens, hidden_size)` tensor as JSON (~10MB). Slow but works
+///   with stock SGLang.
+///
+/// The client auto-detects which path is available on the first `encode()` call
+/// and caches the result.
 #[derive(Clone)]
 pub struct SglangClient {
     client: Client,
     base_url: Url,
     config: SglangConfig,
+    /// Cached encode capability: 0=unknown, 1=pooled (/encode), 2=legacy (/generate).
+    encode_capability: std::sync::Arc<AtomicU8>,
 }
 
 // -- SGLang native API request/response types --
@@ -94,6 +112,7 @@ impl SglangClient {
             client,
             base_url,
             config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
         };
 
         this.health_check().await?;
@@ -261,8 +280,162 @@ impl SglangClient {
         Ok(tactics)
     }
 
-    /// Encode a proof state to a mean-pooled embedding via hidden states.
+    /// Encode a proof state to a mean-pooled embedding.
+    ///
+    /// Auto-detects server capability on first call:
+    /// - Custom server with `/encode` endpoint → pooled path (~16KB response, ~7x faster)
+    /// - Legacy SGLang HTTP server → `/generate` + `return_hidden_states` (~10MB response)
     pub async fn encode(&self, text: &str) -> anyhow::Result<Embedding> {
+        let cap = self.encode_capability.load(Ordering::Relaxed);
+
+        match cap {
+            ENCODE_POOLED => return self.encode_pooled(text).await,
+            ENCODE_LEGACY => return self.encode_legacy(text).await,
+            _ => {
+                // Probe: try /encode first
+                match self.encode_pooled(text).await {
+                    Ok(emb) => {
+                        self.encode_capability.store(ENCODE_POOLED, Ordering::Relaxed);
+                        tracing::info!("Server supports /encode endpoint (pooled path)");
+                        return Ok(emb);
+                    }
+                    Err(e) => {
+                        // Only fall back to legacy if /encode returned 404 (endpoint doesn't exist).
+                        // For transient errors (500, timeout), propagate so caller can retry.
+                        let is_not_found = e.to_string().contains("404");
+                        if is_not_found {
+                            tracing::debug!(error = %e, "Server /encode returned 404, falling back to legacy path");
+                            let emb = self.encode_legacy(text).await?;
+                            self.encode_capability.store(ENCODE_LEGACY, Ordering::Relaxed);
+                            tracing::info!(
+                                "Server does not support /encode, using legacy /generate path"
+                            );
+                            return Ok(emb);
+                        } else {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Encode a batch of proof states.
+    ///
+    /// Routes to `/encode` (batch) or legacy `/generate` (batch) based on
+    /// the cached server capability. If capability is unknown, probes via
+    /// a single `encode()` call first.
+    pub async fn encode_batch(&self, texts: &[String]) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Ensure capability is probed
+        let cap = self.encode_capability.load(Ordering::Relaxed);
+        if cap == ENCODE_UNKNOWN {
+            // Probe with first text, then continue with batch for the rest
+            let first_result = self.encode(&texts[0]).await;
+            let cap = self.encode_capability.load(Ordering::Relaxed);
+
+            if texts.len() == 1 {
+                return Ok(vec![first_result]);
+            }
+
+            // Route remaining based on detected capability
+            let rest = &texts[1..];
+            let mut results = vec![first_result];
+            let rest_results = if cap == ENCODE_POOLED {
+                self.encode_pooled_batch(rest).await?
+            } else {
+                self.encode_legacy_batch(rest).await?
+            };
+            results.extend(rest_results);
+            return Ok(results);
+        }
+
+        if cap == ENCODE_POOLED {
+            self.encode_pooled_batch(texts).await
+        } else {
+            self.encode_legacy_batch(texts).await
+        }
+    }
+
+    /// Encode via the custom `/encode` endpoint (pre-pooled, ~16KB response).
+    async fn encode_pooled(&self, text: &str) -> anyhow::Result<Embedding> {
+        let prompt = self.format_prompt(text);
+        let request = serde_json::json!({
+            "text": prompt,
+            "hidden_size": self.config.hidden_size,
+        });
+
+        let url = self.base_url.join("/encode")?;
+        let resp = self.post_with_retry(&url, &request, Some(Duration::from_secs(30))).await?;
+
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| anyhow::anyhow!("Failed to decode /encode response: {e}"))?;
+
+        self.parse_encode_response(&body)
+    }
+
+    /// Batch encode via the custom `/encode` endpoint.
+    async fn encode_pooled_batch(&self, texts: &[String]) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let prompts: Vec<String> = texts.iter().map(|t| self.format_prompt(t)).collect();
+        let request = serde_json::json!({
+            "text": prompts,
+            "hidden_size": self.config.hidden_size,
+        });
+
+        let url = self.base_url.join("/encode")?;
+        let resp = self.post_with_retry(&url, &request, Some(Duration::from_secs(300))).await?;
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| anyhow::anyhow!("Failed to decode /encode batch response: {e}"))?;
+
+        // Batch response: {"embeddings": [[f32...], ...]}
+        let embeddings_val = body.get("embeddings")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                let preview: String = body.to_string().chars().take(200).collect();
+                anyhow::anyhow!("Expected 'embeddings' array in /encode batch response, got: {preview}")
+            })?;
+
+        if embeddings_val.len() != texts.len() {
+            anyhow::bail!(
+                "/encode batch response length mismatch: expected {}, got {}",
+                texts.len(),
+                embeddings_val.len()
+            );
+        }
+
+        let results: Vec<anyhow::Result<Embedding>> = embeddings_val
+            .iter()
+            .enumerate()
+            .map(|(i, emb_val)| {
+                let data: Vec<f32> = emb_val
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("Batch item {i}: embedding is not an array"))?
+                    .iter()
+                    .filter_map(|v| v.as_f64().map(|f| f as f32))
+                    .collect();
+                if data.len() != self.config.hidden_size {
+                    anyhow::bail!(
+                        "Batch item {i}: embedding dim mismatch: expected {}, got {}",
+                        self.config.hidden_size,
+                        data.len()
+                    );
+                }
+                Ok(Embedding { data, dim: self.config.hidden_size })
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Encode via legacy `/generate` + `return_hidden_states` (SGLang HTTP server).
+    async fn encode_legacy(&self, text: &str) -> anyhow::Result<Embedding> {
         let prompt = self.format_prompt(text);
 
         let request = GenerateRequest {
@@ -285,12 +458,8 @@ impl SglangClient {
         self.parse_hidden_states(&body)
     }
 
-    /// Encode a batch of proof states in a single HTTP request.
-    ///
-    /// SGLang's `/generate` endpoint accepts `text: [list]` for batch requests,
-    /// batching them in one GPU forward pass. Returns per-input results so
-    /// individual failures don't discard the whole batch.
-    pub async fn encode_batch(&self, texts: &[String]) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+    /// Batch encode via legacy `/generate` + `return_hidden_states`.
+    async fn encode_legacy_batch(&self, texts: &[String]) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
@@ -344,6 +513,30 @@ impl SglangClient {
             .collect();
 
         Ok(results)
+    }
+
+    /// Parse the response from the custom `/encode` endpoint.
+    fn parse_encode_response(&self, body: &serde_json::Value) -> anyhow::Result<Embedding> {
+        let embedding: Vec<f32> = body
+            .get("embedding")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'embedding' in /encode response"))?
+            .iter()
+            .filter_map(|v| v.as_f64().map(|f| f as f32))
+            .collect();
+
+        if embedding.len() != self.config.hidden_size {
+            anyhow::bail!(
+                "Embedding dim mismatch: expected {}, got {}",
+                self.config.hidden_size,
+                embedding.len()
+            );
+        }
+
+        Ok(Embedding {
+            data: embedding,
+            dim: self.config.hidden_size,
+        })
     }
 
     /// Extract hidden states from a response JSON object and mean-pool to an embedding.
@@ -507,6 +700,7 @@ mod tests {
             client: Client::new(),
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
         };
 
         let prompt = client.format_prompt("n : Nat\n\u{22a2} n + 0 = n");
@@ -600,6 +794,7 @@ mod tests {
             client: Client::new(),
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
         };
 
         // Simulated response: 2 tokens × 3 dims
@@ -630,6 +825,7 @@ mod tests {
             client: Client::new(),
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
         };
 
         let body = serde_json::json!({
@@ -658,5 +854,84 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["return_logprob"], true);
         assert_eq!(json["return_hidden_states"], true);
+    }
+
+    #[test]
+    fn test_parse_encode_response_single() {
+        let config = SglangConfig {
+            server_url: "http://localhost:30000".to_string(),
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tactic_tokens: 128,
+            hidden_size: 3,
+        };
+        let client = SglangClient {
+            client: Client::new(),
+            base_url: Url::parse("http://localhost:30000").unwrap(),
+            config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+        };
+
+        let body = serde_json::json!({
+            "embedding": [1.0, 2.0, 3.0]
+        });
+
+        let emb = client.parse_encode_response(&body).unwrap();
+        assert_eq!(emb.dim, 3);
+        assert!((emb.data[0] - 1.0).abs() < 1e-6);
+        assert!((emb.data[1] - 2.0).abs() < 1e-6);
+        assert!((emb.data[2] - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_parse_encode_response_rejects_wrong_dim() {
+        let config = SglangConfig {
+            server_url: "http://localhost:30000".to_string(),
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tactic_tokens: 128,
+            hidden_size: 4096,
+        };
+        let client = SglangClient {
+            client: Client::new(),
+            base_url: Url::parse("http://localhost:30000").unwrap(),
+            config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+        };
+
+        let body = serde_json::json!({
+            "embedding": [1.0, 2.0, 3.0]
+        });
+
+        let err = client.parse_encode_response(&body).unwrap_err();
+        assert!(err.to_string().contains("Embedding dim mismatch"));
+    }
+
+    #[test]
+    fn test_parse_encode_response_rejects_missing_key() {
+        let config = SglangConfig {
+            server_url: "http://localhost:30000".to_string(),
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tactic_tokens: 128,
+            hidden_size: 3,
+        };
+        let client = SglangClient {
+            client: Client::new(),
+            base_url: Url::parse("http://localhost:30000").unwrap(),
+            config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+        };
+
+        let body = serde_json::json!({"embeddings": [[1.0, 2.0, 3.0]]});
+        let err = client.parse_encode_response(&body).unwrap_err();
+        assert!(err.to_string().contains("Missing 'embedding'"));
+    }
+
+    #[test]
+    fn test_encode_capability_constants() {
+        assert_ne!(ENCODE_UNKNOWN, ENCODE_POOLED);
+        assert_ne!(ENCODE_UNKNOWN, ENCODE_LEGACY);
+        assert_ne!(ENCODE_POOLED, ENCODE_LEGACY);
     }
 }
