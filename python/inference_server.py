@@ -25,7 +25,6 @@ import asyncio
 import logging
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from typing import Union
 
 import numpy as np
@@ -62,7 +61,6 @@ app = FastAPI(title="BurnQED Inference Server")
 
 # Global state set during startup
 _engine = None
-_executor: ThreadPoolExecutor = None
 # Semaphore to serialize encode requests (SGLang Issue #8066: BS>1 corrupts hidden states)
 _encode_semaphore: asyncio.Semaphore = None
 
@@ -160,19 +158,19 @@ async def generate(request: GenerateRequest):
     Always passes return_hidden_states=True to Engine.generate() to avoid
     CUDA graph recapture. Hidden states are discarded before responding
     unless the client explicitly requested them.
+
+    Uses Engine.async_generate() to avoid the event-loop nesting issue
+    that occurs when Engine.generate() calls loop.run_until_complete()
+    inside an already-running async server.
     """
     is_batch = isinstance(request.text, list)
     prompts = request.text if is_batch else [request.text]
 
-    loop = asyncio.get_event_loop()
-    outputs = await loop.run_in_executor(
-        _executor,
-        lambda: _engine.generate(
-            prompts,
-            sampling_params=request.sampling_params,
-            return_hidden_states=True,
-            return_logprob=request.return_logprob,
-        ),
+    outputs = await _engine.async_generate(
+        prompts,
+        sampling_params=request.sampling_params,
+        return_hidden_states=True,
+        return_logprob=request.return_logprob,
     )
 
     responses = []
@@ -209,18 +207,14 @@ async def encode(request: EncodeRequest):
 
     # Sequential processing: SGLang Issue #8066 reports incorrect hidden states
     # when BS>1. When the upstream fix lands, replace this loop with a single
-    # engine.generate(prompts, ...) call for true batch encoding (~3-5x faster).
+    # engine.async_generate(prompts, ...) call for true batch encoding (~3-5x faster).
     embeddings = []
     for prompt in prompts:
         async with _encode_semaphore:
-            loop = asyncio.get_event_loop()
-            outputs = await loop.run_in_executor(
-                _executor,
-                lambda p=prompt: _engine.generate(
-                    [p],
-                    sampling_params={"max_new_tokens": 1, "temperature": 0},
-                    return_hidden_states=True,
-                ),
+            outputs = await _engine.async_generate(
+                [prompt],
+                sampling_params={"max_new_tokens": 1, "temperature": 0},
+                return_hidden_states=True,
             )
 
         output = outputs[0]
@@ -271,12 +265,6 @@ def parse_args():
         help="Static memory fraction (default: 0.85, overridden by MEM_FRACTION env var)",
     )
     parser.add_argument(
-        "--workers",
-        type=int,
-        default=4,
-        help="ThreadPoolExecutor workers for Engine.generate() calls (default: 4)",
-    )
-    parser.add_argument(
         "--host",
         default="0.0.0.0",
         help="Bind address (default: 0.0.0.0)",
@@ -286,12 +274,6 @@ def parse_args():
 
 def main():
     import os
-
-    # nest_asyncio allows Engine.generate() to call loop.run_until_complete()
-    # inside FastAPI's already-running event loop. Requires standard asyncio
-    # loop (not uvloop), so we set loop="asyncio" in uvicorn below.
-    import nest_asyncio
-    nest_asyncio.apply()
 
     logging.basicConfig(
         level=logging.INFO,
@@ -305,14 +287,12 @@ def main():
     tp = int(os.environ.get("TP", args.tp))
     mem_fraction = float(os.environ.get("MEM_FRACTION", args.mem_fraction))
 
-    global _engine, _executor, _encode_semaphore
+    global _engine, _encode_semaphore
     _engine = _build_engine(args.model_path, tp=tp, mem_fraction=mem_fraction)
-    _executor = ThreadPoolExecutor(max_workers=args.workers)
     _encode_semaphore = asyncio.Semaphore(1)
 
     logger.info("Starting server on %s:%d", args.host, port)
-    # loop="asyncio" disables uvloop (which nest_asyncio can't patch)
-    uvicorn.run(app, host=args.host, port=port, log_level="info", loop="asyncio")
+    uvicorn.run(app, host=args.host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
