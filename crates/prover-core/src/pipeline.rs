@@ -1244,33 +1244,17 @@ async fn process_theorem(
     let total_steps = steps.len();
     let namespace = infer_open_namespace(theorem_name);
 
-    // Pantograph's goal.start doesn't return goals — only a state_id.
-    // For step 0, use the tactic pair's state field (LeanDojo's pretty-print).
-    // For subsequent steps, use goals from TacticResult::Success (Pantograph's view).
-    let mut current_state_id = handle.initial_state().state_id;
-    // None means "use step.state from tactic pairs" (for the root)
-    let mut pantograph_state_pp: Option<String> = None;
-
+    // Record ALL ground-truth steps as Positive upfront from tactic pair data.
+    // This ensures balanced depth distribution regardless of Pantograph replay
+    // success — ground-truth states from LeanDojo are valid at all depths.
     for (step_idx, step) in steps.iter().enumerate() {
-        outcome.steps_walked = step_idx + 1;
-
-        // Use Pantograph's goal if available, otherwise fall back to tactic pair data
-        let state_pp = pantograph_state_pp
-            .clone()
-            .unwrap_or_else(|| step.state.clone());
-
-        // Record ground-truth state as Positive
         let remaining_depth = (total_steps - step_idx) as i32;
         outcome.records.push(TrajectoryRecord {
             theorem_name: theorem_name.to_string(),
-            state_id: current_state_id,
-            state_pp: state_pp.clone(),
+            state_id: 0, // placeholder — not from Pantograph
+            state_pp: step.state.clone(),
             tactic_applied: step.tactic.clone(),
-            parent_state_id: if step_idx == 0 {
-                None
-            } else {
-                Some(current_state_id.saturating_sub(1))
-            },
+            parent_state_id: if step_idx == 0 { None } else { Some(0) },
             label: TrajectoryLabel::Positive,
             depth_from_root: step.depth,
             remaining_depth,
@@ -1280,6 +1264,22 @@ async fn process_theorem(
             timestamp_ms: 0,
         });
         outcome.positives += 1;
+    }
+
+    // Now walk through Pantograph to generate candidates and negatives.
+    // Ground-truth replay may fail (namespace mismatch ~55%), but positives
+    // are already recorded above. We only need Pantograph for candidate testing.
+    let mut current_state_id = handle.initial_state().state_id;
+    let mut pantograph_state_pp: Option<String> = None;
+
+    for (step_idx, step) in steps.iter().enumerate() {
+        outcome.steps_walked = step_idx + 1;
+
+        // Use Pantograph's goal if available, otherwise fall back to tactic pair data
+        let state_pp = pantograph_state_pp
+            .clone()
+            .unwrap_or_else(|| step.state.clone());
+        let remaining_depth = (total_steps - step_idx) as i32;
 
         // Generate LLM candidates at this proof state
         let candidates = match inference
