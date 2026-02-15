@@ -1694,6 +1694,8 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
     let mut processed_count: usize = 0;
     // depth → (positives, negatives)
     let mut depth_dist: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
+    // Survival rate: theorems with at least one negative at depth > 2
+    let mut deep_neg_theorems: usize = 0;
 
     /// Collect one completed outcome from the JoinSet into accumulators.
     fn collect_outcome(
@@ -1705,6 +1707,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
         skipped_count: &mut usize,
         processed_count: &mut usize,
         depth_dist: &mut BTreeMap<u32, (usize, usize)>,
+        deep_neg_theorems: &mut usize,
         writer: &mut TrajectoryWriter,
         pb: &ProgressBar,
     ) {
@@ -1717,13 +1720,22 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
         } else if outcome.steps_walked == 0 {
             *skipped_count += 1;
         }
+        let mut has_deep_neg = false;
         for rec in &outcome.records {
             let entry = depth_dist.entry(rec.depth_from_root).or_insert((0, 0));
             match rec.label {
                 TrajectoryLabel::Positive => entry.0 += 1,
-                TrajectoryLabel::Negative => entry.1 += 1,
+                TrajectoryLabel::Negative => {
+                    entry.1 += 1;
+                    if rec.depth_from_root > 2 {
+                        has_deep_neg = true;
+                    }
+                }
                 _ => {}
             }
+        }
+        if has_deep_neg {
+            *deep_neg_theorems += 1;
         }
         if !outcome.records.is_empty() {
             writer.record_all(outcome.records);
@@ -1749,6 +1761,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                         &mut skipped_count,
                         &mut processed_count,
                         &mut depth_dist,
+                        &mut deep_neg_theorems,
                         &mut writer,
                         &pb,
                     );
@@ -1835,6 +1848,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                     &mut skipped_count,
                     &mut processed_count,
                     &mut depth_dist,
+                    &mut deep_neg_theorems,
                     &mut writer,
                     &pb,
                 );
@@ -1887,6 +1901,24 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
     println!(" {:>5}  {:>8}  {:>8}  {:>8}", "Depth", "Pos", "Neg", "Total");
     for (depth, (pos, neg)) in &depth_dist {
         println!(" {:>5}  {:>8}  {:>8}  {:>8}", depth, pos, neg, pos + neg);
+    }
+    println!("──────────────────────────────────────────");
+    // Survival Rate: % of theorems with negatives at depth > 2
+    let non_skipped = processed_count.saturating_sub(skipped_count);
+    let survival_pct = if non_skipped > 0 {
+        (deep_neg_theorems as f64 / non_skipped as f64) * 100.0
+    } else {
+        0.0
+    };
+    println!(
+        " Survival Rate:  {deep_neg_theorems}/{non_skipped} ({survival_pct:.1}%) theorems with deep negatives (depth>2)"
+    );
+    if survival_pct >= 30.0 {
+        println!("   -> SAFE: sufficient deep negative coverage");
+    } else if survival_pct >= 10.0 {
+        println!("   -> MARGINAL: consider namespace/import fix for deeper coverage");
+    } else {
+        println!("   -> WARNING: deep negative skew too severe — namespace/import fix needed");
     }
     println!("══════════════════════════════════════════");
 
