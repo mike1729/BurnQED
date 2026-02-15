@@ -73,7 +73,7 @@ echo "================================================================"
 # Ensure destination directories exist
 echo ""
 echo "=== Creating destination directories ==="
-$SSH_CMD "$RUNPOD_HOST" "mkdir -p ${DEST_DIR}/{models,checkpoints,trajectories,eval_results,data,logs,baselines,configs}"
+$SSH_CMD "$RUNPOD_HOST" "mkdir -p ${DEST_DIR}/{models,checkpoints/llm,trajectories,eval_results,data,logs,baselines,configs}"
 
 transfer() {
     local label="$1"
@@ -93,13 +93,19 @@ transfer() {
 }
 
 transfer "model weights"            models
-transfer "checkpoints (LoRA + EBM)" checkpoints
+transfer "LoRA checkpoints"        checkpoints/llm
 transfer "trajectories"             trajectories
 transfer "eval results"             eval_results
 transfer "training data"            data
 transfer "baselines"                baselines
 transfer "logs"                     logs
 transfer "configs"                  configs
+
+# NOTE: checkpoints/ebm/ is deliberately excluded.
+# The EBM architecture changed (3-layer → 4-layer MLP) and old .mpk files
+# are incompatible. Retrain EBM on RunPod from trajectory data:
+#   cargo run -p prover-core -- train-ebm \
+#     --trajectories trajectories/*.parquet --server-url http://localhost:30000
 
 echo ""
 echo "================================================================"
@@ -108,7 +114,6 @@ echo ""
 echo "  Transferred:"
 echo "    - models/            (base + merged safetensors)"
 echo "    - checkpoints/llm/   (LoRA adapters)"
-echo "    - checkpoints/ebm/   (EBM weights + config + embeddings)"
 echo "    - trajectories/      (Parquet files)"
 echo "    - eval_results/      (JSON eval results)"
 echo "    - data/              (theorem index, tactic pairs)"
@@ -116,8 +121,12 @@ echo "    - baselines/         (raw model baselines)"
 echo "    - logs/              (experiment logs)"
 echo "    - configs/           (search.toml, models.toml)"
 echo ""
+echo "  NOT transferred (retrain on RunPod):"
+echo "    - checkpoints/ebm/   (incompatible — 4-layer architecture change)"
+echo ""
 echo "  Next steps on RunPod:"
 echo "    1. git clone + bash scripts/setup_runpod.sh"
 echo "    2. Start SGLang: ./scripts/start_sglang.sh models/llm/iter_N"
-echo "    3. Continue experiment: ./scripts/run_iteration_search.sh N"
+echo "    3. Retrain EBM: cargo run -p prover-core -- train-ebm ..."
+echo "    4. Continue experiment: ./scripts/run_iteration_search.sh N"
 echo "================================================================"
