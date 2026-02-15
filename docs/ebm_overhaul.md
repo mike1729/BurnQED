@@ -65,34 +65,75 @@ cargo run -p prover-core -- generate-negatives \
 `run_generate_negatives()` in `crates/prover-core/src/pipeline.rs`:
 
 1. Load tactic pairs, group by theorem → `HashMap<String, Vec<TacticStep>>` sorted by depth
-2. Filter: skip theorems with non-contiguous depths
-3. Sample N theorems
-4. For each theorem (concurrent via `JoinSet`, bounded by Lean pool):
+2. Filter: `--min-steps N` skips theorems with fewer than N proof steps
+3. Sample `--num-theorems` theorems
+4. For each theorem (concurrent via `JoinSet`, bounded by semaphore):
    a. Start proof in Pantograph (`copyFrom` by name)
-   b. Walk proof path depth by depth:
-      - Record ground-truth step as Positive
-      - Generate candidates via SGLang
-      - Normalize whitespace before comparing with ground-truth
-      - For each non-ground-truth candidate that succeeds in Lean:
-        - If `goals.is_empty()` → **Positive** record (alternative proof found)
-        - If `goals.len() > 0` → **Negative** record (divergent path)
-      - Apply ground-truth tactic to advance to next depth
-        - On failure: retry with `open <namespace> in <tactic>`
-        - If still fails: skip rest of theorem, log warning
-   c. Stop early if `target_negatives` reached
-5. Write Parquet via `TrajectoryWriter`
-6. Print summary: theorems attempted/succeeded/skipped, positives (ground-truth + alternative), negatives
+   b. Record ALL ground-truth steps as Positive **upfront** (guarantees balanced depth distribution regardless of Pantograph replay success)
+   c. Walk proof path depth by depth:
+      - **Normal path** (`is_zombie == false`):
+        - Generate LLM candidates via SGLang
+        - Normalize whitespace before comparing with ground-truth
+        - For each non-ground-truth candidate that succeeds in Lean:
+          - If `goals.is_empty()` → **Positive** (alternative proof found)
+          - If `goals.len() > 0` → **Negative** (divergent path)
+          - Multi-tactic chains: walk sequentially, relabel all as Positive if chain completes proof
+        - Try 18 **probe tactics** (simp, ring, omega, norm_num, constructor, left, right, intro _, etc.):
+          - Cheap (no LLM call), deduped against LLM candidates
+          - ProofComplete/empty goals → Positive; non-empty goals → **Negative**
+          - Save last successful probe state for potential advancement
+        - Apply ground-truth tactic to advance to next depth
+          - On failure: retry with `open <all_namespace_prefixes> in <tactic>`
+          - If still fails → **enter zombie walk** (if a probe state is available)
+      - **Zombie path** (`is_zombie == true`):
+        - **Skip LLM candidates** (avoids unreliable hard negatives, saves GPU)
+        - Try probe tactics only:
+          - Non-empty goals → **Positive** (valid context for representation learning)
+          - Save last successful probe state for advancement
+        - Advance via probe state; stop when no probe can advance
+   d. Stop early if `target_negatives` reached
+5. Write Parquet via `TrajectoryWriter` (auto-save every 50 theorems)
+6. Print summary: depth distribution table, survival rate
 
-### Helper Function
+### Zombie Walk Design
 
-`infer_open_namespace(theorem_name: &str) -> Option<String>`
+When ground-truth replay fails (~98% of theorems due to namespace mismatch), the pipeline doesn't stop — it "resurrects" using a probe tactic's resulting state.
 
-Extracts the most likely `open` namespace from a fully qualified theorem name:
-- `Polynomial.natDegree_cyclotomic'` → `Polynomial`
-- `MeasureTheory.hahn_decomposition` → `MeasureTheory`
-- `Nat.add_comm` → `Nat`
+**Safe labeling rules** (avoids confusing the EBM with false value signals):
+- **Normal path negatives** = Hard Negatives: "This divergent tactic from the LLM is worse than ground-truth." (Reliable signal — ground-truth is known-good.)
+- **Zombie path positives** = Context: "This state belongs to theorem A." (Representation learning — the EBM learns what theorem A's states look like at various depths, not which tactic is better.)
+- **Never generate Hard Negatives on zombie paths**: No LLM candidates → no "intro > induction" false signals.
 
-Rule: Take all dot-separated segments except the last (the theorem name), rejoin with `.`.
+```
+Step 0 (normal):  GT state₀ ──[LLM candidates]──→ Negatives at depth 1
+                             ──[probe tactics]──→ Negatives at depth 1
+                  GT fails → pick probe state → is_zombie = true
+
+Step 1 (zombie):  Probe state ──[probe tactics]──→ Positives at depth 2
+                               pick probe state → advance
+
+Step 2 (zombie):  Probe state ──[probe tactics]──→ Positives at depth 3
+                               no probe advances → stop
+```
+
+### Helper Functions
+
+`infer_open_prefix(theorem_name: &str) -> Option<String>`
+
+Opens **all namespace prefixes** from a fully qualified theorem name:
+- `Polynomial.natDegree_cyclotomic'` → `"open Polynomial in "`
+- `MeasureTheory.Measure.hahn` → `"open MeasureTheory MeasureTheory.Measure in "`
+- `CategoryTheory.ShortComplex.cycles_ext_iff` → `"open CategoryTheory CategoryTheory.ShortComplex in "`
+- `simple_name` → `None`
+
+Rule: For name `A.B.C.theorem`, generate prefixes `[A, A.B, A.B.C]` and format as `"open A A.B A.B.C in "`.
+
+`normalize_tactic(tactic: &str) -> String`
+
+Normalizes whitespace for deduplication: trim, collapse runs of whitespace to single space.
+
+`PROBE_TACTICS: &[&str]` — 18 built-in Lean 4 tactics tried at each step:
+`simp, ring, omega, norm_num, decide, trivial, rfl, tauto, linarith, push_neg, contradiction, exfalso, constructor, left, right, ext, simp_all, intro _`
 
 ### Output Format
 
@@ -100,25 +141,25 @@ Standard `TrajectoryRecord`, compatible with existing `ContrastiveSampler`. Both
 
 ### Error Handling
 
-- Ground-truth fails in Pantograph (even with namespace retry) → skip rest of theorem, log warning (~20-30% expected)
-- SGLang fails → retry once, then skip step
+- Ground-truth fails in Pantograph (even with namespace retry) → **enter zombie walk** if probe state available, otherwise skip rest of theorem (~98% enter zombie, ~2% complete normally)
+- SGLang fails → skip step's candidates (probe tactics still run)
 - Per-theorem timeout (120s) → skip theorem
-- Alternative tactic produces `goals=[]` → log info, record as positive (expected to be rare but valuable)
+- Alternative tactic produces `goals=[]` → record as Positive (alternative proof)
+- Zombie walk: no probe can advance → stop walking, keep records collected so far
 
 ### Files Affected
 
 | File | Change |
 |------|--------|
 | `crates/prover-core/src/main.rs` | `generate-negatives` subcommand |
-| `crates/prover-core/src/pipeline.rs` | `run_generate_negatives()`, `infer_open_namespace()`, alternative-proof detection |
+| `crates/prover-core/src/pipeline.rs` | `run_generate_negatives()`, `process_theorem()`, `infer_open_prefix()`, `normalize_tactic()`, `PROBE_TACTICS`, zombie walk |
 | `crates/ebm/src/training/data.rs` | `load_tactic_pairs_grouped()` |
 
 ### Unit Tests
 
-- `test_infer_open_namespace`: "Polynomial.natDegree_cyclotomic'" → "Polynomial", "Nat.add_comm" → "Nat", "simple_name" → None
-- `test_alternative_proof_labeling`: Mock tactic that returns empty goals → labeled positive
-- `test_divergent_tactic_labeling`: Mock tactic that returns non-empty goals → labeled negative
-- `test_namespace_retry`: Ground-truth tactic wrapped with `open X in <tactic>` on first failure
+- `test_infer_open_prefix`: multi-prefix namespace extraction ("Polynomial.X" → "open Polynomial in", "CategoryTheory.ShortComplex.X" → "open CategoryTheory CategoryTheory.ShortComplex in")
+- `test_normalize_tactic`: whitespace normalization for dedup
+- `test_probe_tactics_no_duplicates`: validates PROBE_TACTICS list has no duplicates and ≥10 entries
 
 ### Time Estimates (A100, with encoding sidecar)
 
@@ -152,9 +193,24 @@ Implemented with these enhancements beyond the original plan:
 
 6. **Depth distribution tracking**: Summary prints a table of positives/negatives per proof depth.
 
-### First Run Results (100 theorems, RTX 4090)
-- 42 completed, 7 skipped (namespace mismatch)
-- 120 positives, 55 negatives, 24 alternative proofs, 175 total records
-- Depth distribution: 0→115pos, 1→4pos+37neg, 2→1pos+14neg, 3→2neg, 4→2neg
-- Ground-truth failure rate ~55% at step 0 (LeanDojo/Pantograph namespace mismatch)
-- Use `--min-steps 3` for future runs to target multi-step theorems
+7. **Upfront positive recording**: All ground-truth steps recorded as Positive before Pantograph loop, ensuring balanced depth distribution regardless of replay success.
+
+8. **Multi-prefix namespace opens**: `infer_open_prefix()` opens all namespace segments (e.g., `open CategoryTheory CategoryTheory.ShortComplex in <tactic>`). Applied to ground-truth retries, LLM candidates, and probe tactics.
+
+9. **Probe tactics**: 18 built-in Lean 4 tactics tried at each step alongside LLM candidates. Cheap (no GPU), frequently produce valid divergent states where LLM candidates mostly fail (~95% TacticResult::Failed). Deduped against LLM candidates and ground-truth.
+
+10. **Zombie walk**: When ground-truth fails, advance via successful probe state and continue exploring. On zombie paths: skip LLM candidates (saves GPU, avoids unreliable hard negatives), label probe-reached states as Positive context (representation learning). See "Zombie Walk Design" section above.
+
+11. **Survival rate monitoring**: Tracks % of theorems with negatives at depth > 2 (>30% safe, 10-30% marginal, <10% warning).
+
+12. **ContrastiveSampler resilience**: All theorems with positives are eligible (not just those with both pos and neg). Cross-theorem backfill when same-theorem negatives are sparse.
+
+### Run History (100 theorems, --min-steps 3, RTX 4090)
+
+| Run | Positives | Negatives | Alt Proofs | Survival | Key Change |
+|-----|-----------|-----------|------------|----------|------------|
+| 1 (initial) | 120 | 55 | 24 | — | Baseline pipeline |
+| 2 (upfront pos) | 557 | 38 | — | 1.1% | Upfront positives, depth balanced |
+| 3 (namespace fix) | 557 | 56 | 24 | 4.6% | Multi-prefix opens + candidate wrapping |
+| 4 (probe tactics) | 599 | 427 | 42 | 7.0% | 16 probe tactics, 7.6x negative boost |
+| 5 (zombie walk) | — | — | — | — | Pending: expected significant survival boost |
