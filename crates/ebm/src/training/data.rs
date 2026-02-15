@@ -70,12 +70,12 @@ impl ContrastiveIndex {
             }
         }
 
-        // Eligible theorems must have BOTH positive AND negative records
-        let eligible_theorems: Vec<String> = pos_by_theorem
-            .keys()
-            .filter(|t| neg_by_theorem.contains_key(*t))
-            .cloned()
-            .collect();
+        // Eligible theorems: any theorem with positive records.
+        // Theorems without same-theorem negatives will backfill from the
+        // global negative pool (cross-theorem easy negatives). This ensures
+        // positive-only theorems from generate-negatives (upfront recording)
+        // still participate in training.
+        let eligible_theorems: Vec<String> = pos_by_theorem.keys().cloned().collect();
 
         ContrastiveIndex {
             pos_by_theorem,
@@ -127,10 +127,20 @@ impl ContrastiveSampler {
     ) -> anyhow::Result<Self> {
         let index = ContrastiveIndex::build(&records);
         if index.eligible_theorems.is_empty() {
+            anyhow::bail!("No eligible theorems found (need at least one theorem with positive records)");
+        }
+        if index.all_negatives.is_empty() {
             anyhow::bail!(
-                "No eligible theorems found (need theorems with both positive and negative records)"
+                "No negative records found — cannot build contrastive pairs. \
+                 Ensure trajectory data contains divergent states (negatives)."
             );
         }
+        tracing::info!(
+            eligible = index.eligible_theorems.len(),
+            with_hard_neg = index.neg_by_theorem.len(),
+            total_neg = index.all_negatives.len(),
+            "ContrastiveSampler initialized"
+        );
         Ok(ContrastiveSampler {
             records,
             index,
@@ -532,15 +542,16 @@ mod tests {
 
     #[test]
     fn test_eligible_theorems() {
-        // Theorem with only positives should NOT be eligible
+        // ALL theorems with positives are eligible (negatives backfilled
+        // from global pool for theorems without same-theorem negatives)
         let mut records = make_test_records();
         records.push(make_record("thm_c", "positive", 0));
         records.push(make_record("thm_c", "positive", 1));
-        // thm_c has no negatives
+        // thm_c has no negatives but is still eligible
 
         let index = ContrastiveIndex::build(&records);
-        assert!(!index.eligible_theorems.contains(&"thm_c".to_string()));
-        assert_eq!(index.eligible_theorems.len(), 2); // only thm_a and thm_b
+        assert!(index.eligible_theorems.contains(&"thm_c".to_string()));
+        assert_eq!(index.eligible_theorems.len(), 3); // thm_a, thm_b, and thm_c
     }
 
     #[test]
