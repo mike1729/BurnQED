@@ -1404,10 +1404,10 @@ async fn process_theorem(
                     });
                     outcome.negatives += 1;
 
-                    // Walk remaining tactics from full proof for medium-difficulty negatives.
-                    // If the model generated a multi-step proof, intermediate states along
-                    // that alternative path are valuable training signal — they're divergent
-                    // from ground-truth but still on a valid proof path.
+                    // Walk remaining tactics from the model's full proof attempt.
+                    // Buffer records and decide labels after: if the chain reaches
+                    // ProofComplete, intermediate states are Positive (valid proof
+                    // path); otherwise they stay Negative (divergent).
                     let all_tactics = policy::extract_all_tactics(&candidate.raw_text);
                     if all_tactics.len() > 1 {
                         tracing::debug!(
@@ -1417,17 +1417,16 @@ async fn process_theorem(
                             "Walking multi-tactic chain"
                         );
                         let mut chain_state_id = div_state_id;
+                        let mut chain_records: Vec<TrajectoryRecord> = Vec::new();
+                        let mut chain_proved = false;
 
-                        for chain_tactic in &all_tactics[1..] {
-                            if outcome.negatives >= target_negatives {
-                                break;
-                            }
+                        for (chain_idx, chain_tactic) in all_tactics[1..].iter().enumerate() {
                             match handle
                                 .run_tactic(chain_state_id, Some(0), chain_tactic)
                                 .await
                             {
                                 Ok(TacticResult::ProofComplete { .. }) => {
-                                    // Chain completed — confirms these were medium-difficulty negatives
+                                    chain_proved = true;
                                     outcome.alternative_proofs += 1;
                                     tracing::debug!(
                                         theorem = theorem_name,
@@ -1440,6 +1439,7 @@ async fn process_theorem(
                                     state_id: next_id,
                                     goals: next_goals,
                                 }) if next_goals.is_empty() => {
+                                    chain_proved = true;
                                     outcome.alternative_proofs += 1;
                                     break;
                                 }
@@ -1447,26 +1447,24 @@ async fn process_theorem(
                                     state_id: next_id,
                                     goals: next_goals,
                                 }) => {
-                                    // Intermediate state — medium-difficulty negative
                                     let next_pp = next_goals
                                         .first()
                                         .map(|g| g.raw.clone())
                                         .unwrap_or_default();
-                                    outcome.records.push(TrajectoryRecord {
+                                    chain_records.push(TrajectoryRecord {
                                         theorem_name: theorem_name.to_string(),
                                         state_id: chain_state_id,
                                         state_pp: next_pp,
                                         tactic_applied: chain_tactic.clone(),
                                         parent_state_id: Some(chain_state_id),
-                                        label: TrajectoryLabel::Negative,
-                                        depth_from_root: step.depth + 2, // deeper than first divergence
+                                        label: TrajectoryLabel::Negative, // provisional
+                                        depth_from_root: step.depth + 2 + chain_idx as u32,
                                         remaining_depth: -1,
-                                        llm_log_prob: 0.0, // no per-tactic logprob for chain steps
+                                        llm_log_prob: 0.0,
                                         ebm_score: 0.0,
                                         is_proof_complete: false,
                                         timestamp_ms: 0,
                                     });
-                                    outcome.negatives += 1;
                                     chain_state_id = next_id;
                                 }
                                 Ok(TacticResult::Failed { message }) => {
@@ -1487,6 +1485,30 @@ async fn process_theorem(
                                     );
                                     break;
                                 }
+                            }
+                        }
+
+                        // Relabel chain records based on outcome
+                        if chain_proved {
+                            // Also relabel the first divergent record (already pushed above)
+                            if let Some(first_div) = outcome.records.last_mut() {
+                                if first_div.label == TrajectoryLabel::Negative
+                                    && first_div.theorem_name == theorem_name
+                                {
+                                    first_div.label = TrajectoryLabel::Positive;
+                                    outcome.negatives -= 1;
+                                    outcome.positives += 1;
+                                }
+                            }
+                            for mut rec in chain_records {
+                                rec.label = TrajectoryLabel::Positive;
+                                outcome.positives += 1;
+                                outcome.records.push(rec);
+                            }
+                        } else {
+                            for rec in chain_records {
+                                outcome.negatives += 1;
+                                outcome.records.push(rec);
                             }
                         }
                     }
@@ -1654,14 +1676,88 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
             .progress_chars("=> "),
     );
 
-    // 5. Spawn per-theorem tasks
+    // 5. Spawn per-theorem tasks and collect results concurrently.
+    // We interleave spawning with draining completed tasks so the progress
+    // bar updates in real time and auto-save works during the run.
     let mut join_set = tokio::task::JoinSet::new();
     let candidates_per_step = args.candidates_per_step;
     let target_negatives = args.target_negatives;
 
+    let mut total_positives: usize = 0;
+    let mut total_negatives: usize = 0;
+    let mut total_alt_proofs: usize = 0;
+    let mut completed_count: usize = 0;
+    let mut skipped_count: usize = 0;
+    let mut processed_count: usize = 0;
+    // depth → (positives, negatives)
+    let mut depth_dist: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
+
+    /// Collect one completed outcome from the JoinSet into accumulators.
+    fn collect_outcome(
+        outcome: NegGenOutcome,
+        total_positives: &mut usize,
+        total_negatives: &mut usize,
+        total_alt_proofs: &mut usize,
+        completed_count: &mut usize,
+        skipped_count: &mut usize,
+        processed_count: &mut usize,
+        depth_dist: &mut BTreeMap<u32, (usize, usize)>,
+        writer: &mut TrajectoryWriter,
+        pb: &ProgressBar,
+    ) {
+        *processed_count += 1;
+        *total_positives += outcome.positives;
+        *total_negatives += outcome.negatives;
+        *total_alt_proofs += outcome.alternative_proofs;
+        if outcome.completed {
+            *completed_count += 1;
+        } else if outcome.steps_walked == 0 {
+            *skipped_count += 1;
+        }
+        for rec in &outcome.records {
+            let entry = depth_dist.entry(rec.depth_from_root).or_insert((0, 0));
+            match rec.label {
+                TrajectoryLabel::Positive => entry.0 += 1,
+                TrajectoryLabel::Negative => entry.1 += 1,
+                _ => {}
+            }
+        }
+        if !outcome.records.is_empty() {
+            writer.record_all(outcome.records);
+        }
+        pb.inc(1);
+    }
+
     for (theorem_name, steps) in grouped {
         if interrupted.load(Ordering::Relaxed) {
             break;
+        }
+
+        // Drain any completed tasks while we wait for a permit
+        while let Some(join_result) = join_set.try_join_next() {
+            match join_result {
+                Ok(outcome) => {
+                    collect_outcome(
+                        outcome,
+                        &mut total_positives,
+                        &mut total_negatives,
+                        &mut total_alt_proofs,
+                        &mut completed_count,
+                        &mut skipped_count,
+                        &mut processed_count,
+                        &mut depth_dist,
+                        &mut writer,
+                        &pb,
+                    );
+                    if processed_count % 50 == 0 {
+                        writer.flush_partial()?;
+                        tracing::info!(processed = processed_count, "Auto-saved checkpoint");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Generate-negatives task panicked");
+                }
+            }
         }
 
         let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
@@ -1723,54 +1819,30 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
         });
     }
 
-    // 6. Collect results
-    let mut total_positives: usize = 0;
-    let mut total_negatives: usize = 0;
-    let mut total_alt_proofs: usize = 0;
-    let mut completed_count: usize = 0;
-    let mut skipped_count: usize = 0;
-    let mut processed_count: usize = 0;
-    // depth → (positives, negatives)
-    let mut depth_dist: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
-
+    // 6. Drain remaining completed tasks
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
             Ok(outcome) => {
-                processed_count += 1;
-                total_positives += outcome.positives;
-                total_negatives += outcome.negatives;
-                total_alt_proofs += outcome.alternative_proofs;
-                if outcome.completed {
-                    completed_count += 1;
-                } else if outcome.steps_walked == 0 {
-                    skipped_count += 1;
-                }
-
-                // Track depth distribution
-                for rec in &outcome.records {
-                    let entry = depth_dist.entry(rec.depth_from_root).or_insert((0, 0));
-                    match rec.label {
-                        TrajectoryLabel::Positive => entry.0 += 1,
-                        TrajectoryLabel::Negative => entry.1 += 1,
-                        _ => {}
-                    }
-                }
-
-                if !outcome.records.is_empty() {
-                    writer.record_all(outcome.records);
+                collect_outcome(
+                    outcome,
+                    &mut total_positives,
+                    &mut total_negatives,
+                    &mut total_alt_proofs,
+                    &mut completed_count,
+                    &mut skipped_count,
+                    &mut processed_count,
+                    &mut depth_dist,
+                    &mut writer,
+                    &pb,
+                );
+                if processed_count % 50 == 0 && processed_count > 0 {
+                    writer.flush_partial()?;
+                    tracing::info!(processed = processed_count, "Auto-saved checkpoint");
                 }
             }
             Err(e) => {
                 tracing::error!(error = %e, "Generate-negatives task panicked");
             }
-        }
-
-        pb.inc(1);
-
-        // Auto-save every 50 theorems
-        if processed_count % 50 == 0 && processed_count > 0 {
-            writer.flush_partial()?;
-            tracing::info!(processed = processed_count, "Auto-saved checkpoint");
         }
     }
 
