@@ -10,7 +10,7 @@
 #   PORT=30000 TP=2 ./scripts/start_inference_server.sh
 #
 # Prerequisites:
-#   pip install "sglang[all]" fastapi uvicorn
+#   pip install "sglang[all]" fastapi uvicorn nest-asyncio
 
 set -euo pipefail
 
