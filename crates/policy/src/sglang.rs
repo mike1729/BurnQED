@@ -208,8 +208,28 @@ impl SglangClient {
                 return_hidden_states: false,
             };
 
-            let resp = self.post_with_retry(&url, &request, None).await?;
-            let body = resp.bytes().await?;
+            let resp = match self.post_with_retry(&url, &request, None).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(
+                        candidate = i,
+                        error = %e,
+                        "SGLang request failed, skipping candidate"
+                    );
+                    continue;
+                }
+            };
+            let body = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::debug!(
+                        candidate = i,
+                        error = %e,
+                        "Failed to read SGLang response body, skipping candidate"
+                    );
+                    continue;
+                }
+            };
             match serde_json::from_slice::<serde_json::Value>(&body) {
                 Ok(val) => {
                     let text = val.get("text")

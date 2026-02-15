@@ -1410,6 +1410,12 @@ async fn process_theorem(
                     // from ground-truth but still on a valid proof path.
                     let all_tactics = policy::extract_all_tactics(&candidate.raw_text);
                     if all_tactics.len() > 1 {
+                        tracing::debug!(
+                            theorem = theorem_name,
+                            step = step_idx,
+                            total_tactics = all_tactics.len(),
+                            "Walking multi-tactic chain"
+                        );
                         let mut chain_state_id = div_state_id;
 
                         for chain_tactic in &all_tactics[1..] {
@@ -1463,7 +1469,24 @@ async fn process_theorem(
                                     outcome.negatives += 1;
                                     chain_state_id = next_id;
                                 }
-                                _ => break, // Failed or error — stop chain
+                                Ok(TacticResult::Failed { message }) => {
+                                    tracing::debug!(
+                                        theorem = theorem_name,
+                                        chain_tactic = chain_tactic.as_str(),
+                                        error = message,
+                                        "Chain tactic failed, stopping walk"
+                                    );
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        theorem = theorem_name,
+                                        chain_tactic = chain_tactic.as_str(),
+                                        error = %e,
+                                        "Chain tactic error, stopping walk"
+                                    );
+                                    break;
+                                }
                             }
                         }
                     }
