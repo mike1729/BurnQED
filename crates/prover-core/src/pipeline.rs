@@ -1240,21 +1240,20 @@ async fn process_theorem(
     let total_steps = steps.len();
     let namespace = infer_open_namespace(theorem_name);
 
-    // Get root state for the first step
-    let initial = handle.initial_state();
-    let mut current_state_id = initial.state_id;
-    let mut current_goals = initial.goals.clone();
+    // Pantograph's goal.start doesn't return goals — only a state_id.
+    // For step 0, use the tactic pair's state field (LeanDojo's pretty-print).
+    // For subsequent steps, use goals from TacticResult::Success (Pantograph's view).
+    let mut current_state_id = handle.initial_state().state_id;
+    // None means "use step.state from tactic pairs" (for the root)
+    let mut pantograph_state_pp: Option<String> = None;
 
     for (step_idx, step) in steps.iter().enumerate() {
         outcome.steps_walked = step_idx + 1;
 
-        // Use Pantograph's goal representation for state_pp (what EBM sees during search)
-        let state_pp = if let Some(g) = current_goals.first() {
-            g.raw.clone()
-        } else {
-            tracing::debug!(theorem = theorem_name, step = step_idx, "No goals at step");
-            break;
-        };
+        // Use Pantograph's goal if available, otherwise fall back to tactic pair data
+        let state_pp = pantograph_state_pp
+            .clone()
+            .unwrap_or_else(|| step.state.clone());
 
         // Record ground-truth state as Positive
         let remaining_depth = (total_steps - step_idx) as i32;
@@ -1448,7 +1447,7 @@ async fn process_theorem(
         match advance_result {
             Some(TacticResult::Success { state_id, goals }) => {
                 current_state_id = state_id;
-                current_goals = goals;
+                pantograph_state_pp = goals.first().map(|g| g.raw.clone());
             }
             Some(TacticResult::ProofComplete { .. }) => {
                 // Proof is done — no more steps to walk
