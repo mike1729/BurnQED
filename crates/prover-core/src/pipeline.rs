@@ -1230,8 +1230,8 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 /// where LLM-generated candidates mostly produce `TacticResult::Failed`.
 const PROBE_TACTICS: &[&str] = &[
     "simp", "ring", "omega", "norm_num", "decide", "trivial", "rfl", "tauto",
-    "linarith", "push_neg", "contradiction", "exfalso", "constructor", "ext",
-    "simp_all", "intro _",
+    "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left",
+    "right", "ext", "simp_all", "intro _",
 ];
 
 /// Process a single theorem: walk the ground-truth proof path, generate LLM
@@ -1292,8 +1292,14 @@ async fn process_theorem(
     // Now walk through Pantograph to generate candidates and negatives.
     // Ground-truth replay may fail (namespace mismatch ~55%), but positives
     // are already recorded above. We only need Pantograph for candidate testing.
+    //
+    // "Zombie Walk": when ground-truth fails, we advance via a probe tactic
+    // to explore deeper states. On zombie paths we skip LLM candidates (avoids
+    // unreliable hard negatives) and label probe-reached states as Positive
+    // context (valid representation learning, not value comparison).
     let mut current_state_id = handle.initial_state().state_id;
     let mut pantograph_state_pp: Option<String> = None;
+    let mut is_zombie = false;
 
     for (step_idx, step) in steps.iter().enumerate() {
         outcome.steps_walked = step_idx + 1;
@@ -1304,32 +1310,39 @@ async fn process_theorem(
             .unwrap_or_else(|| step.state.clone());
         let remaining_depth = (total_steps - step_idx) as i32;
 
-        // Generate LLM candidates at this proof state
-        let candidates = match inference
-            .generate_candidates(&state_pp, candidates_per_step)
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::debug!(
-                    theorem = theorem_name,
-                    step = step_idx,
-                    error = %e,
-                    "Failed to generate candidates"
-                );
-                Vec::new()
+        // Generate LLM candidates at this proof state.
+        // Skip on zombie paths — avoids unreliable hard negatives and saves GPU time.
+        let candidates = if !is_zombie {
+            match inference
+                .generate_candidates(&state_pp, candidates_per_step)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::debug!(
+                        theorem = theorem_name,
+                        step = step_idx,
+                        error = %e,
+                        "Failed to generate candidates"
+                    );
+                    Vec::new()
+                }
             }
+        } else {
+            Vec::new()
         };
 
         let gt_normalized = normalize_tactic(&step.tactic);
 
-        tracing::debug!(
-            theorem = theorem_name,
-            step = step_idx,
-            candidates = candidates.len(),
-            gt_tactic = step.tactic,
-            "Generated candidates for step"
-        );
+        if !candidates.is_empty() {
+            tracing::debug!(
+                theorem = theorem_name,
+                step = step_idx,
+                candidates = candidates.len(),
+                gt_tactic = step.tactic,
+                "Generated candidates for step"
+            );
+        }
 
         // Try each non-ground-truth candidate.
         // Wrap with open prefix so candidates using short names (from LLM training
@@ -1578,6 +1591,12 @@ async fn process_theorem(
         // Try probe tactics — built-in Lean 4 tactics that commonly apply.
         // These are cheap (no LLM call) and often produce valid divergent
         // states, boosting negative yield where LLM candidates mostly fail.
+        //
+        // We also save the last successful probe state for "probe advancement":
+        // if ground-truth replay fails, we advance via this probe state to
+        // explore deeper levels and generate negatives at depth > 1.
+        let mut probe_advance_state: Option<(u64, Option<String>)> = None;
+
         if outcome.negatives < target_negatives {
             let llm_tried: HashSet<String> = candidates
                 .iter()
@@ -1649,22 +1668,36 @@ async fn process_theorem(
                         outcome.alternative_proofs += 1;
                         probe_hits += 1;
                     }
-                    Ok(TacticResult::Success { goals, .. }) => {
-                        let neg_state_pp = goals
+                    Ok(TacticResult::Success {
+                        state_id: probe_sid,
+                        goals,
+                    }) => {
+                        let result_pp = goals
                             .first()
                             .map(|g| g.raw.clone())
                             .unwrap_or_default();
+                        // Save for potential probe advancement
+                        probe_advance_state =
+                            Some((probe_sid, Some(result_pp.clone())));
+                        // Normal path: Negative (divergent state).
+                        // Zombie path: Positive (valid context for
+                        // representation learning, not value comparison).
+                        let label = if is_zombie {
+                            TrajectoryLabel::Positive
+                        } else {
+                            TrajectoryLabel::Negative
+                        };
                         outcome.records.push(TrajectoryRecord {
                             theorem_name: theorem_name.to_string(),
                             state_id: current_state_id,
-                            state_pp: neg_state_pp,
+                            state_pp: result_pp,
                             tactic_applied: probe.to_string(),
                             parent_state_id: if step_idx == 0 {
                                 None
                             } else {
                                 Some(current_state_id.saturating_sub(1))
                             },
-                            label: TrajectoryLabel::Negative,
+                            label,
                             depth_from_root: step.depth + 1,
                             remaining_depth: -1,
                             llm_log_prob: 0.0,
@@ -1672,7 +1705,11 @@ async fn process_theorem(
                             is_proof_complete: false,
                             timestamp_ms: 0,
                         });
-                        outcome.negatives += 1;
+                        if is_zombie {
+                            outcome.positives += 1;
+                        } else {
+                            outcome.negatives += 1;
+                        }
                         probe_hits += 1;
                     }
                     Ok(TacticResult::Failed { .. }) | Err(_) => {
@@ -1700,70 +1737,89 @@ async fn process_theorem(
             break;
         }
 
-        // Apply ground-truth tactic to advance along the proof path
-        let advance_result = match handle
-            .run_tactic(current_state_id, Some(0), &step.tactic)
-            .await
-        {
-            Ok(r) => Some(r),
-            Err(_) if open_prefix.is_some() => {
-                // Retry with all namespace prefixes opened
-                let open_tactic = format!(
-                    "{}{}",
-                    open_prefix.as_ref().unwrap(),
-                    &step.tactic
-                );
-                match handle
-                    .run_tactic(current_state_id, Some(0), &open_tactic)
-                    .await
-                {
-                    Ok(r) => Some(r),
-                    Err(e) => {
+        // Advance to the next proof state.
+        if !is_zombie {
+            // Normal path: try ground-truth tactic
+            let advance_result = match handle
+                .run_tactic(current_state_id, Some(0), &step.tactic)
+                .await
+            {
+                Ok(r) => Some(r),
+                Err(_) if open_prefix.is_some() => {
+                    // Retry with all namespace prefixes opened
+                    let open_tactic = format!(
+                        "{}{}",
+                        open_prefix.as_ref().unwrap(),
+                        &step.tactic
+                    );
+                    match handle
+                        .run_tactic(current_state_id, Some(0), &open_tactic)
+                        .await
+                    {
+                        Ok(r) => Some(r),
+                        Err(e) => {
+                            tracing::debug!(
+                                theorem = theorem_name,
+                                step = step_idx,
+                                tactic = step.tactic,
+                                error = %e,
+                                "Ground-truth tactic failed even with open namespaces"
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        theorem = theorem_name,
+                        step = step_idx,
+                        tactic = step.tactic,
+                        error = %e,
+                        "Ground-truth tactic failed (no namespace to retry)"
+                    );
+                    None
+                }
+            };
+
+            match advance_result {
+                Some(TacticResult::Success { state_id, goals }) => {
+                    current_state_id = state_id;
+                    pantograph_state_pp = goals.first().map(|g| g.raw.clone());
+                }
+                Some(TacticResult::ProofComplete { .. }) => {
+                    outcome.completed = true;
+                    break;
+                }
+                Some(TacticResult::Failed { .. }) | None => {
+                    // Ground-truth failed — enter zombie walk if a probe
+                    // succeeded earlier (use its state to explore deeper).
+                    if let Some((adv_id, adv_pp)) = probe_advance_state.take()
+                    {
                         tracing::debug!(
                             theorem = theorem_name,
                             step = step_idx,
-                            tactic = step.tactic,
-                            error = %e,
-                            "Ground-truth tactic failed even with open namespaces"
+                            "Entering zombie walk (ground-truth failed, advancing via probe)"
                         );
-                        None
+                        is_zombie = true;
+                        current_state_id = adv_id;
+                        pantograph_state_pp = adv_pp;
+                    } else {
+                        break;
                     }
                 }
             }
-            Err(e) => {
+        } else {
+            // Zombie path: advance via the last successful probe state.
+            // No ground-truth to try — we're off the proof path.
+            if let Some((adv_id, adv_pp)) = probe_advance_state.take() {
+                current_state_id = adv_id;
+                pantograph_state_pp = adv_pp;
+            } else {
                 tracing::debug!(
                     theorem = theorem_name,
                     step = step_idx,
-                    tactic = step.tactic,
-                    error = %e,
-                    "Ground-truth tactic failed (no namespace to retry)"
+                    "Zombie walk ended (no probe could advance)"
                 );
-                None
-            }
-        };
-
-        match advance_result {
-            Some(TacticResult::Success { state_id, goals }) => {
-                current_state_id = state_id;
-                pantograph_state_pp = goals.first().map(|g| g.raw.clone());
-            }
-            Some(TacticResult::ProofComplete { .. }) => {
-                // Proof is done — no more steps to walk
-                outcome.completed = true;
-                break;
-            }
-            Some(TacticResult::Failed { message }) => {
-                tracing::debug!(
-                    theorem = theorem_name,
-                    step = step_idx,
-                    tactic = step.tactic,
-                    error = message,
-                    "Ground-truth tactic was rejected by Lean"
-                );
-                break;
-            }
-            None => {
-                // Error already logged above
                 break;
             }
         }
