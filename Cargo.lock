@@ -4154,6 +4154,7 @@ dependencies = [
  "indicatif",
  "lean-repl",
  "policy",
+ "rand 0.8.5",
  "search",
  "serde",
  "serde_json",
