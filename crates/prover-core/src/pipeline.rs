@@ -807,7 +807,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                             });
                         }
                         Err(e) => {
-                            tracing::warn!(theorem = name, error = %e, "Eval search failed");
+                            tracing::debug!(theorem = name, error = %e, "Eval search failed");
                             if best.is_none() {
                                 best = Some(TheoremResult {
                                     name: name.clone(),
