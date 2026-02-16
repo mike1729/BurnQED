@@ -55,8 +55,8 @@ enum Command {
         /// Override number of candidate tactics per expansion.
         #[arg(long)]
         num_candidates: Option<usize>,
-        /// Number of theorems to search in parallel (default: 1 = sequential).
-        #[arg(long, default_value_t = 1)]
+        /// Number of theorems to search in parallel.
+        #[arg(long, default_value_t = 8)]
         concurrency: usize,
         /// Maximum number of theorems to search (truncates the index).
         #[arg(long)]
@@ -109,8 +109,8 @@ enum Command {
         /// Override the number of Lean workers.
         #[arg(long)]
         num_workers: Option<usize>,
-        /// Number of theorems to search in parallel (default: 1 = sequential).
-        #[arg(long, default_value_t = 1)]
+        /// Number of theorems to search in parallel.
+        #[arg(long, default_value_t = 8)]
         concurrency: usize,
         /// Maximum number of theorems to evaluate (truncates the index).
         #[arg(long)]
