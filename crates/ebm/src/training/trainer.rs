@@ -4,6 +4,7 @@
 //! and metrics into a training loop using AdamW with warmup + cosine LR schedule.
 
 use std::path::Path;
+use std::time::Instant;
 
 use burn::grad_clipping::GradientClippingConfig;
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
@@ -109,6 +110,7 @@ pub fn train<B: AutodiffBackend>(
 
     let mut rng = rand::rngs::StdRng::from_entropy();
     let mut _history = MetricsHistory::new();
+    let train_start = Instant::now();
 
     for step in 0..config.total_steps {
         let lr = lr_schedule(config.lr, config.warmup_steps, config.total_steps, step);
@@ -212,7 +214,20 @@ pub fn train<B: AutodiffBackend>(
                 tracing::warn!(step, "Health check warnings: {:?}", warnings);
             }
 
-            tracing::info!(step, lr, "{}", metrics.display());
+            let elapsed = train_start.elapsed().as_secs_f64();
+            let remaining = if step > 0 {
+                elapsed * (config.total_steps - step) as f64 / step as f64
+            } else {
+                0.0
+            };
+            let eta = if remaining < 60.0 {
+                format!("{:.0}s", remaining)
+            } else if remaining < 3600.0 {
+                format!("{:.0}m", remaining / 60.0)
+            } else {
+                format!("{:.1}h", remaining / 3600.0)
+            };
+            tracing::info!(step, lr, eta, "{}", metrics.display());
             _history.push(step, metrics);
         }
 
