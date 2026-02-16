@@ -191,15 +191,18 @@ async fn load_policy_and_ebm(
     let inference_handle = InferenceHandle::new(client);
 
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
+    let exp = toml.search.batch_expansion_size;
+    let n_cands = toml.search.num_candidates;
     let batcher = GlobalBatcher::new(
         Arc::new(raw_policy),
-        8,                               // max_batch_states (8 states × 8 candidates = 64 sequences)
+        exp,                             // flush when one thread's expansion arrives
         Duration::from_millis(5),        // linger
     );
     let policy = CachedPolicy::new(batcher, 10_000);
 
     // 4. Optional EBM scorer
-    let value_fn = load_ebm_scorer(ebm_path, &inference_handle)?;
+    let encode_batch_limit = exp * n_cands; // e.g. 8×8=64 or 4×8=32
+    let value_fn = load_ebm_scorer(ebm_path, &inference_handle, encode_batch_limit)?;
 
     Ok((
         toml.search,
@@ -221,6 +224,7 @@ async fn load_policy_and_ebm(
 fn load_ebm_scorer(
     ebm_path: Option<&Path>,
     inference_handle: &InferenceHandle,
+    encode_batch_limit: usize,
 ) -> anyhow::Result<Option<EBMValueFn>> {
     let ebm_dir = match ebm_path {
         Some(dir) => dir,
@@ -248,7 +252,7 @@ fn load_ebm_scorer(
     // GlobalEncodeBatcher: coalesces concurrent encode requests
     let encode_batcher = Arc::new(GlobalEncodeBatcher::new(
         Arc::new(caching_encoder),
-        64,                              // max_batch_states
+        encode_batch_limit,              // derived from batch_expansion_size × num_candidates
         Duration::from_millis(5),        // linger
     ));
 
