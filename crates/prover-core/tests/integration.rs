@@ -369,7 +369,7 @@ fn test_train_ebm_mock_pipeline() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let _trained = ebm::train(&config, model, &encode_fn, &sampler, &device).unwrap();
+    let _trained = ebm::train(&config, model, &encode_fn, &sampler, None, &device).unwrap();
 
     // Verify final checkpoint exists
     let final_ckpt = checkpoint_dir.join("final.mpk");
@@ -452,7 +452,7 @@ fn test_train_ebm_with_cached_embeddings() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let result = ebm::train(&config, model, &cache_encode_fn, &sampler, &device);
+    let result = ebm::train(&config, model, &cache_encode_fn, &sampler, None, &device);
     assert!(result.is_ok(), "Training with cached embeddings should succeed: {:?}", result.err());
 
     // Verify checkpoint saved
@@ -525,7 +525,7 @@ fn test_train_ebm_save_embeddings_roundtrip() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let result = ebm::train(&config, model, &cache_encode, &sampler, &device);
+    let result = ebm::train(&config, model, &cache_encode, &sampler, None, &device);
     assert!(result.is_ok(), "Training with loaded cache should succeed: {:?}", result.err());
     assert!(checkpoint_dir.join("final.mpk").exists(), "Checkpoint should be saved");
 }
@@ -572,7 +572,7 @@ fn test_train_ebm_resume_with_cache() {
         .with_checkpoint_dir(ckpt_dir1.to_string_lossy().to_string());
 
     let model1 = head_config.init::<TrainBackend>(&device);
-    ebm::train(&config1, model1, &cache_encode, &sampler, &device).unwrap();
+    ebm::train(&config1, model1, &cache_encode, &sampler, None, &device).unwrap();
 
     let ckpt1_path = ckpt_dir1.join("final.mpk");
     assert!(ckpt1_path.exists(), "First run checkpoint should exist");
@@ -592,7 +592,7 @@ fn test_train_ebm_resume_with_cache() {
     // Resume: load weights from first run's checkpoint
     let resumed_model: ebm::EnergyHead<TrainBackend> =
         ebm::resume_from_checkpoint(&ckpt_dir1.join("final"), &head_config, &device).unwrap();
-    ebm::train(&config2, resumed_model, &cache_encode, &sampler, &device).unwrap();
+    ebm::train(&config2, resumed_model, &cache_encode, &sampler, None, &device).unwrap();
 
     let ckpt2_path = ckpt_dir2.join("final.mpk");
     assert!(ckpt2_path.exists(), "Second run checkpoint should exist");

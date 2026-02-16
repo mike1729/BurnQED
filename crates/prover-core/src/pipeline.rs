@@ -14,6 +14,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use ebm::{
     ContrastiveSampler, EBMScorer, EBMTrainingConfig, EBMValueFn, EmbeddingCache, EnergyHeadConfig,
+    ProofStateRecord,
 };
 use lean_repl::{LeanPool, TacticResult};
 use policy::{InferenceHandle, SglangClient, SglangConfig};
@@ -1031,6 +1032,45 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Split records into train/val by theorem name.
+///
+/// Ensures all records for a given theorem end up in the same split
+/// (no data leakage between train and val).
+fn split_records_by_theorem(
+    records: &[ProofStateRecord],
+    val_fraction: f64,
+) -> (Vec<ProofStateRecord>, Vec<ProofStateRecord>) {
+    use rand::seq::SliceRandom;
+    use rand::SeedableRng;
+
+    // Group by theorem name
+    let mut by_theorem: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, r) in records.iter().enumerate() {
+        by_theorem.entry(&r.theorem_name).or_default().push(i);
+    }
+
+    // Shuffle theorem names deterministically and split
+    let mut theorem_names: Vec<&str> = by_theorem.keys().copied().collect();
+    theorem_names.sort(); // deterministic base order
+    let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+    theorem_names.shuffle(&mut rng);
+
+    let val_count = (theorem_names.len() as f64 * val_fraction).round() as usize;
+    let val_theorems: HashSet<&str> = theorem_names[..val_count].iter().copied().collect();
+
+    let mut train = Vec::new();
+    let mut val = Vec::new();
+    for r in records {
+        if val_theorems.contains(r.theorem_name.as_str()) {
+            val.push(r.clone());
+        } else {
+            train.push(r.clone());
+        }
+    }
+
+    (train, val)
+}
+
 /// Train the Energy-Based Model from trajectory data.
 pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let hidden_size = args.hidden_size;
@@ -1074,7 +1114,12 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         records.extend(tp_records);
     }
 
-    let sampler = match ContrastiveSampler::from_trajectory_records(records, args.k_negatives) {
+    // Split records 90/10 by theorem for train/val
+    let (train_records, val_records) = split_records_by_theorem(&records, 0.1);
+    let num_train = train_records.len();
+    let num_val = val_records.len();
+
+    let sampler = match ContrastiveSampler::from_trajectory_records(train_records, args.k_negatives) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(error = %e, "Cannot train EBM — not enough contrastive data");
@@ -1089,10 +1134,29 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
             return Ok(());
         }
     };
+    let val_sampler = if !val_records.is_empty() {
+        match ContrastiveSampler::from_trajectory_records(val_records, args.k_negatives) {
+            Ok(s) => {
+                tracing::info!(
+                    val_records = num_val,
+                    val_eligible = s.num_eligible_theorems(),
+                    "Validation sampler initialized"
+                );
+                Some(s)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "No validation set — val split has insufficient data");
+                None
+            }
+        }
+    } else {
+        None
+    };
     tracing::info!(
-        records = sampler.num_records(),
-        eligible_theorems = sampler.num_eligible_theorems(),
-        "Trajectory data loaded"
+        train_records = num_train,
+        val_records = num_val,
+        train_eligible = sampler.num_eligible_theorems(),
+        "Trajectory data loaded (train/val split)"
     );
 
     // 3. Build embedding cache (warm from disk or start empty)
@@ -1192,7 +1256,14 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .with_checkpoint_dir(output_dir_str.clone());
 
     // 9. Train
-    let _trained = ebm::train(&training_config, model, &encode_fn, &sampler, &device)?;
+    let _trained = ebm::train(
+        &training_config,
+        model,
+        &encode_fn,
+        &sampler,
+        val_sampler.as_ref(),
+        &device,
+    )?;
 
     tracing::info!(
         cached = cache.len(),

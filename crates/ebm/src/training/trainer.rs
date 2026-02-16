@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use burn::grad_clipping::GradientClippingConfig;
+use burn::module::AutodiffModule;
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
 use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder};
@@ -75,6 +76,79 @@ pub fn lr_schedule(base_lr: f64, warmup_steps: usize, total_steps: usize, step: 
     }
 }
 
+/// Evaluate a batch of contrastive samples and return metrics (no gradients).
+///
+/// Used for both train metrics (after backward) and validation.
+fn eval_batch<B: Backend>(
+    model: &EnergyHead<B>,
+    encode_fn: &dyn Fn(&str) -> anyhow::Result<Vec<f32>>,
+    sampler: &ContrastiveSampler,
+    batch_size: usize,
+    k_negatives: usize,
+    depth_loss_weight: f64,
+    rng: &mut impl rand::Rng,
+    device: &B::Device,
+) -> Option<EBMMetrics> {
+    let samples = sampler.sample_batch(batch_size, rng);
+
+    // Encode positive states
+    let mut pos_embeddings = Vec::with_capacity(batch_size);
+    let mut remaining_depths = Vec::with_capacity(batch_size);
+
+    for sample in &samples {
+        match encode_fn(&sample.positive.state_pp) {
+            Ok(emb) => {
+                pos_embeddings.push(emb);
+                remaining_depths.push(sample.remaining_depth as f32);
+            }
+            Err(_) => return None,
+        }
+    }
+    if pos_embeddings.is_empty() {
+        return None;
+    }
+
+    // Encode negative states
+    let mut neg_embeddings = Vec::with_capacity(batch_size * k_negatives);
+    for sample in &samples {
+        for neg in &sample.negatives {
+            match encode_fn(&neg.state_pp) {
+                Ok(emb) => neg_embeddings.push(emb),
+                Err(_) => return None,
+            }
+        }
+    }
+
+    let actual_batch = pos_embeddings.len();
+    let k = k_negatives;
+
+    let pos_tensor = embeddings_to_tensor::<B>(&pos_embeddings, device);
+    let neg_tensor = embeddings_to_tensor::<B>(&neg_embeddings, device);
+    let remaining_tensor = Tensor::<B, 1>::from_data(
+        TensorData::new(remaining_depths, [actual_batch]),
+        device,
+    );
+
+    let pos_energy = model.forward(pos_tensor);
+    let neg_energy_flat = model.forward(neg_tensor);
+    let neg_energies = neg_energy_flat.reshape([actual_batch, k]);
+
+    let contrastive_loss = info_nce_loss(pos_energy.clone(), neg_energies.clone());
+    let depth_loss = depth_regression_loss(pos_energy.clone(), remaining_tensor);
+
+    let contrastive_val: f64 = contrastive_loss.clone().into_scalar().elem();
+    let depth_val: f64 = depth_loss.clone().into_scalar().elem();
+    let total_val = contrastive_val + depth_val * depth_loss_weight;
+
+    Some(EBMMetrics::compute(
+        &pos_energy,
+        &neg_energies,
+        contrastive_val,
+        depth_val,
+        total_val,
+    ))
+}
+
 /// Run the EBM training loop.
 ///
 /// Trains the energy head using contrastive (InfoNCE) + depth regression loss.
@@ -86,6 +160,7 @@ pub fn lr_schedule(base_lr: f64, warmup_steps: usize, total_steps: usize, step: 
 /// - `model`: initialized EnergyHead (will be consumed and returned updated)
 /// - `encode_fn`: encodes a proof state string into a `Vec<f32>` embedding
 /// - `sampler`: provides contrastive training batches from trajectory data
+/// - `val_sampler`: optional validation sampler for overfitting detection
 /// - `device`: burn device for tensor operations
 ///
 /// # Returns
@@ -95,6 +170,7 @@ pub fn train<B: AutodiffBackend>(
     mut model: EnergyHead<B>,
     encode_fn: &dyn Fn(&str) -> anyhow::Result<Vec<f32>>,
     sampler: &ContrastiveSampler,
+    val_sampler: Option<&ContrastiveSampler>,
     device: &B::Device,
 ) -> anyhow::Result<EnergyHead<B>> {
     // Create checkpoint directory
@@ -109,6 +185,7 @@ pub fn train<B: AutodiffBackend>(
     let mut optimizer = optim_config.init();
 
     let mut rng = rand::rngs::StdRng::from_entropy();
+    let mut val_rng = rand::rngs::StdRng::from_entropy();
     let mut _history = MetricsHistory::new();
     let train_start = Instant::now();
 
@@ -227,7 +304,32 @@ pub fn train<B: AutodiffBackend>(
             } else {
                 format!("{:.1}h", remaining / 3600.0)
             };
-            tracing::info!(step, lr, eta, "{}", metrics.display());
+
+            // Compute validation metrics if val sampler is available
+            let val_str = if let Some(val_s) = val_sampler {
+                let inner_device = device.clone();
+                let val_model = model.valid();
+                match eval_batch(
+                    &val_model,
+                    encode_fn,
+                    val_s,
+                    config.batch_size,
+                    config.k_negatives,
+                    config.depth_loss_weight,
+                    &mut val_rng,
+                    &inner_device,
+                ) {
+                    Some(vm) => format!(
+                        " | val: loss={:.4} gap={:.2} rank={:.2}",
+                        vm.loss, vm.energy_gap, vm.rank_accuracy
+                    ),
+                    None => String::new(),
+                }
+            } else {
+                String::new()
+            };
+
+            tracing::info!(step, lr, eta, "{}{}", metrics.display(), val_str);
             _history.push(step, metrics);
         }
 
