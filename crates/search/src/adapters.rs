@@ -133,4 +133,14 @@ impl ValueScorer for EBMValueFn {
             _ => score_fn(),
         }
     }
+
+    fn score_batch(&self, proof_states: &[&str]) -> Result<Vec<f64>, SearchError> {
+        let batch_fn = || self.score_batch(proof_states).map_err(SearchError::Scorer);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(batch_fn)
+            }
+            _ => batch_fn(),
+        }
+    }
 }

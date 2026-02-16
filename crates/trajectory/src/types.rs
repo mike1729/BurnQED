@@ -92,6 +92,35 @@ pub struct SearchStats {
     pub loops_detected: u32,
     /// Number of sibling states mined after proof found.
     pub sibling_states_mined: u32,
+
+    // --- Timing breakdown (added for profiling) ---
+
+    /// Cumulative wall time in ms for EBM scorer.score() calls.
+    pub total_ebm_time_ms: u64,
+    /// Cumulative wall time in ms for harvest_siblings post-proof overhead.
+    pub total_harvest_time_ms: u64,
+    /// Cumulative wall time in ms for Lean apply_tactic calls on probe tactics only.
+    pub total_probe_lean_time_ms: u64,
+    /// Cumulative wall time in ms for Lean apply_tactic calls on LLM candidates only.
+    pub total_llm_lean_time_ms: u64,
+    /// Number of EBM score() invocations.
+    pub ebm_score_calls: u32,
+
+    // --- Cache stats ---
+
+    /// Number of policy cache hits.
+    pub cache_hits: u32,
+    /// Number of policy cache misses.
+    pub cache_misses: u32,
+
+    // --- Per-call latency vectors (microseconds, transient — not serialized) ---
+
+    /// Per apply_tactic call latency in microseconds.
+    pub lean_latencies_us: Vec<u64>,
+    /// Per generate_candidates_batch call latency in microseconds.
+    pub gen_latencies_us: Vec<u64>,
+    /// Per EBM score() call latency in microseconds.
+    pub ebm_latencies_us: Vec<u64>,
 }
 
 /// Result of searching for a proof of a single theorem.

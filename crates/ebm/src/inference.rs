@@ -91,6 +91,31 @@ impl<B: Backend> EBMScorer<B> {
         // Negate all: higher = more provable
         Ok(energy_vals.into_iter().map(|e| -e).collect())
     }
+
+    /// Score multiple proof states using a separate batch encode function.
+    ///
+    /// Unlike [`score_states`], which calls `encode_fn` once per state,
+    /// this method accepts a batch encode function that can encode all
+    /// states in a single HTTP call (e.g. via SGLang's `/encode` batch endpoint).
+    ///
+    /// Returns negated energies: higher = more provable.
+    pub fn score_states_batch(
+        &self,
+        states: &[&str],
+        batch_encode: &dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>>,
+    ) -> anyhow::Result<Vec<f64>> {
+        if states.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let embeddings = batch_encode(states)?;
+        let tensor = embeddings_to_tensor::<B>(&embeddings, &self.device);
+        let energies = self.energy_head.forward(tensor);
+        let energy_vals = tensor_to_vec::<B>(energies);
+
+        // Negate all: higher = more provable
+        Ok(energy_vals.into_iter().map(|e| -e).collect())
+    }
 }
 
 /// Backend-erased wrapper for EBM scoring.
@@ -109,23 +134,61 @@ impl<B: Backend> EBMScorer<B> {
 /// See `search::adapters::ValueScorer for EBMValueFn` for the correct pattern.
 pub struct EBMValueFn {
     score_fn: Box<dyn Fn(&str) -> anyhow::Result<f64> + Send + Sync>,
+    score_batch_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<f64>> + Send + Sync>,
 }
 
 impl EBMValueFn {
     /// Create a new backend-erased value function from a typed scorer.
     ///
-    /// The scorer is wrapped in `Mutex` so the closure is `Send + Sync`.
+    /// The scorer is wrapped in `Arc<Mutex>` so both closures can share it.
     pub fn new<B: Backend + 'static>(scorer: EBMScorer<B>) -> Self
     where
         B::Device: Send,
     {
-        let scorer = std::sync::Mutex::new(scorer);
+        let scorer = std::sync::Arc::new(std::sync::Mutex::new(scorer));
+        let scorer2 = scorer.clone();
         Self {
             score_fn: Box::new(move |state| {
                 let scorer = scorer
                     .lock()
                     .map_err(|e| anyhow::anyhow!("EBM scorer lock poisoned: {e}"))?;
                 scorer.score_state(state)
+            }),
+            score_batch_fn: Box::new(move |states| {
+                let scorer = scorer2
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("EBM scorer lock poisoned: {e}"))?;
+                scorer.score_states(states)
+            }),
+        }
+    }
+
+    /// Create a new backend-erased value function with a custom batch encode function.
+    ///
+    /// The `batch_encode_fn` is used by `score_batch()` to encode all states
+    /// in a single call (e.g. via SGLang's batch encode endpoint), while
+    /// `score()` still uses the per-state `encode_fn` inside the scorer.
+    pub fn with_batch_encode<B: Backend + 'static>(
+        scorer: EBMScorer<B>,
+        batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync>,
+    ) -> Self
+    where
+        B::Device: Send,
+    {
+        let scorer = std::sync::Arc::new(std::sync::Mutex::new(scorer));
+        let scorer2 = scorer.clone();
+        Self {
+            score_fn: Box::new(move |state| {
+                let scorer = scorer
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("EBM scorer lock poisoned: {e}"))?;
+                scorer.score_state(state)
+            }),
+            score_batch_fn: Box::new(move |states| {
+                let scorer = scorer2
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("EBM scorer lock poisoned: {e}"))?;
+                scorer.score_states_batch(states, &*batch_encode_fn)
             }),
         }
     }
@@ -135,6 +198,15 @@ impl EBMValueFn {
     /// Returns negated energy: higher = more provable.
     pub fn score(&self, proof_state: &str) -> anyhow::Result<f64> {
         (self.score_fn)(proof_state)
+    }
+
+    /// Score multiple proof states in one call.
+    ///
+    /// When constructed with [`with_batch_encode`], this uses a single
+    /// batch HTTP call for all embeddings. Otherwise falls back to
+    /// sequential per-state scoring via the scorer's `encode_fn`.
+    pub fn score_batch(&self, proof_states: &[&str]) -> anyhow::Result<Vec<f64>> {
+        (self.score_batch_fn)(proof_states)
     }
 }
 
@@ -217,6 +289,96 @@ mod tests {
                 batch_scores[i],
                 individual,
             );
+        }
+    }
+
+    #[test]
+    fn test_score_states_batch_with_batch_encode() {
+        let device = Default::default();
+        let head = small_head(&device);
+        let scorer = EBMScorer::new(head, mock_encode_fn(), device);
+
+        let batch_encode = |states: &[&str]| -> anyhow::Result<Vec<Vec<f32>>> {
+            states
+                .iter()
+                .map(|state| {
+                    let mut emb = vec![0.0_f32; 8];
+                    for (i, byte) in state.bytes().enumerate() {
+                        emb[i % 8] += byte as f32 / 255.0;
+                    }
+                    Ok(emb)
+                })
+                .collect()
+        };
+
+        let states = ["⊢ True", "⊢ False"];
+        let scores = scorer.score_states_batch(&states, &batch_encode).unwrap();
+        assert_eq!(scores.len(), 2);
+        for s in &scores {
+            assert!(s.is_finite(), "Score should be finite, got {s}");
+        }
+    }
+
+    #[test]
+    fn test_score_states_batch_empty() {
+        let device = Default::default();
+        let head = small_head(&device);
+        let scorer = EBMScorer::new(head, mock_encode_fn(), device);
+
+        let batch_encode = |_: &[&str]| -> anyhow::Result<Vec<Vec<f32>>> {
+            panic!("Should not be called for empty input");
+        };
+
+        let scores = scorer.score_states_batch(&[], &batch_encode).unwrap();
+        assert!(scores.is_empty());
+    }
+
+    #[test]
+    fn test_ebm_value_fn_score_batch() {
+        let device = Default::default();
+        let head = small_head(&device);
+        let scorer = EBMScorer::new(head, mock_encode_fn(), device);
+        let value_fn = EBMValueFn::new(scorer);
+
+        let states = ["⊢ True", "⊢ False"];
+        let scores = value_fn.score_batch(&states).unwrap();
+        assert_eq!(scores.len(), 2);
+        for s in &scores {
+            assert!(s.is_finite(), "Score should be finite, got {s}");
+        }
+    }
+
+    #[test]
+    fn test_ebm_value_fn_with_batch_encode() {
+        let device = Default::default();
+        let head = small_head(&device);
+        let scorer = EBMScorer::new(head, mock_encode_fn(), device);
+
+        let batch_encode: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync> =
+            Box::new(|states: &[&str]| {
+                states
+                    .iter()
+                    .map(|state| {
+                        let mut emb = vec![0.0_f32; 8];
+                        for (i, byte) in state.bytes().enumerate() {
+                            emb[i % 8] += byte as f32 / 255.0;
+                        }
+                        Ok(emb)
+                    })
+                    .collect()
+            });
+
+        let value_fn = EBMValueFn::with_batch_encode(scorer, batch_encode);
+
+        // Single score still works
+        let s = value_fn.score("⊢ True").unwrap();
+        assert!(s.is_finite());
+
+        // Batch score works
+        let scores = value_fn.score_batch(&["⊢ True", "⊢ False"]).unwrap();
+        assert_eq!(scores.len(), 2);
+        for s in &scores {
+            assert!(s.is_finite());
         }
     }
 }

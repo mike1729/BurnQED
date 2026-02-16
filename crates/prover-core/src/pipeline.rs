@@ -232,6 +232,8 @@ fn load_ebm_scorer(
     let encode_handle = inference_handle.clone();
     let embedding_cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>> =
         Arc::new(std::sync::Mutex::new(HashMap::new()));
+    let cache_for_batch = embedding_cache.clone();
+    let batch_encode_handle = inference_handle.clone();
     let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
         Box::new(move |state: &str| {
             // Fast path: check cache first
@@ -254,12 +256,62 @@ fn load_ebm_scorer(
             Ok(data)
         });
 
+    // Batch encode closure: checks cache, batch-encodes misses, fills cache.
+    let batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync> =
+        Box::new(move |states: &[&str]| {
+            let mut results: Vec<Option<Vec<f32>>> = vec![None; states.len()];
+            let mut miss_indices: Vec<usize> = Vec::new();
+            let mut miss_texts: Vec<String> = Vec::new();
+
+            // Phase 1: check cache for all states
+            {
+                let cache = cache_for_batch
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+                for (i, state) in states.iter().enumerate() {
+                    if let Some(cached) = cache.get(*state) {
+                        results[i] = Some(cached.clone());
+                    } else {
+                        miss_indices.push(i);
+                        miss_texts.push(state.to_string());
+                    }
+                }
+            }
+
+            // Phase 2: batch-encode misses
+            if !miss_texts.is_empty() {
+                let batch_results = batch_encode_handle.encode_batch_blocking(&miss_texts)?;
+                let mut cache = cache_for_batch
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+                for (j, &idx) in miss_indices.iter().enumerate() {
+                    match &batch_results[j] {
+                        Ok(embedding) => {
+                            cache.insert(states[idx].to_owned(), embedding.data.clone());
+                            results[idx] = Some(embedding.data.clone());
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                state_idx = idx,
+                                error = %e,
+                                "Batch encode failed for state, using zero embedding"
+                            );
+                            // Fallback: zero embedding (will score ~0.0)
+                            results[idx] = Some(vec![0.0; results.iter().find_map(|r| r.as_ref()).map_or(0, |v| v.len())]);
+                        }
+                    }
+                }
+            }
+
+            Ok(results.into_iter().map(|r| r.unwrap()).collect())
+        });
+
     // Load EBM scorer from checkpoint
     let checkpoint_path = ebm_dir.join("final");
     let device = Default::default();
     let scorer =
         EBMScorer::<InferenceBackend>::load(&checkpoint_path, &head_config, encode_fn, device)?;
-    let value_fn = EBMValueFn::new(scorer);
+    let value_fn = EBMValueFn::with_batch_encode(scorer, batch_encode_fn);
 
     tracing::info!("EBM scorer loaded successfully");
     Ok(Some(value_fn))
@@ -338,6 +390,29 @@ fn infer_open_prefix(theorem_name: &str) -> Option<String> {
 /// Normalize a tactic string by collapsing whitespace for comparison.
 fn normalize_tactic(tactic: &str) -> String {
     tactic.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Accumulates per-theorem search results for the final summary.
+#[derive(Default)]
+struct SearchAggregator {
+    searched_count: u32,
+    proved_count: u32,
+    failed_count: u32,
+    error_count: u32,
+    total_nodes: u64,
+    total_lean_ms: u64,
+    total_gen_ms: u64,
+    total_ebm_ms: u64,
+    total_harvest_ms: u64,
+    total_probe_lean_ms: u64,
+    total_llm_lean_ms: u64,
+    total_ebm_calls: u64,
+    total_cache_hits: u32,
+    total_cache_misses: u32,
+    all_candidate_counts: Vec<usize>,
+    lean_latencies_us: Vec<u64>,
+    gen_latencies_us: Vec<u64>,
+    ebm_latencies_us: Vec<u64>,
 }
 
 /// Outcome of a single theorem search task, returned from spawned tasks.
@@ -436,17 +511,8 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     // Run search with progress bar
     let engine = SearchEngine::new(search_config);
     let mut writer = TrajectoryWriter::new(args.output.clone());
-    let mut proved_count: u32 = 0;
-    let mut failed_count: u32 = 0;
-    let mut error_count: u32 = 0;
     let total = theorems_to_search.len() as u32;
-
-    // Aggregate stats
-    let mut total_nodes: u64 = 0;
-    let mut total_lean_ms: u64 = 0;
-    let mut total_gen_ms: u64 = 0;
-    let mut searched_count: u32 = 0;
-    let mut all_candidate_counts: Vec<usize> = Vec::new();
+    let mut agg = SearchAggregator::default();
 
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
@@ -476,50 +542,78 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut join_set = tokio::task::JoinSet::new();
 
-    /// Process one completed search outcome into accumulators.
+    /// Process one completed search outcome into the aggregator.
     fn collect_search(
         outcome: SearchOutcome,
-        searched_count: &mut u32,
-        proved_count: &mut u32,
-        failed_count: &mut u32,
-        error_count: &mut u32,
-        total_nodes: &mut u64,
-        total_lean_ms: &mut u64,
-        total_gen_ms: &mut u64,
-        all_candidate_counts: &mut Vec<usize>,
+        agg: &mut SearchAggregator,
         writer: &mut TrajectoryWriter,
         pb: &ProgressBar,
     ) {
         match outcome.result {
             Ok(result) => {
-                *searched_count += 1;
-                *total_nodes += result.nodes_expanded as u64;
-                *total_lean_ms += result.stats.total_lean_time_ms;
-                *total_gen_ms += result.stats.total_generate_time_ms;
-                all_candidate_counts.extend_from_slice(&result.stats.candidates_per_expansion);
+                agg.searched_count += 1;
+                agg.total_nodes += result.nodes_expanded as u64;
+                agg.total_lean_ms += result.stats.total_lean_time_ms;
+                agg.total_gen_ms += result.stats.total_generate_time_ms;
+                agg.total_ebm_ms += result.stats.total_ebm_time_ms;
+                agg.total_harvest_ms += result.stats.total_harvest_time_ms;
+                agg.total_probe_lean_ms += result.stats.total_probe_lean_time_ms;
+                agg.total_llm_lean_ms += result.stats.total_llm_lean_time_ms;
+                agg.total_ebm_calls += result.stats.ebm_score_calls as u64;
+                agg.total_cache_hits += result.stats.cache_hits;
+                agg.total_cache_misses += result.stats.cache_misses;
+                agg.all_candidate_counts
+                    .extend_from_slice(&result.stats.candidates_per_expansion);
+                agg.lean_latencies_us
+                    .extend_from_slice(&result.stats.lean_latencies_us);
+                agg.gen_latencies_us
+                    .extend_from_slice(&result.stats.gen_latencies_us);
+                agg.ebm_latencies_us
+                    .extend_from_slice(&result.stats.ebm_latencies_us);
 
-                if result.proved {
-                    *proved_count += 1;
+                let proved = result.proved;
+                let wall_ms = result.wall_time_ms;
+
+                if proved {
+                    agg.proved_count += 1;
                     tracing::info!(
                         theorem = outcome.name,
                         tactics = ?result.proof_tactics,
                         nodes = result.nodes_expanded,
-                        time_ms = result.wall_time_ms,
+                        time_ms = wall_ms,
                         "Proved"
                     );
                 } else {
-                    *failed_count += 1;
+                    agg.failed_count += 1;
                 }
+
+                // Per-theorem structured profile log
+                tracing::info!(
+                    theorem = outcome.name,
+                    proved,
+                    wall_ms,
+                    lean_ms = result.stats.total_lean_time_ms,
+                    gen_ms = result.stats.total_generate_time_ms,
+                    ebm_ms = result.stats.total_ebm_time_ms,
+                    harvest_ms = result.stats.total_harvest_time_ms,
+                    probe_lean_ms = result.stats.total_probe_lean_time_ms,
+                    llm_lean_ms = result.stats.total_llm_lean_time_ms,
+                    cache_hits = result.stats.cache_hits,
+                    cache_misses = result.stats.cache_misses,
+                    nodes = result.nodes_expanded,
+                    "theorem_profile"
+                );
+
                 let labeled = TrajectoryWriter::from_search_result(&result);
                 writer.record_all(labeled);
             }
             Err(e) => {
-                *error_count += 1;
+                agg.error_count += 1;
                 tracing::debug!(theorem = outcome.name, error = %e, "Search failed, skipping");
             }
         }
         pb.inc(1);
-        pb.set_prefix(format!("{proved_count}"));
+        pb.set_prefix(format!("{}", agg.proved_count));
     }
 
     for task in &theorems_to_search {
@@ -531,17 +625,12 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         while let Some(join_result) = join_set.try_join_next() {
             match join_result {
                 Ok(outcome) => {
-                    collect_search(
-                        outcome, &mut searched_count, &mut proved_count,
-                        &mut failed_count, &mut error_count, &mut total_nodes,
-                        &mut total_lean_ms, &mut total_gen_ms,
-                        &mut all_candidate_counts, &mut writer, &pb,
-                    );
+                    collect_search(outcome, &mut agg, &mut writer, &pb);
                     // Periodic auto-save
                     const AUTOSAVE_INTERVAL: u32 = 50;
-                    if searched_count % AUTOSAVE_INTERVAL == 0 && searched_count > 0 {
+                    if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
                         writer.flush_partial()?;
-                        tracing::info!(searched = searched_count, "Auto-saved checkpoint");
+                        tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
                     }
                 }
                 Err(e) => tracing::error!(error = %e, "Search task panicked"),
@@ -584,16 +673,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
             Ok(outcome) => {
-                collect_search(
-                    outcome, &mut searched_count, &mut proved_count,
-                    &mut failed_count, &mut error_count, &mut total_nodes,
-                    &mut total_lean_ms, &mut total_gen_ms,
-                    &mut all_candidate_counts, &mut writer, &pb,
-                );
+                collect_search(outcome, &mut agg, &mut writer, &pb);
                 const AUTOSAVE_INTERVAL: u32 = 50;
-                if searched_count % AUTOSAVE_INTERVAL == 0 && searched_count > 0 {
+                if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
                     writer.flush_partial()?;
-                    tracing::info!(searched = searched_count, "Auto-saved checkpoint");
+                    tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
                 }
             }
             Err(e) => tracing::error!(error = %e, "Search task panicked"),
@@ -632,52 +716,123 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         ""
     };
 
-    let prove_pct = if searched_count > 0 {
-        proved_count as f64 / searched_count as f64 * 100.0
+    let searched = agg.searched_count;
+    let prove_pct = if searched > 0 {
+        agg.proved_count as f64 / searched as f64 * 100.0
     } else {
         0.0
     };
-    let fail_pct = if searched_count > 0 {
-        failed_count as f64 / searched_count as f64 * 100.0
+    let fail_pct = if searched > 0 {
+        agg.failed_count as f64 / searched as f64 * 100.0
     } else {
         0.0
     };
-    let total_attempted = searched_count + error_count;
-    let avg_nodes = if searched_count > 0 {
-        total_nodes as f64 / searched_count as f64
+    let total_attempted = searched + agg.error_count;
+    let avg_nodes = if searched > 0 {
+        agg.total_nodes as f64 / searched as f64
     } else {
         0.0
     };
-    let avg_time = if searched_count > 0 {
-        elapsed_secs / searched_count as f64
+    let avg_time = if searched > 0 {
+        elapsed_secs / searched as f64
     } else {
         0.0
     };
+
+    // Timing breakdown
+    let gen_s = agg.total_gen_ms as f64 / 1000.0;
+    let llm_lean_s = agg.total_llm_lean_ms as f64 / 1000.0;
+    let probe_lean_s = agg.total_probe_lean_ms as f64 / 1000.0;
+    let ebm_s = agg.total_ebm_ms as f64 / 1000.0;
+    let harvest_s = agg.total_harvest_ms as f64 / 1000.0;
+    let accounted_s = gen_s + llm_lean_s + probe_lean_s + ebm_s + harvest_s;
+    let overhead_s = (elapsed_secs - accounted_s).max(0.0);
+
+    fn pct_of(part: f64, total: f64) -> f64 {
+        if total > 0.0 { part / total * 100.0 } else { 0.0 }
+    }
+
+    // Latency percentiles
+    use crate::results::percentiles;
+    let (lean_p50, lean_p95, lean_p99) = percentiles(&mut agg.lean_latencies_us);
+    let lean_calls = agg.lean_latencies_us.len();
+    let (gen_p50, gen_p95, gen_p99) = percentiles(&mut agg.gen_latencies_us);
+    let gen_calls = agg.gen_latencies_us.len();
+    let (ebm_p50, ebm_p95, ebm_p99) = percentiles(&mut agg.ebm_latencies_us);
+    let ebm_calls = agg.ebm_latencies_us.len();
 
     println!();
     println!("══════════════════════════════════════════");
     println!(" burn-qed Search Results{partial_note}");
     println!("──────────────────────────────────────────");
-    println!(" Theorems attempted: {total_attempted}");
-    println!(" Proved:             {proved_count} ({prove_pct:.1}%)");
-    println!(" Failed:             {failed_count} ({fail_pct:.1}%)");
-    if error_count > 0 {
-        println!(" Errors:             {error_count} (start_proof failed)");
+    println!(
+        " Theorems:  {} attempted, {} proved ({:.1}%), {} failed ({:.1}%){}",
+        total_attempted,
+        agg.proved_count,
+        prove_pct,
+        agg.failed_count,
+        fail_pct,
+        if agg.error_count > 0 {
+            format!(", {} errors", agg.error_count)
+        } else {
+            String::new()
+        }
+    );
+    println!("──────────────────────────────────────────");
+    println!(" TIMING BREAKDOWN (cumulative)");
+    println!("   LLM generation:  {:>7.1}s  ({:>5.1}%)", gen_s, pct_of(gen_s, elapsed_secs));
+    println!("   Lean (LLM):      {:>7.1}s  ({:>5.1}%)", llm_lean_s, pct_of(llm_lean_s, elapsed_secs));
+    println!("   Lean (probes):   {:>7.1}s  ({:>5.1}%)", probe_lean_s, pct_of(probe_lean_s, elapsed_secs));
+    println!("   EBM scoring:     {:>7.1}s  ({:>5.1}%)", ebm_s, pct_of(ebm_s, elapsed_secs));
+    println!("   Harvest siblings:{:>7.1}s  ({:>5.1}%)", harvest_s, pct_of(harvest_s, elapsed_secs));
+    println!("   Overhead/queue:  {:>7.1}s  ({:>5.1}%)", overhead_s, pct_of(overhead_s, elapsed_secs));
+    println!("   Total wall time: {:>7.1}s", elapsed_secs);
+    println!("──────────────────────────────────────────");
+    println!(" LATENCY PERCENTILES");
+    if lean_calls > 0 {
+        println!(
+            "   Lean/tactic:    p50={:>4}us  p95={:>5}us  p99={:>5}us  ({} calls)",
+            lean_p50, lean_p95, lean_p99, lean_calls
+        );
     }
-    println!(" Total nodes:        {total_nodes}");
-    println!(" Avg nodes/theorem:  {avg_nodes:.1}");
-    println!(" Avg time/theorem:   {avg_time:.1}s");
-    println!(" Total Lean time:    {:.1}s", total_lean_ms as f64 / 1000.0);
-    println!(" Total gen time:     {:.1}s", total_gen_ms as f64 / 1000.0);
-    if !all_candidate_counts.is_empty() {
-        let n = all_candidate_counts.len();
-        let sum: usize = all_candidate_counts.iter().sum();
-        let min = all_candidate_counts.iter().min().unwrap();
-        let max = all_candidate_counts.iter().max().unwrap();
+    if gen_calls > 0 {
+        println!(
+            "   LLM gen/batch:  p50={:>4}us  p95={:>5}us  p99={:>5}us  ({} calls)",
+            gen_p50, gen_p95, gen_p99, gen_calls
+        );
+    }
+    if ebm_calls > 0 {
+        println!(
+            "   EBM score:      p50={:>4}us  p95={:>5}us  p99={:>5}us  ({} calls)",
+            ebm_p50, ebm_p95, ebm_p99, ebm_calls
+        );
+    }
+    // Cache stats
+    let total_cache = agg.total_cache_hits + agg.total_cache_misses;
+    if total_cache > 0 {
+        let hit_rate = agg.total_cache_hits as f64 / total_cache as f64 * 100.0;
+        println!("──────────────────────────────────────────");
+        println!(
+            " CACHE: {} hits / {} misses ({:.1}% hit rate)",
+            agg.total_cache_hits, agg.total_cache_misses, hit_rate
+        );
+    }
+    println!("──────────────────────────────────────────");
+    println!(" THROUGHPUT");
+    if elapsed_secs > 0.0 && searched > 0 {
+        println!("   Theorems/min:    {:.1}", searched as f64 / elapsed_secs * 60.0);
+    }
+    println!("   Avg nodes/thm:   {avg_nodes:.1}");
+    println!("   Avg time/thm:    {avg_time:.1}s");
+    if !agg.all_candidate_counts.is_empty() {
+        let n = agg.all_candidate_counts.len();
+        let sum: usize = agg.all_candidate_counts.iter().sum();
+        let min = agg.all_candidate_counts.iter().min().unwrap();
+        let max = agg.all_candidate_counts.iter().max().unwrap();
         let avg = sum as f64 / n as f64;
-        println!(" Candidates/expand:  avg={avg:.1} min={min} max={max} ({n} expansions)");
+        println!("   Candidates/exp:  avg={avg:.1} min={min} max={max} ({n} expansions)");
     }
-    println!(" Total wall time:    {elapsed_secs:.1}s");
+    println!("──────────────────────────────────────────");
     println!(" Inference:          {}", loaded.inference_label);
     println!(" Trajectory file:    {}", args.output.display());
     println!("   Records:          {record_count}");

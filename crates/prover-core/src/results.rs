@@ -75,6 +75,21 @@ pub fn median(values: &mut [f64]) -> f64 {
     }
 }
 
+/// Compute p50, p95, p99 percentiles from a mutable slice of microsecond latencies.
+///
+/// Returns `(p50, p95, p99)`. Returns `(0, 0, 0)` for empty input.
+pub fn percentiles(data: &mut [u64]) -> (u64, u64, u64) {
+    if data.is_empty() {
+        return (0, 0, 0);
+    }
+    data.sort_unstable();
+    let n = data.len();
+    let p50 = data[n / 2];
+    let p95 = data[((n as f64 * 0.95) as usize).min(n - 1)];
+    let p99 = data[((n as f64 * 0.99) as usize).min(n - 1)];
+    (p50, p95, p99)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +153,38 @@ mod tests {
         assert!((median(&mut [1.0, 3.0]) - 2.0).abs() < 1e-9);
         assert!((median(&mut [3.0, 1.0, 2.0]) - 2.0).abs() < 1e-9);
         assert!((median(&mut [4.0, 1.0, 3.0, 2.0]) - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_percentiles_empty() {
+        assert_eq!(percentiles(&mut []), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_percentiles_single() {
+        assert_eq!(percentiles(&mut [42]), (42, 42, 42));
+    }
+
+    #[test]
+    fn test_percentiles_known_data() {
+        // 100 values: 1..=100
+        let mut data: Vec<u64> = (1..=100).collect();
+        let (p50, p95, p99) = percentiles(&mut data);
+        assert_eq!(p50, 51);  // index 50
+        assert_eq!(p95, 96);  // index 95
+        assert_eq!(p99, 100); // index 99
+    }
+
+    #[test]
+    fn test_percentiles_unsorted_input() {
+        let mut data = vec![100, 1, 50, 99, 2, 51, 95, 3];
+        let (p50, p95, p99) = percentiles(&mut data);
+        // sorted: [1, 2, 3, 50, 51, 95, 99, 100], n=8
+        // p50 = index 4 = 51
+        // p95 = index min(7, 7) = 100
+        // p99 = index min(7, 7) = 100
+        assert_eq!(p50, 51);
+        assert_eq!(p95, 100);
+        assert_eq!(p99, 100);
     }
 }

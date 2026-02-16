@@ -63,6 +63,16 @@ impl InferenceHandle {
     ) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
         self.0.encode_batch(texts).await
     }
+
+    /// Encode a batch of proof states (blocking, for sync callers within a tokio runtime).
+    pub fn encode_batch_blocking(
+        &self,
+        texts: &[String],
+    ) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.encode_batch(texts))
+        })
+    }
 }
 
 #[cfg(test)]

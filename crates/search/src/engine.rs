@@ -1,7 +1,7 @@
 //! Best-first search engine with priority queue, node expansion, and scoring.
 
 use std::collections::{BinaryHeap, HashSet};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use ordered_float::OrderedFloat;
@@ -88,6 +88,11 @@ pub trait PolicyProvider: Send + Sync {
         }
         Ok(results)
     }
+
+    /// Return (hits, misses) cache counters, if this provider has a cache.
+    fn cache_stats(&self) -> Option<(u32, u32)> {
+        None
+    }
 }
 
 /// Value function that scores proof states (e.g., EBM energy).
@@ -96,6 +101,11 @@ pub trait PolicyProvider: Send + Sync {
 pub trait ValueScorer: Send + Sync {
     /// Score a proof state. Convention: higher = more provable.
     fn score(&self, proof_state: &str) -> Result<f64, SearchError>;
+
+    /// Score multiple proof states in one call. Default: sequential fallback.
+    fn score_batch(&self, proof_states: &[&str]) -> Result<Vec<f64>, SearchError> {
+        proof_states.iter().map(|s| self.score(s)).collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,7 +140,7 @@ impl SearchEngine {
         theorem_name: &str,
         statement: &str,
     ) -> Result<SearchResult, SearchError> {
-        let start_time = std::time::Instant::now();
+        let start_time = Instant::now();
         let mut stats = SearchStats::default();
 
         let mut runner = env.start_proof(theorem_name, statement).await?;
@@ -186,7 +196,12 @@ impl SearchEngine {
 
         // Score root with EBM if available
         if let Some(scorer) = scorer {
+            let ebm_start = Instant::now();
             let score = scorer.score(&arena[0].state_pp)?;
+            let ebm_us = ebm_start.elapsed().as_micros() as u64;
+            stats.total_ebm_time_ms += ebm_us / 1000;
+            stats.ebm_latencies_us.push(ebm_us);
+            stats.ebm_score_calls += 1;
             arena[0].ebm_score = score;
         }
 
@@ -249,14 +264,19 @@ impl SearchEngine {
                 .map(|sn| arena[sn.node_index].goals_as_text())
                 .collect();
 
-            let gen_start = std::time::Instant::now();
+            let gen_start = Instant::now();
             let batch_candidates = policy.generate_candidates_batch(
                 &prompts,
                 self.config.num_candidates,
             ).await?;
-            stats.total_generate_time_ms += gen_start.elapsed().as_millis() as u64;
+            let gen_us = gen_start.elapsed().as_micros() as u64;
+            stats.total_generate_time_ms += gen_us / 1000;
+            stats.gen_latencies_us.push(gen_us);
 
-            // Expand each node in the batch
+            // Expand each node in the batch.
+            // Collect children needing EBM scoring for deferred batch scoring.
+            let mut pending_scores: Vec<(usize, String)> = Vec::new();
+
             for (i, sn) in expand_batch.iter().enumerate() {
                 let node_idx = sn.node_index;
                 let node_state_id = arena[node_idx].state_id;
@@ -305,11 +325,18 @@ impl SearchEngine {
                     }
 
                     stats.total_tactic_attempts += 1;
-                    let tactic_start = std::time::Instant::now();
+                    let tactic_start = Instant::now();
                     let result = runner
                         .apply_tactic(node_state_id, None, &candidate.text)
                         .await?;
-                    stats.total_lean_time_ms += tactic_start.elapsed().as_millis() as u64;
+                    let tactic_us = tactic_start.elapsed().as_micros() as u64;
+                    stats.total_lean_time_ms += tactic_us / 1000;
+                    stats.lean_latencies_us.push(tactic_us);
+                    if is_probe {
+                        stats.total_probe_lean_time_ms += tactic_us / 1000;
+                    } else {
+                        stats.total_llm_lean_time_ms += tactic_us / 1000;
+                    }
 
                     match result {
                         TacticResult::Success { state_id, goals } => {
@@ -344,38 +371,36 @@ impl SearchEngine {
                                 stats.probe_successes += 1;
                             }
 
-                            let mut ebm_score = 0.0;
-                            if let Some(scorer) = scorer {
-                                ebm_score = scorer.score(&state_pp)?;
+                            if child_depth > max_depth_reached {
+                                max_depth_reached = child_depth;
                             }
 
+                            // Defer EBM scoring: push child with ebm_score=0.0
+                            let child_idx = arena.len();
                             let child = SearchNode {
                                 state_id,
-                                state_pp,
+                                state_pp: state_pp.clone(),
                                 goals,
                                 parent: Some(node_idx),
                                 tactic_applied: candidate.text.clone(),
                                 depth: child_depth,
                                 llm_log_prob: candidate.log_prob,
-                                ebm_score,
+                                ebm_score: 0.0,
                                 is_terminal: false,
                             };
-
-                            if child_depth > max_depth_reached {
-                                max_depth_reached = child_depth;
-                            }
-
-                            let child_score =
-                                child.combined_score(self.config.alpha, self.config.beta);
-                            let child_idx = arena.len();
                             arena.push(child);
 
-                            frontier.push(ScoredNode {
-                                node_index: child_idx,
-                                score: OrderedFloat(child_score),
-                            });
-                            stats.peak_frontier_size =
-                                stats.peak_frontier_size.max(frontier.len());
+                            if scorer.is_some() {
+                                pending_scores.push((child_idx, state_pp));
+                            } else {
+                                // No scorer: push to frontier immediately
+                                let child_score =
+                                    arena[child_idx].combined_score(self.config.alpha, self.config.beta);
+                                frontier.push(ScoredNode {
+                                    node_index: child_idx,
+                                    score: OrderedFloat(child_score),
+                                });
+                            }
                         }
                         TacticResult::ProofComplete { state_id } => {
                             let child_depth = node_depth + 1;
@@ -401,6 +426,7 @@ impl SearchEngine {
 
                             // Sibling harvest: expand proof path ancestors for hard negatives
                             if self.config.harvest_siblings {
+                                let harvest_start = Instant::now();
                                 harvest_siblings(
                                     &mut arena,
                                     terminal_idx,
@@ -411,6 +437,14 @@ impl SearchEngine {
                                     &mut stats,
                                 )
                                 .await?;
+                                stats.total_harvest_time_ms +=
+                                    harvest_start.elapsed().as_millis() as u64;
+                            }
+
+                            // Collect cache stats from policy provider
+                            if let Some((hits, misses)) = policy.cache_stats() {
+                                stats.cache_hits = hits;
+                                stats.cache_misses = misses;
                             }
 
                             let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
@@ -454,6 +488,40 @@ impl SearchEngine {
 
                 nodes_expanded += 1;
             }
+
+            // Batch-score all deferred children from this expansion batch
+            if let Some(scorer) = scorer {
+                if !pending_scores.is_empty() {
+                    let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
+                    let ebm_start = Instant::now();
+                    let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "Batch scoring failed during expansion, using 0.0 defaults");
+                        vec![0.0; states.len()]
+                    });
+                    let ebm_us = ebm_start.elapsed().as_micros() as u64;
+                    stats.total_ebm_time_ms += ebm_us / 1000;
+                    stats.ebm_latencies_us.push(ebm_us);
+                    stats.ebm_score_calls += scores.len() as u32;
+
+                    for ((idx, _), score) in pending_scores.iter().zip(scores) {
+                        arena[*idx].ebm_score = score;
+                        let child_score =
+                            arena[*idx].combined_score(self.config.alpha, self.config.beta);
+                        frontier.push(ScoredNode {
+                            node_index: *idx,
+                            score: OrderedFloat(child_score),
+                        });
+                    }
+                    stats.peak_frontier_size =
+                        stats.peak_frontier_size.max(frontier.len());
+                }
+            }
+        }
+
+        // Collect cache stats from policy provider
+        if let Some((hits, misses)) = policy.cache_stats() {
+            stats.cache_hits = hits;
+            stats.cache_misses = misses;
         }
 
         // Search exhausted without finding a proof
@@ -564,6 +632,9 @@ async fn harvest_siblings(
         .generate_candidates_batch(&prompts, config.num_candidates)
         .await?;
 
+    // Collect sibling nodes needing EBM scoring for deferred batch scoring
+    let mut pending_scores: Vec<(usize, String)> = Vec::new();
+
     for (i, (ancestor_idx, anc_state_id, anc_depth, _)) in ancestors.into_iter().enumerate() {
         let mut siblings = batch_candidates[i].clone();
         inject_probes(&mut siblings, &config.probe_tactics);
@@ -584,22 +655,22 @@ async fn harvest_siblings(
                         .map(|g| g.raw.as_str())
                         .collect::<Vec<_>>()
                         .join("\n\n");
-                    let mut ebm_score = 0.0;
-                    if let Some(scorer) = scorer {
-                        ebm_score = scorer.score(&spp).unwrap_or(0.0);
-                    }
+                    let child_idx = arena.len();
                     arena.push(SearchNode {
                         state_id,
-                        state_pp: spp,
+                        state_pp: spp.clone(),
                         goals,
                         parent: Some(ancestor_idx),
                         tactic_applied: sib.text.clone(),
                         depth: anc_depth + 1,
                         llm_log_prob: sib.log_prob,
-                        ebm_score,
+                        ebm_score: 0.0,
                         is_terminal: false,
                     });
                     stats.sibling_states_mined += 1;
+                    if scorer.is_some() {
+                        pending_scores.push((child_idx, spp));
+                    }
                 }
                 TacticResult::ProofComplete { state_id } => {
                     // Alternative proof — record as non-terminal
@@ -617,6 +688,20 @@ async fn harvest_siblings(
                     stats.sibling_states_mined += 1;
                 }
                 TacticResult::Failed { .. } => {}
+            }
+        }
+    }
+
+    // Batch-score all deferred sibling states
+    if let Some(scorer) = scorer {
+        if !pending_scores.is_empty() {
+            let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
+            let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "Batch scoring failed in harvest_siblings, using 0.0");
+                vec![0.0; states.len()]
+            });
+            for ((idx, _), score) in pending_scores.iter().zip(scores) {
+                arena[*idx].ebm_score = score;
             }
         }
     }
