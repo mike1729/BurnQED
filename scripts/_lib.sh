@@ -2,6 +2,14 @@
 # Shared helpers for BurnQED scripts.
 # Source this file: source "$(dirname "$0")/_lib.sh"
 
+# Auto-detect CUDA for burn-rs training backend.
+# Sets CARGO_FEATURES to "--features cuda" if nvidia-smi is available.
+if command -v nvidia-smi &> /dev/null; then
+    CARGO_FEATURES="--features cuda"
+else
+    CARGO_FEATURES=""
+fi
+
 # Ensure the SGLang inference server is reachable, starting it if needed.
 #
 # Usage:

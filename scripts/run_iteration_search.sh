@@ -32,7 +32,7 @@ MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-2000}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
-PROVER="cargo run --release -p prover-core --"
+PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
 mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$EBM_DIR"
 mkdir -p "${REPO_ROOT}/logs"

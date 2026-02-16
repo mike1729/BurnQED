@@ -24,7 +24,7 @@ source "$(dirname "$0")/_lib.sh"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 WORK_DIR="${REPO_ROOT}/smoke_test_output"
 
-PROVER="cargo run --release -p prover-core --"
+PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
 ensure_sglang "$SGLANG_URL"
 

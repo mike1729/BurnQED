@@ -31,7 +31,7 @@ NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-2000}"
 
-PROVER="cargo run --release -p prover-core --"
+PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 BASELINES_DIR="${REPO_ROOT}/baselines"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
