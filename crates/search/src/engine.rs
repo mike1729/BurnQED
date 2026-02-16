@@ -190,7 +190,7 @@ impl SearchEngine {
 
             let timeout_secs = self.config.timeout_per_theorem;
             if timeout_secs > 0 && start_time.elapsed().as_secs() >= timeout_secs {
-                tracing::info!(
+                tracing::debug!(
                     theorem = theorem_name,
                     elapsed_s = start_time.elapsed().as_secs(),
                     "Search timed out"
@@ -211,7 +211,7 @@ impl SearchEngine {
                 continue;
             }
 
-            tracing::info!(
+            tracing::debug!(
                 node = node_idx,
                 state_id = node_state_id,
                 depth = node_depth,
@@ -227,7 +227,7 @@ impl SearchEngine {
 
             // Inject fallback tactics when LLM returns nothing
             if candidates.is_empty() && !self.config.fallback_tactics.is_empty() {
-                tracing::info!(
+                tracing::debug!(
                     node = node_idx,
                     "LLM returned no candidates, using fallback tactics"
                 );
@@ -366,7 +366,7 @@ impl SearchEngine {
 
         stats.nodes_expanded = nodes_expanded;
 
-        tracing::info!(
+        tracing::debug!(
             theorem = theorem_name,
             nodes = nodes_expanded,
             states = total_states,

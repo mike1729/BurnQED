@@ -755,11 +755,13 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(
-                    "{{spinner:.green}} [budget={budget}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} {{msg}}"
+                    "{{spinner:.green}} [budget={budget}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) proved={{prefix}}"
                 ))
                 .expect("valid progress bar template")
                 .progress_chars("=> "),
         );
+        pb.set_prefix("0");
+        let budget_start = Instant::now();
 
         // Spawn phase: submit all theorems for this budget
         let mut join_set = tokio::task::JoinSet::new();
@@ -854,6 +856,20 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 }
             }
             pb.inc(1);
+            pb.set_prefix(format!("{solved}"));
+            let done = pb.position() as usize;
+            if done > 0 {
+                let elapsed = budget_start.elapsed().as_secs_f64();
+                let remaining = elapsed * (total as usize - done) as f64 / done as f64;
+                let eta = if remaining < 60.0 {
+                    format!("{:.0}s", remaining)
+                } else if remaining < 3600.0 {
+                    format!("{:.0}m", remaining / 60.0)
+                } else {
+                    format!("{:.1}h", remaining / 3600.0)
+                };
+                pb.set_message(eta);
+            }
         }
 
         pb.finish_and_clear();
