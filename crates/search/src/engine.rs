@@ -231,66 +231,45 @@ impl SearchEngine {
                 break;
             }
 
-            // Pop a batch of nodes from the frontier
-            let batch_size = self.config.batch_expansion_size.max(1).min(frontier.len());
-            let mut batch: Vec<ScoredNode> = Vec::with_capacity(batch_size);
-            for _ in 0..batch_size {
-                if let Some(node) = frontier.pop() {
-                    batch.push(node);
-                } else {
-                    break;
-                }
-            }
+            // Pop the best node from the frontier
+            let sn = match frontier.pop() {
+                Some(sn) => sn,
+                None => break,
+            };
 
-            // Filter out nodes at max depth
-            let mut expand_batch: Vec<&ScoredNode> = Vec::new();
-            for sn in &batch {
-                let node_depth = arena[sn.node_index].depth;
-                if node_depth >= self.config.max_depth {
-                    nodes_expanded += 1;
-                    stats.nodes_pruned += 1;
-                } else {
-                    expand_batch.push(sn);
-                }
-            }
+            let node_idx = sn.node_index;
+            let node_state_id = arena[node_idx].state_id;
+            let node_depth = arena[node_idx].depth;
 
-            if expand_batch.is_empty() {
+            // Skip nodes at max depth
+            if node_depth >= self.config.max_depth {
+                nodes_expanded += 1;
+                stats.nodes_pruned += 1;
                 continue;
             }
 
-            // Batch-generate candidates for all nodes
-            let prompts: Vec<String> = expand_batch
-                .iter()
-                .map(|sn| arena[sn.node_index].goals_as_text())
-                .collect();
+            tracing::trace!(
+                node = node_idx,
+                state_id = node_state_id,
+                depth = node_depth,
+                score = %sn.score,
+                "Expanding node"
+            );
 
+            let goals_text = arena[node_idx].goals_as_text();
             let gen_start = Instant::now();
-            let batch_candidates = policy.generate_candidates_batch(
-                &prompts,
+            let mut candidates = policy.generate_candidates(
+                &goals_text,
                 self.config.num_candidates,
             ).await?;
             let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
             stats.gen_latencies_us.push(gen_us);
 
-            // Expand each node in the batch.
             // Collect children needing EBM scoring for deferred batch scoring.
             let mut pending_scores: Vec<(usize, String)> = Vec::new();
 
-            for (i, sn) in expand_batch.iter().enumerate() {
-                let node_idx = sn.node_index;
-                let node_state_id = arena[node_idx].state_id;
-                let node_depth = arena[node_idx].depth;
-
-                tracing::trace!(
-                    node = node_idx,
-                    state_id = node_state_id,
-                    depth = node_depth,
-                    score = %sn.score,
-                    "Expanding node"
-                );
-
-                let mut candidates = batch_candidates[i].clone();
+            {
 
                 // Track LLM candidate count before probe injection
                 let llm_count = candidates.len();
@@ -486,10 +465,11 @@ impl SearchEngine {
                     }
                 }
 
-                nodes_expanded += 1;
             }
 
-            // Batch-score all deferred children from this expansion batch
+            nodes_expanded += 1;
+
+            // Batch-score all deferred children from this expansion
             if let Some(scorer) = scorer {
                 if !pending_scores.is_empty() {
                     let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
@@ -1220,51 +1200,6 @@ mod tests {
             "Should have extra sibling nodes: got {}",
             result.all_records.len()
         );
-    }
-
-    #[tokio::test]
-    async fn test_batched_expansion() {
-        // batch_expansion_size = 2 should expand two nodes at once
-        let mut env = MockEnvironment::new();
-        env.add_response(
-            0,
-            "branch_a",
-            TacticResult::Success {
-                state_id: 1,
-                goals: vec![Goal::parse(0, "⊢ A")],
-            },
-        );
-        env.add_response(
-            0,
-            "branch_b",
-            TacticResult::Success {
-                state_id: 2,
-                goals: vec![Goal::parse(0, "⊢ B")],
-            },
-        );
-        env.add_response(1, "solve_a", TacticResult::ProofComplete { state_id: 3 });
-
-        let mut policy = MockPolicy::new();
-        policy.add_response(
-            "⊢ ∀ x, x = x",
-            vec![make_tactic("branch_a", -0.3), make_tactic("branch_b", -0.4)],
-        );
-        policy.add_response("⊢ A", vec![make_tactic("solve_a", -0.1)]);
-        policy.add_response("⊢ B", vec![]);
-
-        let config = SearchConfig {
-            batch_expansion_size: 2,
-            probe_tactics: vec![],
-            ..SearchConfig::default()
-        };
-        let engine = SearchEngine::new(config);
-        let result = engine
-            .search_one(&env, &policy, None, "batch_test", "∀ x, x = x")
-            .await
-            .unwrap();
-
-        assert!(result.proved);
-        assert_eq!(result.proof_tactics, vec!["branch_a", "solve_a"]);
     }
 
     #[test]

@@ -44,26 +44,16 @@ Alternatively, use `InferenceHandle::Local(GenerationServiceHandle)` for candle 
 
 ## Server-Side Batch Generation
 
-With `batch_expansion_size=8`, the search engine pops 8 frontier nodes per iteration. Each needs `n` tactic candidates (default 8). Instead of firing `8×8=64` separate HTTP requests, `SglangClient::generate_candidates_batch()` sends a **single** `BatchGenerateRequest` containing all `states×n` prompts replicated into a flat array.
-
-**How it works:**
-
-1. For each proof state, the prompt is formatted via `format_prompt()` and replicated `n` times
-2. The flat prompt array is sent as one POST to `/generate` (SGLang's `BatchGenerateRequest` format — `text: Vec<String>`)
-3. SGLang's RadixAttention automatically caches shared prompt prefixes, so identical prompts within a state share KV cache
-4. The response (a JSON array of `states×n` items) is unflatten back into per-state groups, deduplicated, and sorted by log_prob
+Each search task runs pure best-first (expanding one node at a time) and calls `generate_candidates()` for a single proof state per expansion. GPU saturation is achieved at a higher level by `GlobalBatcher`, which coalesces generation and encode requests across concurrent search tasks into efficient batches. SGLang's RadixAttention caches shared prompt prefixes within each batch.
 
 **Call chain:**
 
 ```
 SearchEngine::search_one()
-  → policy.generate_candidates_batch(&prompts, n)    // PolicyProvider trait
-    → InferencePolicyProvider delegates to:
-      → InferenceHandle::generate_candidates_batch()
-        → SglangClient::generate_candidates_batch()  // Single HTTP POST
+  → policy.generate_candidates(state, n)             // PolicyProvider trait
+    → GlobalBatcher coalesces across concurrent tasks
+      → SglangClient::generate_candidates_batch()    // Single HTTP POST per batch
 ```
-
-**Timeout:** 300 seconds (same as encode batch), handling large batches like 8×8=64 sequences. Response length is validated against `states.len() * n`.
 
 ## Approach
 
