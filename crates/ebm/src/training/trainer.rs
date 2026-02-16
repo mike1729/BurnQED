@@ -43,7 +43,7 @@ pub struct EBMTrainingConfig {
     #[config(default = 0.3)]
     pub depth_loss_weight: f64,
     /// Steps between metric logging.
-    #[config(default = 50)]
+    #[config(default = 500)]
     pub log_interval: usize,
     /// Steps between checkpoint saves.
     #[config(default = 5_000)]
