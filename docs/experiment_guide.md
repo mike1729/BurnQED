@@ -32,7 +32,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 
 ## Throughput Tuning
 
-Cross-prompt batching (different proof states in one GPU batch) is not feasible without padding, attention masking, and ragged KV cache management.
+**Server-side batch generation:** With `batch_expansion_size=8`, the search engine pops 8 frontier nodes and generates candidates for all of them in a **single HTTP request**. `SglangClient::generate_candidates_batch()` replicates each state's prompt `n` times into a flat batch (e.g. 8 states × 8 candidates = 64 prompts), and SGLang's RadixAttention caches shared prefixes. This replaces the previous approach of N×N sequential HTTP requests.
 
 **Key finding:** Batched decode scales ~linearly in N on this model (not constant as hoped). 32 candidates takes ~19s vs ~2.5s for 4 candidates (~7.5× slower). After dedup at T=0.6, 32 candidates yield only 2-4 unique tactics — same as 4-8 candidates. High candidate counts waste GPU time.
 

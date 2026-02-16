@@ -34,6 +34,7 @@ These were decided after two external review rounds. Do not revisit without expl
 8. **Pantograph protocol:** JSON lines terminated by `\n`. Missing newline hangs process. 30s timeout on all reads.
 9. **ProofHandle pattern.** `stateId` is process-local — hold worker for proof lifetime. Use `ProofHandleOwned` for `tokio::spawn`.
 10. **Batch EBM scoring.** Deferred scoring: collect child states per expansion, then `score_batch()` once. Uses `EBMValueFn::with_batch_encode()` for single HTTP batch call. Falls back to `0.0` on error.
+11. **Server-side batch generation.** `generate_candidates_batch()` sends all `states × n` prompts in one `BatchGenerateRequest`. SGLang RadixAttention caches shared prefixes. No per-state sequential HTTP calls.
 
 ## Code Conventions
 

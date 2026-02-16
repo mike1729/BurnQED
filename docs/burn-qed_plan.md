@@ -1602,7 +1602,8 @@ pub enum PantographResponse {
 Per expansion (supports batched expansion of multiple nodes):
 
 1. Pop highest-scored node(s) from priority queue (`batch_expansion_size`)
-2. Batch-generate candidates via SGLang (`generate_candidates_batch`)
+2. Batch-generate candidates via SGLang (`generate_candidates_batch`) — single HTTP request
+   for all `states × n` prompts; SGLang RadixAttention caches shared prefixes
 3. Inject probe tactics (deduped against LLM candidates)
 4. Apply candidates in Lean, collect successful child states
 5. **Deferred batch scoring**: all successful children scored in one `score_batch()` call

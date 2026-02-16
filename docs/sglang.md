@@ -42,6 +42,29 @@ Add SGLang HTTP client as an alternative inference backend, enabling 50-100x fas
 
 Alternatively, use `InferenceHandle::Local(GenerationServiceHandle)` for candle (existing path, unchanged).
 
+## Server-Side Batch Generation
+
+With `batch_expansion_size=8`, the search engine pops 8 frontier nodes per iteration. Each needs `n` tactic candidates (default 8). Instead of firing `8×8=64` separate HTTP requests, `SglangClient::generate_candidates_batch()` sends a **single** `BatchGenerateRequest` containing all `states×n` prompts replicated into a flat array.
+
+**How it works:**
+
+1. For each proof state, the prompt is formatted via `format_prompt()` and replicated `n` times
+2. The flat prompt array is sent as one POST to `/generate` (SGLang's `BatchGenerateRequest` format — `text: Vec<String>`)
+3. SGLang's RadixAttention automatically caches shared prompt prefixes, so identical prompts within a state share KV cache
+4. The response (a JSON array of `states×n` items) is unflatten back into per-state groups, deduplicated, and sorted by log_prob
+
+**Call chain:**
+
+```
+SearchEngine::search_one()
+  → policy.generate_candidates_batch(&prompts, n)    // PolicyProvider trait
+    → InferencePolicyProvider delegates to:
+      → InferenceHandle::generate_candidates_batch()
+        → SglangClient::generate_candidates_batch()  // Single HTTP POST
+```
+
+**Timeout:** 300 seconds (same as encode batch), handling large batches like 8×8=64 sequences. Response length is validated against `states.len() * n`.
+
 ## Approach
 
 ### Step 1: Add dependencies + feature gate
@@ -407,7 +430,7 @@ print("\nDone. Use shapes above to adjust /encode indexing in SglangClient.")
 
 ## Testing Strategy
 
-**Unit tests (no server, ~8 tests):**
+**Unit tests (no server):**
 - Prompt formatting matches candle's detokenized output
 - Response parsing for generation (mock JSON)
 - Response parsing for hidden states (mock JSON)
@@ -416,6 +439,9 @@ print("\nDone. Use shapes above to adjust /encode indexing in SglangClient.")
 - Error handling (HTTP errors, missing fields)
 - InferenceHandle is Clone + Send + Sync
 - InferencePolicyProvider satisfies PolicyProvider bounds
+- Batch generate request serialization (prompt replication → flat array)
+- Batch generate response parsing/unflatten (grouping, dedup, sort)
+- Batch generate empty input returns empty output
 
 **Integration tests (#[ignore], require SGLang server, ~5 tests):**
 - Generate candidates, verify GeneratedTactic structure
