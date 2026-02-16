@@ -103,15 +103,10 @@ impl PolicyProvider for InferencePolicyProvider {
         states: &[String],
         n: usize,
     ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
-        let futs: Vec<_> = states
-            .iter()
-            .map(|s| self.handle.generate_candidates(s, n))
-            .collect();
-        let results = futures::future::join_all(futs).await;
-        results
-            .into_iter()
-            .map(|r| r.map_err(SearchError::Policy))
-            .collect()
+        self.handle
+            .generate_candidates_batch(states, n)
+            .await
+            .map_err(SearchError::Policy)
     }
 }
 

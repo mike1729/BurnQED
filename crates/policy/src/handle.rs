@@ -42,6 +42,27 @@ impl InferenceHandle {
         })
     }
 
+    /// Generate tactic candidates for multiple states in a single batch HTTP request (async).
+    pub async fn generate_candidates_batch(
+        &self,
+        states: &[String],
+        n: usize,
+    ) -> anyhow::Result<Vec<Vec<GeneratedTactic>>> {
+        self.0.generate_candidates_batch(states, n).await
+    }
+
+    /// Generate tactic candidates for multiple states in a single batch HTTP request (blocking).
+    pub fn generate_candidates_batch_blocking(
+        &self,
+        states: &[String],
+        n: usize,
+    ) -> anyhow::Result<Vec<Vec<GeneratedTactic>>> {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(self.generate_candidates_batch(states, n))
+        })
+    }
+
     /// Encode a proof state to an embedding (async).
     pub async fn encode(&self, text: &str) -> anyhow::Result<Embedding> {
         self.0.encode(text).await

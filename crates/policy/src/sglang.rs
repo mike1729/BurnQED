@@ -301,6 +301,132 @@ impl SglangClient {
         Ok(tactics)
     }
 
+    /// Generate tactic candidates for multiple proof states in a single HTTP request.
+    ///
+    /// Replicates each prompt `n` times into a flat batch, sends one
+    /// `BatchGenerateRequest` to SGLang (RadixAttention caches shared prefixes),
+    /// then unflattens and deduplicates per state.
+    pub async fn generate_candidates_batch(
+        &self,
+        proof_states: &[String],
+        n: usize,
+    ) -> anyhow::Result<Vec<Vec<GeneratedTactic>>> {
+        if proof_states.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Build flat batch: each state's prompt repeated n times
+        let mut flat_prompts: Vec<String> = Vec::with_capacity(proof_states.len() * n);
+        for state in proof_states {
+            let prompt = self.format_prompt(state);
+            for _ in 0..n {
+                flat_prompts.push(prompt.clone());
+            }
+        }
+
+        let request = BatchGenerateRequest {
+            text: flat_prompts,
+            sampling_params: SamplingParams {
+                max_new_tokens: self.config.max_tactic_tokens,
+                temperature: Some(self.config.temperature),
+                top_p: Some(self.config.top_p),
+                n: None,
+            },
+            return_logprob: true,
+            return_hidden_states: false,
+        };
+
+        let url = self.base_url.join("/generate")?;
+        let resp = self
+            .post_with_retry(&url, &request, Some(Duration::from_secs(300)))
+            .await?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            anyhow::anyhow!("Failed to decode SGLang batch generate response: {e}")
+        })?;
+
+        let items = body.as_array().ok_or_else(|| {
+            let preview: String = body.to_string().chars().take(200).collect();
+            anyhow::anyhow!(
+                "Expected JSON array for batch generate response, got: {preview}"
+            )
+        })?;
+
+        let expected = proof_states.len() * n;
+        if items.len() != expected {
+            anyhow::bail!(
+                "Batch generate response length mismatch: expected {} ({}×{}), got {}",
+                expected,
+                proof_states.len(),
+                n,
+                items.len()
+            );
+        }
+
+        // Parse each item into (text, log_prob), then unflatten into groups of n
+        let mut all_results: Vec<Vec<GeneratedTactic>> = Vec::with_capacity(proof_states.len());
+        for (state_idx, chunk) in items.chunks(n).enumerate() {
+            let mut responses: Vec<(String, f64)> = Vec::with_capacity(n);
+            for (j, item) in chunk.iter().enumerate() {
+                let text = item.get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let log_prob = item.get("meta_info")
+                    .and_then(|m| m.get("output_token_logprobs"))
+                    .and_then(|lps| lps.as_array())
+                    .map(|lps| {
+                        lps.iter()
+                            .filter_map(|entry| entry.as_array()?.first()?.as_f64())
+                            .sum::<f64>()
+                    })
+                    .unwrap_or(0.0);
+
+                if text.is_empty() {
+                    tracing::debug!(
+                        state = state_idx,
+                        candidate = j,
+                        "Empty text in batch response, skipping"
+                    );
+                    continue;
+                }
+
+                responses.push((text, log_prob));
+            }
+
+            // Extract, dedup, sort — same logic as generate_candidates()
+            let mut tactics = Vec::new();
+            for (raw_text, log_prob) in &responses {
+                let tactic_text = extract_first_tactic(raw_text);
+                if tactic_text.is_empty() {
+                    continue;
+                }
+                if tactics.iter().any(|t: &GeneratedTactic| t.text == tactic_text) {
+                    continue;
+                }
+                tactics.push(GeneratedTactic {
+                    text: tactic_text,
+                    raw_text: raw_text.clone(),
+                    log_prob: *log_prob,
+                    tokens: Vec::new(),
+                });
+            }
+            tactics.sort_by(|a, b| {
+                b.log_prob.partial_cmp(&a.log_prob).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            all_results.push(tactics);
+        }
+
+        tracing::debug!(
+            states = proof_states.len(),
+            n = n,
+            total_unique = all_results.iter().map(|v| v.len()).sum::<usize>(),
+            "SGLang batch generation complete"
+        );
+
+        Ok(all_results)
+    }
+
     /// Encode a proof state to a mean-pooled embedding.
     ///
     /// Auto-detects server capability on first call:
@@ -954,5 +1080,120 @@ mod tests {
         assert_ne!(ENCODE_UNKNOWN, ENCODE_POOLED);
         assert_ne!(ENCODE_UNKNOWN, ENCODE_LEGACY);
         assert_ne!(ENCODE_POOLED, ENCODE_LEGACY);
+    }
+
+    #[test]
+    fn test_batch_generate_request_replicates_prompts() {
+        // Verify that building a batch request with 2 states × 3 candidates
+        // produces a flat array of 6 prompts
+        let prompts = vec!["prompt_A", "prompt_B"];
+        let n = 3;
+        let mut flat: Vec<String> = Vec::new();
+        for p in &prompts {
+            for _ in 0..n {
+                flat.push(p.to_string());
+            }
+        }
+        let req = BatchGenerateRequest {
+            text: flat,
+            sampling_params: SamplingParams {
+                max_new_tokens: 128,
+                temperature: Some(0.6),
+                top_p: Some(0.95),
+                n: None,
+            },
+            return_logprob: true,
+            return_hidden_states: false,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        let text_arr = json["text"].as_array().unwrap();
+        assert_eq!(text_arr.len(), 6);
+        // First 3 are prompt_A, next 3 are prompt_B
+        assert_eq!(text_arr[0], "prompt_A");
+        assert_eq!(text_arr[2], "prompt_A");
+        assert_eq!(text_arr[3], "prompt_B");
+        assert_eq!(text_arr[5], "prompt_B");
+        assert_eq!(json["return_logprob"], true);
+        assert!(json.get("return_hidden_states").is_none()); // skipped when false
+    }
+
+    #[tokio::test]
+    async fn test_batch_generate_empty_input() {
+        let config = SglangConfig {
+            server_url: "http://localhost:30000".to_string(),
+            temperature: 0.6,
+            top_p: 0.95,
+            max_tactic_tokens: 128,
+            hidden_size: 4096,
+        };
+        let client = SglangClient {
+            client: Client::new(),
+            base_url: Url::parse("http://localhost:30000").unwrap(),
+            config,
+            encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+        };
+
+        let result = client.generate_candidates_batch(&[], 8).await.unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_batch_generate_parse_and_unflatten() {
+        // Simulate: 2 states × 3 candidates = 6 response items
+        // State 0: "simp", "ring", "simp" (dup)
+        // State 1: "omega", "", "omega" (empty + dup)
+        use crate::prompt::extract_first_tactic;
+
+        let items: Vec<serde_json::Value> = vec![
+            serde_json::json!({"text": "simp", "meta_info": {"output_token_logprobs": [[-0.5, 1]]}}),
+            serde_json::json!({"text": "ring", "meta_info": {"output_token_logprobs": [[-1.0, 2]]}}),
+            serde_json::json!({"text": "simp", "meta_info": {"output_token_logprobs": [[-0.3, 1]]}}),
+            serde_json::json!({"text": "omega", "meta_info": {"output_token_logprobs": [[-0.2, 3]]}}),
+            serde_json::json!({"text": "", "meta_info": {"output_token_logprobs": []}}),
+            serde_json::json!({"text": "omega", "meta_info": {"output_token_logprobs": [[-0.8, 3]]}}),
+        ];
+
+        let n = 3;
+        let num_states = 2;
+        let mut all_results: Vec<Vec<GeneratedTactic>> = Vec::new();
+
+        for chunk in items.chunks(n) {
+            let mut responses: Vec<(String, f64)> = Vec::new();
+            for item in chunk {
+                let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let log_prob = item.get("meta_info")
+                    .and_then(|m| m.get("output_token_logprobs"))
+                    .and_then(|lps| lps.as_array())
+                    .map(|lps| lps.iter().filter_map(|e| e.as_array()?.first()?.as_f64()).sum::<f64>())
+                    .unwrap_or(0.0);
+                if !text.is_empty() {
+                    responses.push((text, log_prob));
+                }
+            }
+
+            let mut tactics = Vec::new();
+            for (raw_text, log_prob) in &responses {
+                let tactic_text = extract_first_tactic(raw_text);
+                if tactic_text.is_empty() { continue; }
+                if tactics.iter().any(|t: &GeneratedTactic| t.text == tactic_text) { continue; }
+                tactics.push(GeneratedTactic {
+                    text: tactic_text,
+                    raw_text: raw_text.clone(),
+                    log_prob: *log_prob,
+                    tokens: Vec::new(),
+                });
+            }
+            tactics.sort_by(|a, b| b.log_prob.partial_cmp(&a.log_prob).unwrap_or(std::cmp::Ordering::Equal));
+            all_results.push(tactics);
+        }
+
+        assert_eq!(all_results.len(), num_states);
+        // State 0: "simp" (first occurrence, lp=-0.5) and "ring" (lp=-1.0), sorted by lp desc
+        assert_eq!(all_results[0].len(), 2);
+        assert_eq!(all_results[0][0].text, "simp"); // -0.5 > -1.0
+        assert_eq!(all_results[0][1].text, "ring");
+        // State 1: only "omega" (first occurrence, lp=-0.2), empty skipped, dup skipped
+        assert_eq!(all_results[1].len(), 1);
+        assert_eq!(all_results[1][0].text, "omega");
     }
 }
