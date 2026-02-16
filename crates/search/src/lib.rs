@@ -16,6 +16,7 @@
 //! - [`CachedPolicy`] — LRU cache wrapper with batch-aware miss grouping and hit/miss stats
 
 pub mod adapters;
+pub mod batcher;
 pub mod cache;
 pub mod config;
 pub mod engine;
@@ -23,6 +24,7 @@ pub mod mocks;
 pub mod node;
 
 pub use adapters::InferencePolicyProvider;
+pub use batcher::GlobalBatcher;
 pub use cache::CachedPolicy;
 pub use config::SearchConfig;
 pub use engine::{

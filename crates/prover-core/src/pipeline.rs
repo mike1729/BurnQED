@@ -18,7 +18,7 @@ use ebm::{
 };
 use lean_repl::{LeanPool, TacticResult};
 use policy::{InferenceHandle, SglangClient, SglangConfig};
-use search::{CachedPolicy, InferencePolicyProvider, SearchConfig, SearchEngine};
+use search::{CachedPolicy, GlobalBatcher, InferencePolicyProvider, SearchConfig, SearchEngine};
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
@@ -146,7 +146,7 @@ type TrainingBackend = Autodiff<CudaJit>;
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
-    policy: CachedPolicy<InferencePolicyProvider>,
+    policy: CachedPolicy<GlobalBatcher>,
     value_fn: Option<EBMValueFn>,
     /// Display string for the inference backend (model path or server URL).
     inference_label: String,
@@ -188,7 +188,12 @@ async fn load_policy_and_ebm(
     let inference_handle = InferenceHandle::new(client);
 
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
-    let policy = CachedPolicy::new(raw_policy, 10_000);
+    let batcher = GlobalBatcher::new(
+        Arc::new(raw_policy),
+        64,                              // max_batch_states
+        Duration::from_millis(5),        // linger
+    );
+    let policy = CachedPolicy::new(batcher, 10_000);
 
     // 4. Optional EBM scorer
     let value_fn = load_ebm_scorer(ebm_path, &inference_handle)?;
