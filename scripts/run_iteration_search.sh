@@ -26,8 +26,8 @@ THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ensure_sglang "$SGLANG_URL"
-CONCURRENCY="${CONCURRENCY:-6}"
-NUM_WORKERS="${NUM_WORKERS:-6}"
+CONCURRENCY="${CONCURRENCY:-8}"
+NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EVAL_MAX_THEOREMS="${EVAL_MAX_THEOREMS:-500}"
 EBM_STEPS="${EBM_STEPS:-2000}"
@@ -118,7 +118,6 @@ $PROVER search \
     --num-workers "$NUM_WORKERS" \
     --concurrency "$CONCURRENCY" \
     --max-theorems "$MAX_THEOREMS" \
-    --num-candidates 8 \
     --imports Mathlib
 
 # ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
@@ -137,7 +136,6 @@ if [ "$ITER" -eq 0 ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
-        --num-candidates 8 \
         --imports Mathlib
 fi
 

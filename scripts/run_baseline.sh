@@ -26,8 +26,8 @@ source "$(dirname "$0")/_lib.sh"
 
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ensure_sglang "$SGLANG_URL"
-CONCURRENCY="${CONCURRENCY:-6}"
-NUM_WORKERS="${NUM_WORKERS:-6}"
+CONCURRENCY="${CONCURRENCY:-8}"
+NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EBM_STEPS="${EBM_STEPS:-2000}"
 
@@ -118,7 +118,6 @@ if [ -f "$THEOREM_INDEX" ]; then
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
-        --num-candidates 8 \
         --imports Mathlib
 
     echo ""

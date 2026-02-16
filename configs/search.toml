@@ -1,7 +1,7 @@
 [search]
 max_nodes = 100
 max_depth = 50
-num_candidates = 4            # Dedup yields 2-3 unique at T=0.6. ~2.5s GPU time.
+num_candidates = 8            # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 timeout_per_theorem = 120     # seconds (most theorems exhaust in <30s anyway)
@@ -16,7 +16,7 @@ noise_temperature = 1.2
 noise_fraction = 0.3          # 30% of theorems get the high-T run
 
 [lean_pool]
-num_workers = 6               # Matched to concurrency; see golden formula in CLAUDE.md
+num_workers = 8               # Matched to concurrency default
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
 tactic_timeout_secs = 30
