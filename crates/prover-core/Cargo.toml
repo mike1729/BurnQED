@@ -21,6 +21,10 @@ serde_json = { workspace = true }
 indicatif = { workspace = true }
 chrono = { workspace = true }
 
+[features]
+default = []
+wgpu = ["burn/wgpu"]
+
 [dev-dependencies]
 tempfile = "3"
 serde = { workspace = true }

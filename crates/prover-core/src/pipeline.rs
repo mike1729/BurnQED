@@ -8,6 +8,8 @@ use std::time::Instant;
 
 use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
+#[cfg(feature = "wgpu")]
+use burn::backend::wgpu::Wgpu;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use ebm::{
@@ -135,7 +137,10 @@ pub struct TrainEbmArgs {
 /// Backend for EBM inference (no autodiff).
 type InferenceBackend = NdArray<f32>;
 /// Backend for EBM training (with autodiff for gradient computation).
+#[cfg(not(feature = "wgpu"))]
 type TrainingBackend = Autodiff<NdArray<f32>>;
+#[cfg(feature = "wgpu")]
+type TrainingBackend = Autodiff<Wgpu>;
 
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
@@ -1166,12 +1171,18 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         "Embedding precomputation complete — training will use cached lookups"
     );
 
-    // 5. Create cache-only encode_fn (no network calls during training)
+    // 5. Save embedding cache before training (so it's not lost if training is killed)
+    if let Some(ref save_path) = args.save_embeddings {
+        cache.save(save_path)?;
+        tracing::info!(path = %save_path.display(), "Saved embedding cache before training");
+    }
+
+    // 6. Create cache-only encode_fn (no network calls during training)
     let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
         cache.get_or_err(state)
     };
 
-    // 6. Build training config
+    // 8. Build training config
     let output_dir_str = args.output_dir.to_string_lossy().to_string();
     let training_config = EBMTrainingConfig::new()
         .with_lr(args.lr)
@@ -1180,13 +1191,8 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .with_k_negatives(args.k_negatives)
         .with_checkpoint_dir(output_dir_str.clone());
 
-    // 7. Train
+    // 9. Train
     let _trained = ebm::train(&training_config, model, &encode_fn, &sampler, &device)?;
-
-    // 8. Optionally save embedding cache for reuse
-    if let Some(ref save_path) = args.save_embeddings {
-        cache.save(save_path)?;
-    }
 
     tracing::info!(
         cached = cache.len(),
@@ -1194,7 +1200,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         "Embedding cache stats after training"
     );
 
-    // 9. Save EnergyHeadConfig alongside checkpoint
+    // 10. Save EnergyHeadConfig alongside checkpoint
     std::fs::create_dir_all(&args.output_dir)?;
     let config_path = args.output_dir.join("energy_head_config.json");
     let config_json = serde_json::to_string_pretty(&head_config)?;
