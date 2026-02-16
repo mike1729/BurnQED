@@ -19,13 +19,15 @@ pub mod adapters;
 pub mod batcher;
 pub mod cache;
 pub mod config;
+pub mod encode_batcher;
 pub mod engine;
 pub mod mocks;
 pub mod node;
 
-pub use adapters::InferencePolicyProvider;
+pub use adapters::{CachingEncoder, InferencePolicyProvider};
 pub use batcher::GlobalBatcher;
 pub use cache::CachedPolicy;
+pub use encode_batcher::{BatchEncoder, GlobalEncodeBatcher};
 pub use config::SearchConfig;
 pub use engine::{
     PolicyProvider, ProofEnvironment, SearchEngine, SearchError, TacticRunner, ValueScorer,

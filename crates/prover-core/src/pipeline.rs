@@ -18,7 +18,10 @@ use ebm::{
 };
 use lean_repl::{LeanPool, TacticResult};
 use policy::{InferenceHandle, SglangClient, SglangConfig};
-use search::{CachedPolicy, GlobalBatcher, InferencePolicyProvider, SearchConfig, SearchEngine};
+use search::{
+    CachedPolicy, CachingEncoder, GlobalBatcher, GlobalEncodeBatcher, InferencePolicyProvider,
+    SearchConfig, SearchEngine,
+};
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
@@ -210,6 +213,11 @@ async fn load_policy_and_ebm(
 }
 
 /// Load an optional EBM scorer using the provided inference handle for encoding.
+///
+/// Sets up a `CachingEncoder` → `GlobalEncodeBatcher` pipeline so concurrent
+/// search tasks coalesce their encode requests into GPU-efficient batches.
+/// The `EBMValueFn` encodes **outside** its internal Mutex, so only the fast
+/// MLP forward pass holds the lock.
 fn load_ebm_scorer(
     ebm_path: Option<&Path>,
     inference_handle: &InferenceHandle,
@@ -232,83 +240,32 @@ fn load_ebm_scorer(
     let head_config: EnergyHeadConfig = serde_json::from_str(&config_json)
         .map_err(|e| anyhow::anyhow!("Failed to parse EnergyHeadConfig: {e}"))?;
 
-    // Create encode_fn closure using the inference handle + embedding cache.
-    // The cache avoids redundant forward passes on repeated proof states.
-    let encode_handle = inference_handle.clone();
-    let embedding_cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>> =
-        Arc::new(std::sync::Mutex::new(HashMap::new()));
-    let cache_for_batch = embedding_cache.clone();
-    let batch_encode_handle = inference_handle.clone();
+    let hidden_size = head_config.d_encoder;
+
+    // CachingEncoder: handles embedding cache + HTTP encode calls
+    let caching_encoder = CachingEncoder::new(inference_handle.clone(), hidden_size);
+
+    // GlobalEncodeBatcher: coalesces concurrent encode requests
+    let encode_batcher = Arc::new(GlobalEncodeBatcher::new(
+        Arc::new(caching_encoder),
+        64,                              // max_batch_states
+        Duration::from_millis(5),        // linger
+    ));
+
+    // Batch encode closure routed through the batcher (used by EBMValueFn)
+    let batcher_ref = encode_batcher.clone();
+    let batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync> =
+        Box::new(move |states: &[&str]| batcher_ref.encode_batch_blocking(states));
+
+    // Single encode closure routed through the batcher (batch of 1, used by EBMScorer::score_state)
+    let batcher_ref2 = encode_batcher.clone();
     let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
         Box::new(move |state: &str| {
-            // Fast path: check cache first
-            {
-                let cache = embedding_cache
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
-                if let Some(cached) = cache.get(state) {
-                    return Ok(cached.clone());
-                }
-            }
-            // Cache miss: compute embedding via inference handle
-            let embedding = encode_handle.encode_blocking(state)?;
-            let data = embedding.data;
-            // Insert into cache
-            embedding_cache
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?
-                .insert(state.to_owned(), data.clone());
-            Ok(data)
-        });
-
-    // Batch encode closure: checks cache, batch-encodes misses, fills cache.
-    let batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync> =
-        Box::new(move |states: &[&str]| {
-            let mut results: Vec<Option<Vec<f32>>> = vec![None; states.len()];
-            let mut miss_indices: Vec<usize> = Vec::new();
-            let mut miss_texts: Vec<String> = Vec::new();
-
-            // Phase 1: check cache for all states
-            {
-                let cache = cache_for_batch
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
-                for (i, state) in states.iter().enumerate() {
-                    if let Some(cached) = cache.get(*state) {
-                        results[i] = Some(cached.clone());
-                    } else {
-                        miss_indices.push(i);
-                        miss_texts.push(state.to_string());
-                    }
-                }
-            }
-
-            // Phase 2: batch-encode misses
-            if !miss_texts.is_empty() {
-                let batch_results = batch_encode_handle.encode_batch_blocking(&miss_texts)?;
-                let mut cache = cache_for_batch
-                    .lock()
-                    .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
-                for (j, &idx) in miss_indices.iter().enumerate() {
-                    match &batch_results[j] {
-                        Ok(embedding) => {
-                            cache.insert(states[idx].to_owned(), embedding.data.clone());
-                            results[idx] = Some(embedding.data.clone());
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                state_idx = idx,
-                                error = %e,
-                                "Batch encode failed for state, using zero embedding"
-                            );
-                            // Fallback: zero embedding (will score ~0.0)
-                            results[idx] = Some(vec![0.0; results.iter().find_map(|r| r.as_ref()).map_or(0, |v| v.len())]);
-                        }
-                    }
-                }
-            }
-
-            Ok(results.into_iter().map(|r| r.unwrap()).collect())
+            let results = batcher_ref2.encode_batch_blocking(&[state])?;
+            results
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("encode_batch returned empty result"))
         });
 
     // Load EBM scorer from checkpoint

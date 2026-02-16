@@ -109,12 +109,34 @@ impl<B: Backend> EBMScorer<B> {
         }
 
         let embeddings = batch_encode(states)?;
-        let tensor = embeddings_to_tensor::<B>(&embeddings, &self.device);
+        self.forward_embeddings_batch(&embeddings)
+    }
+
+    /// Forward pre-computed embeddings through the energy head.
+    ///
+    /// This is the "fast" part of scoring — just the MLP forward pass,
+    /// no HTTP encoding. Returns negated energies: higher = more provable.
+    pub fn forward_embeddings_batch(&self, embeddings: &[Vec<f32>]) -> anyhow::Result<Vec<f64>> {
+        if embeddings.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let tensor = embeddings_to_tensor::<B>(embeddings, &self.device);
         let energies = self.energy_head.forward(tensor);
         let energy_vals = tensor_to_vec::<B>(energies);
 
         // Negate all: higher = more provable
         Ok(energy_vals.into_iter().map(|e| -e).collect())
+    }
+
+    /// Forward a single pre-computed embedding through the energy head.
+    ///
+    /// Returns negated energy: higher = more provable.
+    pub fn forward_embedding(&self, embedding: &[f32]) -> anyhow::Result<f64> {
+        let tensor = embedding_to_tensor::<B>(embedding, &self.device);
+        let energy = self.energy_head.forward(tensor);
+        let energy_val = tensor_to_f64::<B>(energy);
+        Ok(-energy_val)
     }
 }
 
@@ -165,9 +187,12 @@ impl EBMValueFn {
 
     /// Create a new backend-erased value function with a custom batch encode function.
     ///
-    /// The `batch_encode_fn` is used by `score_batch()` to encode all states
-    /// in a single call (e.g. via SGLang's batch encode endpoint), while
-    /// `score()` still uses the per-state `encode_fn` inside the scorer.
+    /// Encoding happens **outside** the Mutex so concurrent search tasks can
+    /// overlap their HTTP encode calls. Only the fast energy-head forward pass
+    /// holds the lock.
+    ///
+    /// The `batch_encode_fn` is used by both `score()` (batch of 1) and
+    /// `score_batch()` to encode states via SGLang's batch encode endpoint.
     pub fn with_batch_encode<B: Backend + 'static>(
         scorer: EBMScorer<B>,
         batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync>,
@@ -175,20 +200,30 @@ impl EBMValueFn {
     where
         B::Device: Send,
     {
+        let batch_encode_fn: std::sync::Arc<
+            dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync,
+        > = std::sync::Arc::from(batch_encode_fn);
+        let batch_encode_fn2 = batch_encode_fn.clone();
         let scorer = std::sync::Arc::new(std::sync::Mutex::new(scorer));
         let scorer2 = scorer.clone();
         Self {
             score_fn: Box::new(move |state| {
+                // Encode OUTSIDE the mutex (potentially slow HTTP call)
+                let embeddings = batch_encode_fn(&[state])?;
+                // Forward through energy head INSIDE the mutex (fast MLP)
                 let scorer = scorer
                     .lock()
                     .map_err(|e| anyhow::anyhow!("EBM scorer lock poisoned: {e}"))?;
-                scorer.score_state(state)
+                scorer.forward_embedding(&embeddings[0])
             }),
             score_batch_fn: Box::new(move |states| {
+                // Encode OUTSIDE the mutex (potentially slow HTTP call)
+                let embeddings = batch_encode_fn2(states)?;
+                // Forward through energy head INSIDE the mutex (fast MLP)
                 let scorer = scorer2
                     .lock()
                     .map_err(|e| anyhow::anyhow!("EBM scorer lock poisoned: {e}"))?;
-                scorer.score_states_batch(states, &*batch_encode_fn)
+                scorer.forward_embeddings_batch(&embeddings)
             }),
         }
     }
@@ -346,6 +381,35 @@ mod tests {
         for s in &scores {
             assert!(s.is_finite(), "Score should be finite, got {s}");
         }
+    }
+
+    #[test]
+    fn test_forward_embeddings_batch() {
+        let device = Default::default();
+        let head = small_head(&device);
+        let scorer = EBMScorer::new(head, mock_encode_fn(), device);
+
+        let embeddings = vec![vec![0.1_f32; 8], vec![0.5_f32; 8], vec![0.9_f32; 8]];
+
+        let scores = scorer.forward_embeddings_batch(&embeddings).unwrap();
+        assert_eq!(scores.len(), 3);
+        for s in &scores {
+            assert!(s.is_finite(), "Score should be finite, got {s}");
+        }
+
+        // Empty input returns empty output
+        let empty = scorer.forward_embeddings_batch(&[]).unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_forward_embedding_single() {
+        let device = Default::default();
+        let head = small_head(&device);
+        let scorer = EBMScorer::new(head, mock_encode_fn(), device);
+
+        let score = scorer.forward_embedding(&[0.5_f32; 8]).unwrap();
+        assert!(score.is_finite(), "Score should be finite, got {score}");
     }
 
     #[test]

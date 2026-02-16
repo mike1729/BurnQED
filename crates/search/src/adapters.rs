@@ -1,5 +1,6 @@
 //! Bridges between search traits and real crate types (lean-repl, policy).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,6 +9,7 @@ use policy::{GeneratedTactic, InferenceHandle};
 
 use ebm::inference::EBMValueFn;
 
+use crate::encode_batcher::BatchEncoder;
 use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner, ValueScorer};
 
 // ---------------------------------------------------------------------------
@@ -117,9 +119,8 @@ impl PolicyProvider for InferencePolicyProvider {
 impl ValueScorer for EBMValueFn {
     fn score(&self, proof_state: &str) -> Result<f64, SearchError> {
         // block_in_place tells tokio this thread will block (on the internal
-        // Mutex + encode HTTP call), so it spawns a replacement worker.
-        // Without this, concurrent search tasks starve the thread pool.
-        // Falls back to direct call when not on a multi-threaded runtime (tests).
+        // Mutex + potentially the encode HTTP call), so it spawns a replacement
+        // worker. Falls back to direct call when not on a multi-threaded runtime.
         let score_fn = || self.score(proof_state).map_err(SearchError::Scorer);
         match tokio::runtime::Handle::try_current() {
             Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
@@ -137,5 +138,86 @@ impl ValueScorer for EBMValueFn {
             }
             _ => batch_fn(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CachingEncoder — wraps InferenceHandle with an embedding cache
+// ---------------------------------------------------------------------------
+
+/// Batch encoder that caches embeddings to avoid redundant HTTP calls.
+///
+/// Checks a thread-safe `HashMap` before calling the underlying
+/// `InferenceHandle::encode_batch`. Cache hits are returned directly;
+/// only misses go to the server. Results are stored back in the cache.
+pub struct CachingEncoder {
+    handle: InferenceHandle,
+    cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>>,
+    hidden_size: usize,
+}
+
+impl CachingEncoder {
+    /// Create a new `CachingEncoder`.
+    ///
+    /// - `handle`: the SGLang inference handle for HTTP encode calls
+    /// - `hidden_size`: embedding dimension (used for zero-vector fallback)
+    pub fn new(handle: InferenceHandle, hidden_size: usize) -> Self {
+        Self {
+            handle,
+            cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            hidden_size,
+        }
+    }
+}
+
+#[async_trait]
+impl BatchEncoder for CachingEncoder {
+    async fn encode_batch(&self, states: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let mut results: Vec<Option<Vec<f32>>> = vec![None; states.len()];
+        let mut miss_indices: Vec<usize> = Vec::new();
+        let mut miss_texts: Vec<String> = Vec::new();
+
+        // Phase 1: check cache for all states
+        {
+            let cache = self
+                .cache
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+            for (i, state) in states.iter().enumerate() {
+                if let Some(cached) = cache.get(state.as_str()) {
+                    results[i] = Some(cached.clone());
+                } else {
+                    miss_indices.push(i);
+                    miss_texts.push(state.clone());
+                }
+            }
+        }
+
+        // Phase 2: batch-encode cache misses via HTTP
+        if !miss_texts.is_empty() {
+            let batch_results = self.handle.encode_batch(&miss_texts).await?;
+            let mut cache = self
+                .cache
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+            for (j, &idx) in miss_indices.iter().enumerate() {
+                match &batch_results[j] {
+                    Ok(embedding) => {
+                        cache.insert(states[idx].clone(), embedding.data.clone());
+                        results[idx] = Some(embedding.data.clone());
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            state_idx = idx,
+                            error = %e,
+                            "Batch encode failed for state, using zero embedding"
+                        );
+                        results[idx] = Some(vec![0.0; self.hidden_size]);
+                    }
+                }
+            }
+        }
+
+        Ok(results.into_iter().map(|r| r.unwrap()).collect())
     }
 }
