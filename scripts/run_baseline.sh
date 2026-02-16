@@ -149,6 +149,7 @@ if [ -f "${TRAJ_DIR}/baseline_raw.parquet" ]; then
         --hidden-size "${HIDDEN_SIZE:-4096}" \
         --output-dir "$BASELINE_EBM_DIR" \
         --steps "$EBM_STEPS" \
+        --batch-size 128 \
         --save-embeddings "${BASELINE_EBM_DIR}/embeddings.parquet" \
         $TACTIC_PAIRS_FLAG
 

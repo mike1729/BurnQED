@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
@@ -454,6 +454,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             .expect("valid progress bar template")
             .progress_chars("=> "),
     );
+    pb.enable_steady_tick(Duration::from_secs(1));
 
     // CTRL-C via AtomicBool — shared across spawned tasks
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -761,6 +762,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 .progress_chars("=> "),
         );
         pb.set_prefix("0");
+        pb.enable_steady_tick(Duration::from_secs(1));
         let budget_start = Instant::now();
 
         // Spawn phase: submit all theorems for this budget
@@ -1983,6 +1985,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
             .expect("valid progress bar template")
             .progress_chars("=> "),
     );
+    pb.enable_steady_tick(Duration::from_secs(1));
 
     // 5. Spawn per-theorem tasks and collect results concurrently.
     // We interleave spawning with draining completed tasks so the progress

@@ -87,6 +87,7 @@ if [ "$ITER" -gt 0 ]; then
         --hidden-size "${HIDDEN_SIZE:-4096}" \
         --output-dir "$EBM_DIR" \
         --steps "$EBM_STEPS" \
+        --batch-size 128 \
         --save-embeddings "$EMBEDDINGS_SAVE" \
         $RESUME_FLAG \
         $TACTIC_PAIRS_FLAG

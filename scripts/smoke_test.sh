@@ -85,7 +85,8 @@ $PROVER train-ebm \
     --server-url "$SGLANG_URL" \
     --hidden-size "${HIDDEN_SIZE:-4096}" \
     --output-dir "$EBM_DIR" \
-    --steps 100
+    --steps 100 \
+    --batch-size 128
 
 # ── Step 3: Search with EBM (if trained) ────────────────────────────────
 EBM_TRAJ="${WORK_DIR}/with_ebm.parquet"
