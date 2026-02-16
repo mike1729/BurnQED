@@ -324,7 +324,7 @@ impl SearchEngine {
 
                         stats.nodes_expanded = nodes_expanded;
 
-                        tracing::info!(
+                        tracing::debug!(
                             theorem = theorem_name,
                             steps = proof_tactics.len(),
                             nodes = nodes_expanded,

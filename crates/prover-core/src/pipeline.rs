@@ -474,9 +474,75 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut join_set = tokio::task::JoinSet::new();
 
+    /// Process one completed search outcome into accumulators.
+    fn collect_search(
+        outcome: SearchOutcome,
+        searched_count: &mut u32,
+        proved_count: &mut u32,
+        failed_count: &mut u32,
+        error_count: &mut u32,
+        total_nodes: &mut u64,
+        total_lean_ms: &mut u64,
+        total_gen_ms: &mut u64,
+        all_candidate_counts: &mut Vec<usize>,
+        writer: &mut TrajectoryWriter,
+        pb: &ProgressBar,
+    ) {
+        match outcome.result {
+            Ok(result) => {
+                *searched_count += 1;
+                *total_nodes += result.nodes_expanded as u64;
+                *total_lean_ms += result.stats.total_lean_time_ms;
+                *total_gen_ms += result.stats.total_generate_time_ms;
+                all_candidate_counts.extend_from_slice(&result.stats.candidates_per_expansion);
+
+                if result.proved {
+                    *proved_count += 1;
+                    tracing::info!(
+                        theorem = outcome.name,
+                        tactics = ?result.proof_tactics,
+                        nodes = result.nodes_expanded,
+                        time_ms = result.wall_time_ms,
+                        "Proved"
+                    );
+                } else {
+                    *failed_count += 1;
+                }
+                let labeled = TrajectoryWriter::from_search_result(&result);
+                writer.record_all(labeled);
+            }
+            Err(e) => {
+                *error_count += 1;
+                tracing::warn!(theorem = outcome.name, error = %e, "Search failed, skipping");
+            }
+        }
+        pb.inc(1);
+    }
+
     for task in &theorems_to_search {
         if interrupted.load(Ordering::Relaxed) {
             break;
+        }
+
+        // Drain completed tasks before waiting for a permit
+        while let Some(join_result) = join_set.try_join_next() {
+            match join_result {
+                Ok(outcome) => {
+                    collect_search(
+                        outcome, &mut searched_count, &mut proved_count,
+                        &mut failed_count, &mut error_count, &mut total_nodes,
+                        &mut total_lean_ms, &mut total_gen_ms,
+                        &mut all_candidate_counts, &mut writer, &pb,
+                    );
+                    // Periodic auto-save
+                    const AUTOSAVE_INTERVAL: u32 = 50;
+                    if searched_count % AUTOSAVE_INTERVAL == 0 && searched_count > 0 {
+                        writer.flush_partial()?;
+                        tracing::info!(searched = searched_count, "Auto-saved checkpoint");
+                    }
+                }
+                Err(e) => tracing::error!(error = %e, "Search task panicked"),
+            }
         }
 
         let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
@@ -511,49 +577,23 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         });
     }
 
-    // Collect phase: process results as they complete (single-threaded)
+    // Final drain: collect remaining in-flight tasks
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
-            Ok(outcome) => match outcome.result {
-                Ok(result) => {
-                    searched_count += 1;
-                    total_nodes += result.nodes_expanded as u64;
-                    total_lean_ms += result.stats.total_lean_time_ms;
-                    total_gen_ms += result.stats.total_generate_time_ms;
-                    all_candidate_counts.extend_from_slice(&result.stats.candidates_per_expansion);
-
-                    if result.proved {
-                        proved_count += 1;
-                        tracing::info!(
-                            theorem = outcome.name,
-                            tactics = ?result.proof_tactics,
-                            nodes = result.nodes_expanded,
-                            time_ms = result.wall_time_ms,
-                            "Proved"
-                        );
-                    } else {
-                        failed_count += 1;
-                    }
-                    let labeled = TrajectoryWriter::from_search_result(&result);
-                    writer.record_all(labeled);
+            Ok(outcome) => {
+                collect_search(
+                    outcome, &mut searched_count, &mut proved_count,
+                    &mut failed_count, &mut error_count, &mut total_nodes,
+                    &mut total_lean_ms, &mut total_gen_ms,
+                    &mut all_candidate_counts, &mut writer, &pb,
+                );
+                const AUTOSAVE_INTERVAL: u32 = 50;
+                if searched_count % AUTOSAVE_INTERVAL == 0 && searched_count > 0 {
+                    writer.flush_partial()?;
+                    tracing::info!(searched = searched_count, "Auto-saved checkpoint");
                 }
-                Err(e) => {
-                    error_count += 1;
-                    tracing::warn!(theorem = outcome.name, error = %e, "Search failed, skipping");
-                }
-            },
-            Err(e) => {
-                tracing::error!(error = %e, "Search task panicked");
             }
-        }
-
-        pb.inc(1);
-
-        // Periodic auto-save
-        const AUTOSAVE_INTERVAL: u32 = 50;
-        if searched_count % AUTOSAVE_INTERVAL == 0 && searched_count > 0 {
-            writer.flush_partial()?;
-            tracing::info!(searched = searched_count, "Auto-saved checkpoint");
+            Err(e) => tracing::error!(error = %e, "Search task panicked"),
         }
     }
 
@@ -765,11 +805,65 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         pb.enable_steady_tick(Duration::from_secs(1));
         let budget_start = Instant::now();
 
-        // Spawn phase: submit all theorems for this budget
+        // Interleaved spawn + collect: drain completed tasks before each spawn
+        // so the progress bar updates in real time.
         let mut join_set = tokio::task::JoinSet::new();
         let pass_n = args.pass_n;
 
+        let mut per_theorem = Vec::new();
+        let mut solved = 0u32;
+        let mut all_times: Vec<f64> = Vec::new();
+        let mut total_nodes_sum: f64 = 0.0;
+
+        /// Process one completed eval outcome into accumulators.
+        fn collect_eval(
+            outcome: EvalOutcome,
+            per_theorem: &mut Vec<TheoremResult>,
+            solved: &mut u32,
+            all_times: &mut Vec<f64>,
+            total_nodes_sum: &mut f64,
+            cumulative_solved_set: &mut HashSet<String>,
+            pb: &ProgressBar,
+            budget_start: Instant,
+            total: u32,
+        ) {
+            if outcome.best.proved {
+                *solved += 1;
+                cumulative_solved_set.insert(outcome.name);
+            }
+            all_times.extend(outcome.times);
+            *total_nodes_sum += outcome.total_nodes;
+            per_theorem.push(outcome.best);
+            pb.inc(1);
+            pb.set_prefix(format!("{solved}"));
+            let done = pb.position() as usize;
+            if done > 0 {
+                let elapsed = budget_start.elapsed().as_secs_f64();
+                let remaining = elapsed * (total as usize - done) as f64 / done as f64;
+                let eta = if remaining < 60.0 {
+                    format!("{:.0}s", remaining)
+                } else if remaining < 3600.0 {
+                    format!("{:.0}m", remaining / 60.0)
+                } else {
+                    format!("{:.1}h", remaining / 3600.0)
+                };
+                pb.set_message(eta);
+            }
+        }
+
         for task in &index.theorems {
+            // Drain completed tasks before waiting for a permit
+            while let Some(join_result) = join_set.try_join_next() {
+                match join_result {
+                    Ok(outcome) => collect_eval(
+                        outcome, &mut per_theorem, &mut solved, &mut all_times,
+                        &mut total_nodes_sum, &mut cumulative_solved_set,
+                        &pb, budget_start, total,
+                    ),
+                    Err(e) => tracing::error!(error = %e, "Eval task panicked"),
+                }
+            }
+
             let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
 
             let pool = Arc::clone(&pool);
@@ -836,41 +930,15 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             });
         }
 
-        // Collect phase: aggregate results
-        let mut per_theorem = Vec::new();
-        let mut solved = 0u32;
-        let mut all_times: Vec<f64> = Vec::new();
-        let mut total_nodes_sum: f64 = 0.0;
-
+        // Final drain: collect remaining in-flight tasks
         while let Some(join_result) = join_set.join_next().await {
             match join_result {
-                Ok(outcome) => {
-                    if outcome.best.proved {
-                        solved += 1;
-                        cumulative_solved_set.insert(outcome.name);
-                    }
-                    all_times.extend(outcome.times);
-                    total_nodes_sum += outcome.total_nodes;
-                    per_theorem.push(outcome.best);
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Eval task panicked");
-                }
-            }
-            pb.inc(1);
-            pb.set_prefix(format!("{solved}"));
-            let done = pb.position() as usize;
-            if done > 0 {
-                let elapsed = budget_start.elapsed().as_secs_f64();
-                let remaining = elapsed * (total as usize - done) as f64 / done as f64;
-                let eta = if remaining < 60.0 {
-                    format!("{:.0}s", remaining)
-                } else if remaining < 3600.0 {
-                    format!("{:.0}m", remaining / 60.0)
-                } else {
-                    format!("{:.1}h", remaining / 3600.0)
-                };
-                pb.set_message(eta);
+                Ok(outcome) => collect_eval(
+                    outcome, &mut per_theorem, &mut solved, &mut all_times,
+                    &mut total_nodes_sum, &mut cumulative_solved_set,
+                    &pb, budget_start, total,
+                ),
+                Err(e) => tracing::error!(error = %e, "Eval task panicked"),
             }
         }
 
