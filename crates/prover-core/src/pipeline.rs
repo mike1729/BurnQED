@@ -193,7 +193,7 @@ async fn load_policy_and_ebm(
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
     let batcher = GlobalBatcher::new(
         Arc::new(raw_policy),
-        64,                              // max_batch_states
+        8,                               // max_batch_states (8 states × 8 candidates = 64 sequences)
         Duration::from_millis(5),        // linger
     );
     let policy = CachedPolicy::new(batcher, 10_000);
