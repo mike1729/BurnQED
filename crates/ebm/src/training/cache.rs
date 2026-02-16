@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use arrow::array::*;
 use arrow::buffer::OffsetBuffer;
@@ -20,6 +21,22 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 
 use super::data::ContrastiveSampler;
+
+/// Format ETA from wall-clock elapsed time and progress.
+fn format_eta(start: Instant, done: usize, total: usize) -> String {
+    if done == 0 {
+        return "?".to_string();
+    }
+    let elapsed = start.elapsed().as_secs_f64();
+    let remaining = elapsed * (total - done) as f64 / done as f64;
+    if remaining < 60.0 {
+        format!("{:.0}s", remaining)
+    } else if remaining < 3600.0 {
+        format!("{:.0}m", remaining / 60.0)
+    } else {
+        format!("{:.1}h", remaining / 3600.0)
+    }
+}
 
 /// Precomputed embedding cache backed by a `HashMap`.
 ///
@@ -54,15 +71,16 @@ impl EmbeddingCache {
         let pb = ProgressBar::new(total as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) Encoding embeddings")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) Encoding embeddings")
                 .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars("=> "),
         );
 
         let mut embeddings = HashMap::with_capacity(total);
         let mut errors = 0usize;
+        let start = Instant::now();
 
-        for state in &unique_states {
+        for (i, state) in unique_states.iter().enumerate() {
             match encode_fn(state) {
                 Ok(emb) => {
                     debug_assert_eq!(emb.len(), dim, "Embedding dim mismatch: expected {dim}, got {}", emb.len());
@@ -74,6 +92,9 @@ impl EmbeddingCache {
                 }
             }
             pb.inc(1);
+            if (i + 1) % 100 == 0 {
+                pb.set_message(format_eta(start, i + 1, total));
+            }
         }
 
         pb.finish_with_message("done");
@@ -130,13 +151,15 @@ impl EmbeddingCache {
         let pb = ProgressBar::new(total as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) Encoding embeddings")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) Encoding embeddings")
                 .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars("=> "),
         );
 
         let mut encoded = 0usize;
         let mut errors = 0usize;
+        let start = Instant::now();
+        let mut done = 0usize;
 
         // Stream of (state, result) pairs with bounded concurrency
         let mut result_stream = stream::iter(missing.into_iter().map(|state| {
@@ -162,7 +185,11 @@ impl EmbeddingCache {
                     tracing::debug!(state = %state, error = %e, "Failed to encode state");
                 }
             }
+            done += 1;
             pb.inc(1);
+            if done % 100 == 0 {
+                pb.set_message(format_eta(start, done, total));
+            }
         }
 
         pb.finish_with_message("done");
@@ -234,13 +261,15 @@ impl EmbeddingCache {
         let pb = ProgressBar::new(total as u64);
         pb.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) Encoding embeddings (batched)")
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) Encoding embeddings (batched)")
                 .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars("=> "),
         );
 
         let mut encoded = 0usize;
         let mut errors = 0usize;
+        let start = Instant::now();
+        let mut done = 0usize;
 
         // Chunk missing states into batches, stream with bounded concurrency
         let chunks: Vec<Vec<String>> = missing
@@ -275,11 +304,13 @@ impl EmbeddingCache {
                             }
                         }
                         pb.inc(1);
+                        done += 1;
                     }
                 }
                 Err(e) => {
                     // Whole batch failed — count all states as errors
                     errors += chunk.len();
+                    done += chunk.len();
                     tracing::warn!(
                         batch_size = chunk.len(),
                         error = %e,
@@ -288,6 +319,7 @@ impl EmbeddingCache {
                     pb.inc(chunk.len() as u64);
                 }
             }
+            pb.set_message(format_eta(start, done, total));
         }
 
         pb.finish_with_message("done");
