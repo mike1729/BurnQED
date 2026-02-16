@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
-#[cfg(feature = "wgpu")]
-use burn::backend::wgpu::Wgpu;
+#[cfg(feature = "cuda")]
+use burn::backend::CudaJit;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use ebm::{
@@ -137,10 +137,10 @@ pub struct TrainEbmArgs {
 /// Backend for EBM inference (no autodiff).
 type InferenceBackend = NdArray<f32>;
 /// Backend for EBM training (with autodiff for gradient computation).
-#[cfg(not(feature = "wgpu"))]
+#[cfg(not(feature = "cuda"))]
 type TrainingBackend = Autodiff<NdArray<f32>>;
-#[cfg(feature = "wgpu")]
-type TrainingBackend = Autodiff<Wgpu>;
+#[cfg(feature = "cuda")]
+type TrainingBackend = Autodiff<CudaJit>;
 
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {

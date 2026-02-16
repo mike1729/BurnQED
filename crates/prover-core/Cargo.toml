@@ -23,7 +23,7 @@ chrono = { workspace = true }
 
 [features]
 default = []
-wgpu = ["burn/wgpu"]
+cuda = ["burn/cuda-jit"]
 
 [dev-dependencies]
 tempfile = "3"
