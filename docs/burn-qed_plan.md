@@ -1599,25 +1599,27 @@ pub enum PantographResponse {
 
 ### 8.1 Best-First Search
 
-Per expansion:
+Per expansion (supports batched expansion of multiple nodes):
 
-1. Pop highest-scored node from priority queue
-2. Run 7B to generate 32 candidate tactics (get hidden states for free)
-3. Score parent state with EBM from shared hidden states (nearly free: ~0.1ms MLP)
-4. Filter to top 8 by LLM log-prob (`beam_width = 8`)
-5. Apply top 8 in Lean (parallel via tokio worker pool)
-6. For each successful child: run 7B encode-only → EBM score
-7. Push children onto priority queue with combined score: `α × log_prob + β × ebm_score`
+1. Pop highest-scored node(s) from priority queue (`batch_expansion_size`)
+2. Batch-generate candidates via SGLang (`generate_candidates_batch`)
+3. Inject probe tactics (deduped against LLM candidates)
+4. Apply candidates in Lean, collect successful child states
+5. **Deferred batch scoring**: all successful children scored in one `score_batch()` call
+   - Single HTTP encode batch to SGLang → single MLP forward pass
+   - Falls back to `ebm_score = 0.0` on error (search continues)
+6. Push scored children onto priority queue: `α × log_prob + β × ebm_score`
+
+After proof found, `harvest_siblings` expands proof-path ancestors for hard negatives, also using batch scoring.
 
 ### 8.2 Latency Budget per Expansion
 
-With 600-node search budget and shared 7B backbone:
+With 600-node search budget and SGLang inference server:
 
-- 600 expansions × 1 batched EBM call (8 child states) each
-- Batch size 8, sequence length ~256 tokens
-- 7B encoder-only on A100: ~50ms per batch of 8
-- Total EBM inference: 600 × 50ms = **30 seconds** per theorem
-- Lean REPL calls (600 × 8 = 4800 applications, ~50ms each even with parallelism) dominate at ~4 minutes per theorem
+- 600 expansions × 1 batched EBM encode call (~8 child states) each
+- Batch encode via SGLang `/encode`: ~5-15ms per batch of 8
+- Total EBM inference: 600 × ~10ms = **~6 seconds** per theorem
+- Lean REPL calls dominate: 600 × 8 = 4800 applications, ~5-50ms each
 
 ### 8.3 Noise Injection for Iteration 0
 

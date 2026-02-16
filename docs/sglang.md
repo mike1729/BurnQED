@@ -32,10 +32,12 @@ Add SGLang HTTP client as an alternative inference backend, enabling 50-100x fas
                                   │
             ┌─────────────────────┼─────────────────────┐
             │                     │                     │
-   InferencePolicyProvider   encode_fn closure      health_check
-   (PolicyProvider trait)    (EBM embedding)        (startup probe)
+   InferencePolicyProvider   encode closures        health_check
+   (PolicyProvider trait)    (single + batch)       (startup probe)
             │                     │
-      SearchEngine           EBMScorer
+      SearchEngine           EBMScorer → EBMValueFn
+      (deferred batch          (score_batch via
+       EBM scoring)            batch_encode_fn)
 ```
 
 Alternatively, use `InferenceHandle::Local(GenerationServiceHandle)` for candle (existing path, unchanged).

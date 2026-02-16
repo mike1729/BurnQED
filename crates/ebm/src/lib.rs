@@ -14,8 +14,11 @@
 //! # Key types
 //!
 //! - [`EnergyHead`] / [`EnergyHeadConfig`] — the MLP model
-//! - [`EBMScorer`] — generic scorer parameterized by burn backend
-//! - [`EBMValueFn`] — backend-erased wrapper for the search engine
+//! - [`EBMScorer`] — generic scorer parameterized by burn backend, supports
+//!   both per-state (`score_state`) and batch (`score_states_batch`) scoring
+//! - [`EBMValueFn`] — backend-erased wrapper for the search engine; supports
+//!   `score()` and `score_batch()`. Use `with_batch_encode()` constructor to
+//!   supply a batch encode closure for efficient HTTP batching via SGLang.
 //! - [`EBMTrainingConfig`] / [`train`] — training loop configuration and entry point
 //! - [`ContrastiveSampler`] — loads trajectory data and produces contrastive batches
 //! - [`EncoderBackend`] — configuration enum for embedding dimension

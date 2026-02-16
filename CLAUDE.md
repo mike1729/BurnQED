@@ -33,6 +33,7 @@ These were decided after two external review rounds. Do not revisit without expl
 7. **Worker recycling for Lean.** 1000 requests OR 30 minutes TTL.
 8. **Pantograph protocol:** JSON lines terminated by `\n`. Missing newline hangs process. 30s timeout on all reads.
 9. **ProofHandle pattern.** `stateId` is process-local — hold worker for proof lifetime. Use `ProofHandleOwned` for `tokio::spawn`.
+10. **Batch EBM scoring.** Deferred scoring: collect child states per expansion, then `score_batch()` once. Uses `EBMValueFn::with_batch_encode()` for single HTTP batch call. Falls back to `0.0` on error.
 
 ## Code Conventions
 

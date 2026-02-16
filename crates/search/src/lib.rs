@@ -9,9 +9,11 @@
 //! - [`SearchEngine`] — the main search driver
 //! - [`SearchConfig`] — configuration loaded from TOML
 //! - [`SearchNode`] / [`ScoredNode`] — tree nodes and priority queue entries
-//! - [`PolicyProvider`] / [`ValueScorer`] — traits for tactic generation and scoring
+//! - [`PolicyProvider`] / [`ValueScorer`] — traits for tactic generation and scoring.
+//!   `ValueScorer` supports `score_batch()` for deferred batch EBM scoring.
 //! - [`ProofEnvironment`] / [`TacticRunner`] — traits for Lean interaction
 //! - [`InferencePolicyProvider`] — SGLang-backed policy adapter
+//! - [`CachedPolicy`] — LRU cache wrapper with batch-aware miss grouping and hit/miss stats
 
 pub mod adapters;
 pub mod cache;

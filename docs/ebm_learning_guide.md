@@ -499,22 +499,30 @@ In ML terminology, this is equivalent to `.detach()` in PyTorch. But we get it f
 ### 8.1 During search (inference)
 
 ```
-For each expansion of a search node:
+For each expansion of a search node (or batch of nodes):
 
-1. LLM generates 32 candidate tactics with log-probabilities
-2. Filter to top 8 by log-prob (beam_width)
-3. Apply each tactic in Lean → get child proof states
-4. For each successful child state:
-   a. Encode: encoder.encode_only(child_state) → Vec<f32>
-   b. Score: energy_head.forward(embedding) → energy
-   c. Compute score: -energy (negate: lower energy = higher score)
+1. LLM generates N candidate tactics with log-probabilities (+ probe tactics)
+2. Apply each tactic in Lean → get child proof states
+3. Collect all successful child states (deferred scoring)
+4. Batch-score all children at once:
+   a. Batch encode: encode_batch(all_child_states) → Vec<Vec<f32>>  (single HTTP call)
+   b. Batch MLP: energy_head.forward(stacked_embeddings) → Vec<energy>
+   c. Compute scores: -energy (negate: lower energy = higher score)
    d. Combined priority: α × log_prob + β × (-energy)
-5. Push children onto priority queue ordered by combined priority
+5. Push all scored children onto priority queue
 ```
 
-The EBM adds one encode_only() + one energy_head.forward() per child state. The energy_head forward is ~0.1ms (tiny MLP). The encode_only() is ~50ms on GPU (7B model forward pass). So the EBM adds ~50ms per child state.
+EBM scoring is **batch-deferred**: all child states from an expansion are
+collected first, then scored in a single `score_batch()` call. This reduces
+HTTP round-trips to the SGLang `/encode` endpoint from N individual requests
+to one batched request per expansion.
 
-With beam_width=8 and 600 expansions: 600 × 8 × 50ms = 240 seconds of EBM overhead. This is significant but acceptable within the 600-second timeout.
+The energy head forward is ~0.01ms (tiny MLP). The batched encode call via
+SGLang is ~5-15ms for a batch of 8 states (vs ~2-5ms × 8 = 16-40ms
+sequentially). With 600 expansions, total EBM time drops from ~30s to ~10s.
+
+If batch scoring fails (transient network error), it falls back gracefully to
+`ebm_score = 0.0` with a warning, allowing the search to continue.
 
 ### 8.2 The score combination
 
