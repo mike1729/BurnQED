@@ -7,6 +7,7 @@ beta = 0.5                    # EBM score weight
 timeout_per_theorem = 120     # seconds (most theorems exhaust in <30s anyway)
 # No ebm_skip_easy. Always score with EBM when available.
 harvest_siblings = true       # Mine sibling states from proof path after finding proof
+batch_expansion_size = 8      # Pop 8 nodes from frontier per batch (saturates GPU)
 
 [search.iteration_0]
 # Run search twice: once normal, once with high temperature for diverse negatives
