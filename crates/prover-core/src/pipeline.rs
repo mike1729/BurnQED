@@ -450,10 +450,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) proved={prefix} {msg}")
             .expect("valid progress bar template")
             .progress_chars("=> "),
     );
+    pb.set_prefix("0");
     pb.enable_steady_tick(Duration::from_secs(1));
 
     // CTRL-C via AtomicBool — shared across spawned tasks
@@ -513,10 +514,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             }
             Err(e) => {
                 *error_count += 1;
-                tracing::warn!(theorem = outcome.name, error = %e, "Search failed, skipping");
+                tracing::debug!(theorem = outcome.name, error = %e, "Search failed, skipping");
             }
         }
         pb.inc(1);
+        pb.set_prefix(format!("{proved_count}"));
     }
 
     for task in &theorems_to_search {
