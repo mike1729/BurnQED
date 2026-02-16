@@ -273,11 +273,9 @@ impl SearchEngine {
             stats.total_generate_time_ms += gen_us / 1000;
             stats.gen_latencies_us.push(gen_us);
 
-            // Expand each node in the batch.
-            // Collect children needing EBM scoring for deferred batch scoring.
-            let mut pending_scores: Vec<(usize, String)> = Vec::new();
-
             for (i, sn) in expand_batch.iter().enumerate() {
+                let mut pending_scores: Vec<(usize, String)> = Vec::new();
+
                 let node_idx = sn.node_index;
                 let node_state_id = arena[node_idx].state_id;
                 let node_depth = arena[node_idx].depth;
@@ -487,33 +485,33 @@ impl SearchEngine {
                 }
 
                 nodes_expanded += 1;
-            }
 
-            // Batch-score all deferred children from this expansion batch
-            if let Some(scorer) = scorer {
-                if !pending_scores.is_empty() {
-                    let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
-                    let ebm_start = Instant::now();
-                    let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
-                        tracing::warn!(error = %e, "Batch scoring failed during expansion, using 0.0 defaults");
-                        vec![0.0; states.len()]
-                    });
-                    let ebm_us = ebm_start.elapsed().as_micros() as u64;
-                    stats.total_ebm_time_ms += ebm_us / 1000;
-                    stats.ebm_latencies_us.push(ebm_us);
-                    stats.ebm_score_calls += scores.len() as u32;
-
-                    for ((idx, _), score) in pending_scores.iter().zip(scores) {
-                        arena[*idx].ebm_score = score;
-                        let child_score =
-                            arena[*idx].combined_score(self.config.alpha, self.config.beta);
-                        frontier.push(ScoredNode {
-                            node_index: *idx,
-                            score: OrderedFloat(child_score),
+                // Score this node's children and push to frontier
+                if let Some(scorer) = scorer {
+                    if !pending_scores.is_empty() {
+                        let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
+                        let ebm_start = Instant::now();
+                        let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
+                            tracing::warn!(error = %e, "Batch scoring failed during expansion, using 0.0 defaults");
+                            vec![0.0; states.len()]
                         });
+                        let ebm_us = ebm_start.elapsed().as_micros() as u64;
+                        stats.total_ebm_time_ms += ebm_us / 1000;
+                        stats.ebm_latencies_us.push(ebm_us);
+                        stats.ebm_score_calls += scores.len() as u32;
+
+                        for ((idx, _), score) in pending_scores.iter().zip(scores) {
+                            arena[*idx].ebm_score = score;
+                            let child_score =
+                                arena[*idx].combined_score(self.config.alpha, self.config.beta);
+                            frontier.push(ScoredNode {
+                                node_index: *idx,
+                                score: OrderedFloat(child_score),
+                            });
+                        }
+                        stats.peak_frontier_size =
+                            stats.peak_frontier_size.max(frontier.len());
                     }
-                    stats.peak_frontier_size =
-                        stats.peak_frontier_size.max(frontier.len());
                 }
             }
         }
@@ -632,10 +630,9 @@ async fn harvest_siblings(
         .generate_candidates_batch(&prompts, config.num_candidates)
         .await?;
 
-    // Collect sibling nodes needing EBM scoring for deferred batch scoring
-    let mut pending_scores: Vec<(usize, String)> = Vec::new();
-
     for (i, (ancestor_idx, anc_state_id, anc_depth, _)) in ancestors.into_iter().enumerate() {
+        let mut pending_scores: Vec<(usize, String)> = Vec::new();
+
         let mut siblings = batch_candidates[i].clone();
         inject_probes(&mut siblings, &config.probe_tactics);
 
@@ -690,18 +687,18 @@ async fn harvest_siblings(
                 TacticResult::Failed { .. } => {}
             }
         }
-    }
 
-    // Batch-score all deferred sibling states
-    if let Some(scorer) = scorer {
-        if !pending_scores.is_empty() {
-            let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
-            let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Batch scoring failed in harvest_siblings, using 0.0");
-                vec![0.0; states.len()]
-            });
-            for ((idx, _), score) in pending_scores.iter().zip(scores) {
-                arena[*idx].ebm_score = score;
+        // Score this ancestor's siblings
+        if let Some(scorer) = scorer {
+            if !pending_scores.is_empty() {
+                let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
+                let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Batch scoring failed in harvest_siblings, using 0.0");
+                    vec![0.0; states.len()]
+                });
+                for ((idx, _), score) in pending_scores.iter().zip(scores) {
+                    arena[*idx].ebm_score = score;
+                }
             }
         }
     }
