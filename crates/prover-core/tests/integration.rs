@@ -739,6 +739,7 @@ async fn test_eval_mock_budgets() {
 
     let config = SearchConfig {
         max_nodes: 5,
+        probe_tactics: vec![], // disable probes so "trivial" doesn't solve nat_refl
         ..SearchConfig::default()
     };
 
@@ -1045,6 +1046,7 @@ async fn test_mock_pipeline_parallel_search() {
 
     let engine = SearchEngine::new(SearchConfig {
         max_nodes: 10,
+        probe_tactics: vec![], // disable probes so "trivial" doesn't solve hard_a/hard_b
         ..SearchConfig::default()
     });
 
@@ -1236,6 +1238,7 @@ async fn test_parallel_eval_mock_budgets() {
     for &budget in &budgets {
         let config = SearchConfig {
             max_nodes: budget,
+            probe_tactics: vec![], // disable probes so "trivial" doesn't solve hard_thm
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);

@@ -1,6 +1,6 @@
 //! Best-first search engine with priority queue, node expansion, and scoring.
 
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -66,14 +66,28 @@ pub trait TacticRunner: Send {
 
 /// LLM policy that generates tactic candidates for a proof state.
 ///
-/// Sync trait for compatibility with blocking inference calls.
+/// Async trait — generation involves HTTP calls to an inference server.
+#[async_trait]
 pub trait PolicyProvider: Send + Sync {
     /// Generate up to `n` candidate tactics for the given proof state text.
-    fn generate_candidates(
+    async fn generate_candidates(
         &self,
         proof_state: &str,
         n: usize,
     ) -> Result<Vec<GeneratedTactic>, SearchError>;
+
+    /// Generate candidates for multiple states. Default: sequential calls.
+    async fn generate_candidates_batch(
+        &self,
+        states: &[String],
+        n: usize,
+    ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
+        let mut results = Vec::with_capacity(states.len());
+        for s in states {
+            results.push(self.generate_candidates(s, n).await?);
+        }
+        Ok(results)
+    }
 }
 
 /// Value function that scores proof states (e.g., EBM energy).
@@ -148,6 +162,10 @@ impl SearchEngine {
 
         let mut arena: Vec<SearchNode> = vec![root];
 
+        // Visited states for loop detection
+        let mut visited_states: HashSet<String> = HashSet::new();
+        visited_states.insert(root_pp.clone());
+
         // If root is already terminal (shouldn't happen for real theorems,
         // but handle gracefully)
         if root_terminal {
@@ -183,8 +201,8 @@ impl SearchEngine {
         let mut max_depth_reached: u32 = 0;
 
         // Main search loop
-        while let Some(current) = frontier.pop() {
-            if nodes_expanded >= self.config.max_nodes {
+        loop {
+            if frontier.is_empty() || nodes_expanded >= self.config.max_nodes {
                 break;
             }
 
@@ -198,165 +216,244 @@ impl SearchEngine {
                 break;
             }
 
-            let node_idx = current.node_index;
-            let node_state_id = arena[node_idx].state_id;
-            let goals_text = arena[node_idx].goals_as_text();
-            let node_depth = arena[node_idx].depth;
-
-            // Skip nodes at max depth — all children would exceed the limit,
-            // so generating candidates and calling Lean would be wasted work.
-            if node_depth >= self.config.max_depth {
-                nodes_expanded += 1;
-                stats.nodes_pruned += 1;
-                continue;
-            }
-
-            tracing::debug!(
-                node = node_idx,
-                state_id = node_state_id,
-                depth = node_depth,
-                score = %current.score,
-                "Expanding node"
-            );
-
-            // Generate tactic candidates
-            let gen_start = std::time::Instant::now();
-            let mut candidates = policy.generate_candidates(&goals_text, self.config.num_candidates)?;
-            stats.total_generate_time_ms += gen_start.elapsed().as_millis() as u64;
-            stats.candidates_per_expansion.push(candidates.len());
-
-            // Inject fallback tactics when LLM returns nothing
-            if candidates.is_empty() && !self.config.fallback_tactics.is_empty() {
-                tracing::debug!(
-                    node = node_idx,
-                    "LLM returned no candidates, using fallback tactics"
-                );
-                candidates = self
-                    .config
-                    .fallback_tactics
-                    .iter()
-                    .map(|t| GeneratedTactic {
-                        text: t.clone(),
-                        raw_text: t.clone(),
-                        log_prob: -100.0,
-                        tokens: vec![],
-                    })
-                    .collect();
-            }
-
-            for candidate in candidates {
-                stats.total_tactic_attempts += 1;
-                let tactic_start = std::time::Instant::now();
-                let result = runner
-                    .apply_tactic(node_state_id, None, &candidate.text)
-                    .await?;
-                stats.total_lean_time_ms += tactic_start.elapsed().as_millis() as u64;
-
-                match result {
-                    TacticResult::Success { state_id, goals } => {
-                        let child_depth = node_depth + 1;
-
-                        let state_pp = goals
-                            .iter()
-                            .map(|g| g.raw.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
-
-                        let mut ebm_score = 0.0;
-                        if let Some(scorer) = scorer {
-                            ebm_score = scorer.score(&state_pp)?;
-                        }
-
-                        let child = SearchNode {
-                            state_id,
-                            state_pp,
-                            goals,
-                            parent: Some(node_idx),
-                            tactic_applied: candidate.text.clone(),
-                            depth: child_depth,
-                            llm_log_prob: candidate.log_prob,
-                            ebm_score,
-                            is_terminal: false,
-                        };
-
-                        if child_depth > max_depth_reached {
-                            max_depth_reached = child_depth;
-                        }
-
-                        let child_score =
-                            child.combined_score(self.config.alpha, self.config.beta);
-                        let child_idx = arena.len();
-                        arena.push(child);
-
-                        frontier.push(ScoredNode {
-                            node_index: child_idx,
-                            score: OrderedFloat(child_score),
-                        });
-                        stats.peak_frontier_size =
-                            stats.peak_frontier_size.max(frontier.len());
-                    }
-                    TacticResult::ProofComplete { state_id } => {
-                        let child_depth = node_depth + 1;
-                        stats.nodes_terminal += 1;
-                        let terminal = SearchNode {
-                            state_id,
-                            state_pp: String::new(),
-                            goals: vec![],
-                            parent: Some(node_idx),
-                            tactic_applied: candidate.text.clone(),
-                            depth: child_depth,
-                            llm_log_prob: candidate.log_prob,
-                            ebm_score: 0.0,
-                            is_terminal: true,
-                        };
-
-                        if child_depth > max_depth_reached {
-                            max_depth_reached = child_depth;
-                        }
-
-                        let terminal_idx = arena.len();
-                        arena.push(terminal);
-
-                        let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
-                        let wall_time_ms = start_time.elapsed().as_millis() as u64;
-                        let total_states = arena.len() as u32;
-                        let records = build_trajectory_records(&arena, theorem_name);
-
-                        stats.nodes_expanded = nodes_expanded;
-
-                        tracing::debug!(
-                            theorem = theorem_name,
-                            steps = proof_tactics.len(),
-                            nodes = nodes_expanded,
-                            states = total_states,
-                            time_ms = wall_time_ms,
-                            "Proof found"
-                        );
-
-                        return Ok(SearchResult {
-                            theorem_name: theorem_name.to_string(),
-                            proved: true,
-                            proof_tactics,
-                            nodes_expanded,
-                            total_states,
-                            max_depth_reached,
-                            wall_time_ms,
-                            all_records: records,
-                            stats,
-                        });
-                    }
-                    TacticResult::Failed { message } => {
-                        stats.total_tactic_failures += 1;
-                        tracing::debug!(
-                            tactic = candidate.text,
-                            error = message,
-                            "Tactic failed"
-                        );
-                    }
+            // Pop a batch of nodes from the frontier
+            let batch_size = self.config.batch_expansion_size.max(1).min(frontier.len());
+            let mut batch: Vec<ScoredNode> = Vec::with_capacity(batch_size);
+            for _ in 0..batch_size {
+                if let Some(node) = frontier.pop() {
+                    batch.push(node);
+                } else {
+                    break;
                 }
             }
 
-            nodes_expanded += 1;
+            // Filter out nodes at max depth
+            let mut expand_batch: Vec<&ScoredNode> = Vec::new();
+            for sn in &batch {
+                let node_depth = arena[sn.node_index].depth;
+                if node_depth >= self.config.max_depth {
+                    nodes_expanded += 1;
+                    stats.nodes_pruned += 1;
+                } else {
+                    expand_batch.push(sn);
+                }
+            }
+
+            if expand_batch.is_empty() {
+                continue;
+            }
+
+            // Batch-generate candidates for all nodes
+            let prompts: Vec<String> = expand_batch
+                .iter()
+                .map(|sn| arena[sn.node_index].goals_as_text())
+                .collect();
+
+            let gen_start = std::time::Instant::now();
+            let batch_candidates = policy.generate_candidates_batch(
+                &prompts,
+                self.config.num_candidates,
+            ).await?;
+            stats.total_generate_time_ms += gen_start.elapsed().as_millis() as u64;
+
+            // Expand each node in the batch
+            for (i, sn) in expand_batch.iter().enumerate() {
+                let node_idx = sn.node_index;
+                let node_state_id = arena[node_idx].state_id;
+                let node_depth = arena[node_idx].depth;
+
+                tracing::trace!(
+                    node = node_idx,
+                    state_id = node_state_id,
+                    depth = node_depth,
+                    score = %sn.score,
+                    "Expanding node"
+                );
+
+                let mut candidates = batch_candidates[i].clone();
+
+                // Track LLM candidate count before probe injection
+                let llm_count = candidates.len();
+                stats.candidates_per_expansion.push(llm_count);
+
+                // Inject fallback tactics when LLM returns nothing
+                if candidates.is_empty() && !self.config.fallback_tactics.is_empty() {
+                    tracing::debug!(
+                        node = node_idx,
+                        "LLM returned no candidates, using fallback tactics"
+                    );
+                    candidates = self
+                        .config
+                        .fallback_tactics
+                        .iter()
+                        .map(|t| GeneratedTactic {
+                            text: t.clone(),
+                            raw_text: t.clone(),
+                            log_prob: -100.0,
+                            tokens: vec![],
+                        })
+                        .collect();
+                }
+
+                // Append probe tactics (deduped against LLM candidates)
+                let num_probes = inject_probes(&mut candidates, &self.config.probe_tactics);
+
+                for (cand_idx, candidate) in candidates.iter().enumerate() {
+                    let is_probe = cand_idx >= candidates.len() - num_probes;
+                    if is_probe {
+                        stats.probe_attempts += 1;
+                    }
+
+                    stats.total_tactic_attempts += 1;
+                    let tactic_start = std::time::Instant::now();
+                    let result = runner
+                        .apply_tactic(node_state_id, None, &candidate.text)
+                        .await?;
+                    stats.total_lean_time_ms += tactic_start.elapsed().as_millis() as u64;
+
+                    match result {
+                        TacticResult::Success { state_id, goals } => {
+                            let child_depth = node_depth + 1;
+
+                            let state_pp = goals
+                                .iter()
+                                .map(|g| g.raw.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+
+                            // Loop detection: skip states we've already visited
+                            if visited_states.contains(&state_pp) {
+                                let looped = SearchNode {
+                                    state_id,
+                                    state_pp,
+                                    goals,
+                                    parent: Some(node_idx),
+                                    tactic_applied: candidate.text.clone(),
+                                    depth: child_depth,
+                                    llm_log_prob: candidate.log_prob,
+                                    ebm_score: 0.0,
+                                    is_terminal: false,
+                                };
+                                arena.push(looped);
+                                stats.loops_detected += 1;
+                                continue;
+                            }
+                            visited_states.insert(state_pp.clone());
+
+                            if is_probe {
+                                stats.probe_successes += 1;
+                            }
+
+                            let mut ebm_score = 0.0;
+                            if let Some(scorer) = scorer {
+                                ebm_score = scorer.score(&state_pp)?;
+                            }
+
+                            let child = SearchNode {
+                                state_id,
+                                state_pp,
+                                goals,
+                                parent: Some(node_idx),
+                                tactic_applied: candidate.text.clone(),
+                                depth: child_depth,
+                                llm_log_prob: candidate.log_prob,
+                                ebm_score,
+                                is_terminal: false,
+                            };
+
+                            if child_depth > max_depth_reached {
+                                max_depth_reached = child_depth;
+                            }
+
+                            let child_score =
+                                child.combined_score(self.config.alpha, self.config.beta);
+                            let child_idx = arena.len();
+                            arena.push(child);
+
+                            frontier.push(ScoredNode {
+                                node_index: child_idx,
+                                score: OrderedFloat(child_score),
+                            });
+                            stats.peak_frontier_size =
+                                stats.peak_frontier_size.max(frontier.len());
+                        }
+                        TacticResult::ProofComplete { state_id } => {
+                            let child_depth = node_depth + 1;
+                            stats.nodes_terminal += 1;
+                            let terminal = SearchNode {
+                                state_id,
+                                state_pp: String::new(),
+                                goals: vec![],
+                                parent: Some(node_idx),
+                                tactic_applied: candidate.text.clone(),
+                                depth: child_depth,
+                                llm_log_prob: candidate.log_prob,
+                                ebm_score: 0.0,
+                                is_terminal: true,
+                            };
+
+                            if child_depth > max_depth_reached {
+                                max_depth_reached = child_depth;
+                            }
+
+                            let terminal_idx = arena.len();
+                            arena.push(terminal);
+
+                            // Sibling harvest: expand proof path ancestors for hard negatives
+                            if self.config.harvest_siblings {
+                                harvest_siblings(
+                                    &mut arena,
+                                    terminal_idx,
+                                    &self.config,
+                                    &mut *runner,
+                                    policy,
+                                    scorer,
+                                    &mut stats,
+                                )
+                                .await?;
+                            }
+
+                            let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
+                            let wall_time_ms = start_time.elapsed().as_millis() as u64;
+                            let total_states = arena.len() as u32;
+                            let records = build_trajectory_records(&arena, theorem_name);
+
+                            stats.nodes_expanded = nodes_expanded;
+
+                            tracing::debug!(
+                                theorem = theorem_name,
+                                steps = proof_tactics.len(),
+                                nodes = nodes_expanded,
+                                states = total_states,
+                                time_ms = wall_time_ms,
+                                "Proof found"
+                            );
+
+                            return Ok(SearchResult {
+                                theorem_name: theorem_name.to_string(),
+                                proved: true,
+                                proof_tactics,
+                                nodes_expanded,
+                                total_states,
+                                max_depth_reached,
+                                wall_time_ms,
+                                all_records: records,
+                                stats,
+                            });
+                        }
+                        TacticResult::Failed { message } => {
+                            stats.total_tactic_failures += 1;
+                            tracing::trace!(
+                                tactic = candidate.text,
+                                error = message,
+                                "Tactic failed"
+                            );
+                        }
+                    }
+                }
+
+                nodes_expanded += 1;
+            }
         }
 
         // Search exhausted without finding a proof
@@ -386,6 +483,145 @@ impl SearchEngine {
             stats,
         })
     }
+}
+
+/// Inject probe tactics into candidates, deduped against existing LLM candidates.
+/// Returns the number of probes actually appended.
+fn inject_probes(candidates: &mut Vec<GeneratedTactic>, probes: &[String]) -> usize {
+    if probes.is_empty() {
+        return 0;
+    }
+    let llm_texts: HashSet<String> = candidates
+        .iter()
+        .map(|c| c.text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let mut count = 0;
+    for probe in probes {
+        let norm = probe.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !llm_texts.contains(&norm) {
+            candidates.push(GeneratedTactic {
+                text: probe.clone(),
+                raw_text: probe.clone(),
+                log_prob: -10.0,
+                tokens: vec![],
+            });
+            count += 1;
+        }
+    }
+    count
+}
+
+/// After finding a proof, expand sibling states on the proof path for hard negatives.
+async fn harvest_siblings(
+    arena: &mut Vec<SearchNode>,
+    terminal_idx: usize,
+    config: &SearchConfig,
+    runner: &mut (dyn TacticRunner + Send),
+    policy: &dyn PolicyProvider,
+    scorer: Option<&dyn ValueScorer>,
+    stats: &mut SearchStats,
+) -> Result<(), SearchError> {
+    // Collect ancestor node indices on the proof path
+    let proof_path: HashSet<usize> = {
+        let mut path = HashSet::new();
+        let mut idx = terminal_idx;
+        while let Some(parent) = arena[idx].parent {
+            path.insert(parent);
+            idx = parent;
+        }
+        path.insert(0); // root
+        path
+    };
+
+    // Collect the tactic used from each ancestor to its proof-path child
+    let proof_tactics_used: HashSet<(usize, String)> = {
+        let mut set = HashSet::new();
+        let mut idx = terminal_idx;
+        while let Some(parent) = arena[idx].parent {
+            set.insert((parent, arena[idx].tactic_applied.clone()));
+            idx = parent;
+        }
+        set
+    };
+
+    // Collect ancestor data before mutating arena
+    let ancestors: Vec<(usize, u64, u32, String)> = proof_path
+        .iter()
+        .filter(|&&idx| arena[idx].depth < config.max_depth)
+        .map(|&idx| {
+            (
+                idx,
+                arena[idx].state_id,
+                arena[idx].depth,
+                arena[idx].goals_as_text(),
+            )
+        })
+        .collect();
+
+    // Batch-generate candidates for all ancestors in one call
+    let prompts: Vec<String> = ancestors.iter().map(|(_, _, _, g)| g.clone()).collect();
+    let batch_candidates = policy
+        .generate_candidates_batch(&prompts, config.num_candidates)
+        .await?;
+
+    for (i, (ancestor_idx, anc_state_id, anc_depth, _)) in ancestors.into_iter().enumerate() {
+        let mut siblings = batch_candidates[i].clone();
+        inject_probes(&mut siblings, &config.probe_tactics);
+
+        for sib in &siblings {
+            // Skip the tactic that's already on the proof path from this ancestor
+            if proof_tactics_used.contains(&(ancestor_idx, sib.text.clone())) {
+                continue;
+            }
+
+            let result = runner
+                .apply_tactic(anc_state_id, None, &sib.text)
+                .await?;
+            match result {
+                TacticResult::Success { state_id, goals } => {
+                    let spp = goals
+                        .iter()
+                        .map(|g| g.raw.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    let mut ebm_score = 0.0;
+                    if let Some(scorer) = scorer {
+                        ebm_score = scorer.score(&spp).unwrap_or(0.0);
+                    }
+                    arena.push(SearchNode {
+                        state_id,
+                        state_pp: spp,
+                        goals,
+                        parent: Some(ancestor_idx),
+                        tactic_applied: sib.text.clone(),
+                        depth: anc_depth + 1,
+                        llm_log_prob: sib.log_prob,
+                        ebm_score,
+                        is_terminal: false,
+                    });
+                    stats.sibling_states_mined += 1;
+                }
+                TacticResult::ProofComplete { state_id } => {
+                    // Alternative proof — record as non-terminal
+                    arena.push(SearchNode {
+                        state_id,
+                        state_pp: String::new(),
+                        goals: vec![],
+                        parent: Some(ancestor_idx),
+                        tactic_applied: sib.text.clone(),
+                        depth: anc_depth + 1,
+                        llm_log_prob: sib.log_prob,
+                        ebm_score: 0.0,
+                        is_terminal: false,
+                    });
+                    stats.sibling_states_mined += 1;
+                }
+                TacticResult::Failed { .. } => {}
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Convert the search arena into trajectory records for Parquet output.
@@ -785,5 +1021,186 @@ mod tests {
 
         assert!(result.proved);
         assert_eq!(result.proof_tactics, vec!["intro h", "exact h"]);
+    }
+
+    #[tokio::test]
+    async fn test_search_with_probe_tactics() {
+        // LLM returns no candidates, but probe "trivial" solves the goal.
+        let mut env = MockEnvironment::new();
+        env.add_response(0, "trivial", TacticResult::ProofComplete { state_id: 1 });
+
+        let policy = MockPolicy::new(); // returns empty for all states
+
+        let config = SearchConfig {
+            probe_tactics: vec!["trivial".to_string()],
+            fallback_tactics: vec![],
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "probe_test", "True")
+            .await
+            .unwrap();
+
+        assert!(result.proved, "Probe tactic should find the proof");
+        assert_eq!(result.proof_tactics, vec!["trivial"]);
+        assert!(result.stats.probe_attempts > 0);
+    }
+
+    #[tokio::test]
+    async fn test_loop_detection() {
+        // Tactic "loop" leads back to the same state → should be detected as a loop
+        let mut env = MockEnvironment::new();
+        env.add_response(
+            0,
+            "loop",
+            TacticResult::Success {
+                state_id: 1,
+                goals: vec![Goal::parse(0, "⊢ ∀ x, x = x")],
+            },
+        );
+
+        let mut policy = MockPolicy::new();
+        policy.add_response("⊢ ∀ x, x = x", vec![make_tactic("loop", -0.5)]);
+
+        let config = SearchConfig {
+            max_nodes: 5,
+            probe_tactics: vec![],
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "loop_test", "∀ x, x = x")
+            .await
+            .unwrap();
+
+        assert!(!result.proved);
+        // The loop node should be in the arena but not lead to infinite expansion
+        assert!(result.stats.loops_detected > 0, "Should detect at least one loop");
+        // Arena should have root + first success + looped node
+        assert!(result.all_records.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_harvest_siblings() {
+        // Two-step proof, harvest_siblings = true → extra sibling nodes
+        let mut env = MockEnvironment::new();
+        env.add_response(
+            0,
+            "intro n",
+            TacticResult::Success {
+                state_id: 1,
+                goals: vec![Goal::parse(0, "n : Nat\n⊢ n = n")],
+            },
+        );
+        env.add_response(1, "rfl", TacticResult::ProofComplete { state_id: 2 });
+        // Sibling from root: "simp" produces a different state
+        env.add_response(
+            0,
+            "simp",
+            TacticResult::Success {
+                state_id: 3,
+                goals: vec![Goal::parse(0, "⊢ simp_result")],
+            },
+        );
+
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            "⊢ ∀ (n : Nat), n = n",
+            vec![make_tactic("intro n", -0.3), make_tactic("simp", -0.5)],
+        );
+        policy.add_response("n : Nat\n⊢ n = n", vec![make_tactic("rfl", -0.1)]);
+
+        let config = SearchConfig {
+            harvest_siblings: true,
+            probe_tactics: vec![],
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "harvest_test", "∀ (n : Nat), n = n")
+            .await
+            .unwrap();
+
+        assert!(result.proved);
+        assert_eq!(result.proof_tactics, vec!["intro n", "rfl"]);
+        // Should have mined siblings from the proof path ancestors
+        assert!(
+            result.stats.sibling_states_mined > 0,
+            "Should mine at least one sibling state"
+        );
+        // Arena should have more than just the 3 proof nodes
+        assert!(
+            result.all_records.len() > 3,
+            "Should have extra sibling nodes: got {}",
+            result.all_records.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_batched_expansion() {
+        // batch_expansion_size = 2 should expand two nodes at once
+        let mut env = MockEnvironment::new();
+        env.add_response(
+            0,
+            "branch_a",
+            TacticResult::Success {
+                state_id: 1,
+                goals: vec![Goal::parse(0, "⊢ A")],
+            },
+        );
+        env.add_response(
+            0,
+            "branch_b",
+            TacticResult::Success {
+                state_id: 2,
+                goals: vec![Goal::parse(0, "⊢ B")],
+            },
+        );
+        env.add_response(1, "solve_a", TacticResult::ProofComplete { state_id: 3 });
+
+        let mut policy = MockPolicy::new();
+        policy.add_response(
+            "⊢ ∀ x, x = x",
+            vec![make_tactic("branch_a", -0.3), make_tactic("branch_b", -0.4)],
+        );
+        policy.add_response("⊢ A", vec![make_tactic("solve_a", -0.1)]);
+        policy.add_response("⊢ B", vec![]);
+
+        let config = SearchConfig {
+            batch_expansion_size: 2,
+            probe_tactics: vec![],
+            ..SearchConfig::default()
+        };
+        let engine = SearchEngine::new(config);
+        let result = engine
+            .search_one(&env, &policy, None, "batch_test", "∀ x, x = x")
+            .await
+            .unwrap();
+
+        assert!(result.proved);
+        assert_eq!(result.proof_tactics, vec!["branch_a", "solve_a"]);
+    }
+
+    #[test]
+    fn test_inject_probes_dedup() {
+        let mut candidates = vec![make_tactic("simp", -0.5)];
+        let probes = vec!["simp".to_string(), "ring".to_string(), "omega".to_string()];
+        let count = inject_probes(&mut candidates, &probes);
+        // "simp" should be deduped, "ring" and "omega" added
+        assert_eq!(count, 2);
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].text, "simp");
+        assert_eq!(candidates[1].text, "ring");
+        assert_eq!(candidates[2].text, "omega");
+    }
+
+    #[test]
+    fn test_inject_probes_empty() {
+        let mut candidates = vec![make_tactic("intro", -0.5)];
+        let probes: Vec<String> = vec![];
+        let count = inject_probes(&mut candidates, &probes);
+        assert_eq!(count, 0);
+        assert_eq!(candidates.len(), 1);
     }
 }

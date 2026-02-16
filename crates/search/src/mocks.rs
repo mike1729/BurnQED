@@ -72,8 +72,9 @@ impl MockPolicy {
     }
 }
 
+#[async_trait]
 impl PolicyProvider for MockPolicy {
-    fn generate_candidates(
+    async fn generate_candidates(
         &self,
         proof_state: &str,
         _n: usize,
@@ -192,52 +193,53 @@ mod tests {
         assert!(t.tokens.is_empty());
     }
 
-    #[test]
-    fn test_mock_policy_exact_match() {
+    #[tokio::test]
+    async fn test_mock_policy_exact_match() {
         let mut policy = MockPolicy::new();
         policy.add_response(
             "⊢ True",
             vec![make_tactic("trivial", -0.1)],
         );
-        let result = policy.generate_candidates("⊢ True", 32).unwrap();
+        let result = policy.generate_candidates("⊢ True", 32).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "trivial");
     }
 
-    #[test]
-    fn test_mock_policy_default_fallback() {
+    #[tokio::test]
+    async fn test_mock_policy_default_fallback() {
         let policy = MockPolicy::with_default(vec![make_tactic("sorry", -5.0)]);
-        let result = policy.generate_candidates("anything", 32).unwrap();
+        let result = policy.generate_candidates("anything", 32).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "sorry");
     }
 
-    #[test]
-    fn test_mock_policy_empty() {
+    #[tokio::test]
+    async fn test_mock_policy_empty() {
         let policy = MockPolicy::new();
-        let result = policy.generate_candidates("⊢ True", 32).unwrap();
+        let result = policy.generate_candidates("⊢ True", 32).await.unwrap();
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn test_mock_policy_contains_match() {
+    #[tokio::test]
+    async fn test_mock_policy_contains_match() {
         let mut policy = MockPolicy::new();
         policy.add_contains_response("n = n", vec![make_tactic("rfl", -0.1)]);
         // Should match because "n : Nat\n⊢ n = n" contains "n = n"
         let result = policy
             .generate_candidates("n : Nat\n⊢ n = n", 32)
+            .await
             .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "rfl");
     }
 
-    #[test]
-    fn test_mock_policy_exact_before_contains() {
+    #[tokio::test]
+    async fn test_mock_policy_exact_before_contains() {
         let mut policy = MockPolicy::new();
         policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
         policy.add_contains_response("True", vec![make_tactic("decide", -0.5)]);
         // Exact match should take priority over contains
-        let result = policy.generate_candidates("⊢ True", 32).unwrap();
+        let result = policy.generate_candidates("⊢ True", 32).await.unwrap();
         assert_eq!(result[0].text, "trivial");
     }
 

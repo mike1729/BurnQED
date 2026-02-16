@@ -29,6 +29,7 @@ ensure_sglang "$SGLANG_URL"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
+EVAL_MAX_THEOREMS="${EVAL_MAX_THEOREMS:-500}"
 EBM_STEPS="${EBM_STEPS:-2000}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
@@ -48,7 +49,7 @@ echo "  Config:          ${SEARCH_CONFIG}"
 echo "  SGLang:          ${SGLANG_URL}"
 echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
-echo "  Max theorems:    ${MAX_THEOREMS}"
+echo "  Max theorems:    ${MAX_THEOREMS} (eval: ${EVAL_MAX_THEOREMS})"
 echo "  EBM steps:       ${EBM_STEPS}"
 echo "================================================================"
 
@@ -162,7 +163,7 @@ $PROVER eval \
     --output "${EVAL_DIR}/iter_${ITER}.json" \
     --num-workers "$NUM_WORKERS" \
     --concurrency "$CONCURRENCY" \
-    --max-theorems "$MAX_THEOREMS" \
+    --max-theorems "$EVAL_MAX_THEOREMS" \
     --num-candidates 16 \
     --imports Mathlib
 
@@ -179,7 +180,7 @@ if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
-        --max-theorems "$MAX_THEOREMS" \
+        --max-theorems "$EVAL_MAX_THEOREMS" \
         --num-candidates 16 \
         --imports Mathlib
 fi

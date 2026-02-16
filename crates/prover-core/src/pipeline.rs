@@ -18,7 +18,7 @@ use ebm::{
 };
 use lean_repl::{LeanPool, TacticResult};
 use policy::{InferenceHandle, SglangClient, SglangConfig};
-use search::{InferencePolicyProvider, SearchConfig, SearchEngine};
+use search::{CachedPolicy, InferencePolicyProvider, SearchConfig, SearchEngine};
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
@@ -146,7 +146,7 @@ type TrainingBackend = Autodiff<CudaJit>;
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
-    policy: InferencePolicyProvider,
+    policy: CachedPolicy<InferencePolicyProvider>,
     value_fn: Option<EBMValueFn>,
     /// Display string for the inference backend (model path or server URL).
     inference_label: String,
@@ -187,7 +187,8 @@ async fn load_policy_and_ebm(
     let client = SglangClient::new(config).await?;
     let inference_handle = InferenceHandle::new(client);
 
-    let policy = InferencePolicyProvider::new(inference_handle.clone());
+    let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
+    let policy = CachedPolicy::new(raw_policy, 10_000);
 
     // 4. Optional EBM scorer
     let value_fn = load_ebm_scorer(ebm_path, &inference_handle)?;
@@ -715,6 +716,160 @@ pub fn run_summary(args: SummaryArgs) -> anyhow::Result<()> {
     if summary.unique_theorems > 0 {
         let rate = summary.proved_theorems as f64 / summary.unique_theorems as f64 * 100.0;
         println!("Prove rate: {rate:.1}%");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Export proof paths from trajectory Parquet to tactic-pairs JSONL
+// ---------------------------------------------------------------------------
+
+/// Arguments for the `export-proof-paths` subcommand.
+#[derive(Debug)]
+pub struct ExportProofPathsArgs {
+    /// Input trajectory Parquet files.
+    pub trajectories: Vec<PathBuf>,
+    /// Output tactic-pairs JSONL file.
+    pub output: PathBuf,
+    /// Minimum number of proof steps per theorem (filters short proofs).
+    pub min_steps: Option<usize>,
+}
+
+/// Extract proof paths from trajectory Parquet files and write tactic-pairs JSONL.
+///
+/// For each proved theorem, extracts the Positive-labeled records (the proof path),
+/// reconstructs the step sequence sorted by depth, and writes each step as a
+/// `{"state", "tactic", "theorem", "depth"}` JSON line compatible with
+/// `generate-negatives --tactic-pairs`.
+///
+/// When multiple trajectory files are provided, theorems are deduplicated by name
+/// (first occurrence wins — use the file with the best data first).
+pub fn run_export_proof_paths(args: ExportProofPathsArgs) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let mut seen_theorems: HashSet<String> = HashSet::new();
+    let mut total_theorems = 0usize;
+    let mut total_steps = 0usize;
+
+    let file = std::fs::File::create(&args.output)?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    for path in &args.trajectories {
+        let records = TrajectoryReader::read_all(path)?;
+        tracing::info!(
+            path = %path.display(),
+            records = records.len(),
+            "Loaded trajectory file"
+        );
+
+        // Group records by theorem name
+        let mut by_theorem: HashMap<String, Vec<&TrajectoryRecord>> = HashMap::new();
+        for record in &records {
+            by_theorem
+                .entry(record.theorem_name.clone())
+                .or_default()
+                .push(record);
+        }
+
+        for (theorem_name, theorem_records) in &by_theorem {
+            // Skip if already seen from an earlier file
+            if seen_theorems.contains(theorem_name) {
+                continue;
+            }
+
+            // Only process proved theorems (must have at least one proof-complete record)
+            let has_proof = theorem_records
+                .iter()
+                .any(|r| r.is_proof_complete);
+            if !has_proof {
+                continue;
+            }
+
+            // Extract proof path: Positive-labeled records sorted by depth
+            let mut proof_path: Vec<&TrajectoryRecord> = theorem_records
+                .iter()
+                .filter(|r| r.label == TrajectoryLabel::Positive)
+                .copied()
+                .collect();
+            proof_path.sort_by_key(|r| r.depth_from_root);
+
+            // Filter out root node (empty tactic); keep terminal (empty state_pp
+            // is fine — we use the parent's state_pp for the JSONL "state" field)
+            let steps: Vec<&TrajectoryRecord> = proof_path
+                .iter()
+                .filter(|r| !r.tactic_applied.is_empty())
+                .copied()
+                .collect();
+
+            // Apply min_steps filter
+            if let Some(min) = args.min_steps {
+                if steps.len() < min {
+                    continue;
+                }
+            }
+
+            if steps.is_empty() {
+                continue;
+            }
+
+            seen_theorems.insert(theorem_name.clone());
+            total_theorems += 1;
+
+            // Write the proof-path state *before* each tactic is applied.
+            // For a proof path: root -[tac0]-> s1 -[tac1]-> s2 -[tac2]-> QED
+            // We need: (root_state, tac0, depth=0), (s1_state, tac1, depth=1), ...
+            //
+            // The Parquet records store each node's state_pp as the state *after*
+            // the tactic was applied. So to get the state *before* tactic[i],
+            // we need the parent's state_pp.
+            //
+            // Build a state_id -> state_pp map from all records.
+            let id_to_state: HashMap<u64, &str> = theorem_records
+                .iter()
+                .map(|r| (r.state_id, r.state_pp.as_str()))
+                .collect();
+
+            for step in &steps {
+                // The state before this tactic = parent's state_pp
+                let before_state = step
+                    .parent_state_id
+                    .and_then(|pid| id_to_state.get(&pid))
+                    .copied()
+                    .unwrap_or("");
+
+                if before_state.is_empty() {
+                    continue;
+                }
+
+                // depth is the parent's depth (depth_from_root - 1), matching
+                // generate-negatives convention where depth=0 is the first tactic
+                let depth = step.depth_from_root.saturating_sub(1);
+
+                let json = serde_json::json!({
+                    "state": before_state,
+                    "tactic": step.tactic_applied,
+                    "theorem": theorem_name,
+                    "depth": depth,
+                });
+                writeln!(writer, "{}", json)?;
+                total_steps += 1;
+            }
+        }
+    }
+
+    writer.flush()?;
+
+    println!("--- Export Proof Paths ---");
+    println!("Input files:    {}", args.trajectories.len());
+    println!("Theorems:       {total_theorems}");
+    println!("Steps:          {total_steps}");
+    println!("Output:         {}", args.output.display());
+    if total_theorems > 0 {
+        println!(
+            "Avg steps/thm:  {:.1}",
+            total_steps as f64 / total_theorems as f64
+        );
     }
 
     Ok(())
@@ -1484,7 +1639,7 @@ async fn process_theorem(
             {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::debug!(
+                    tracing::trace!(
                         theorem = theorem_name,
                         step = step_idx,
                         error = %e,
@@ -1500,7 +1655,7 @@ async fn process_theorem(
         let gt_normalized = normalize_tactic(&step.tactic);
 
         if !candidates.is_empty() {
-            tracing::debug!(
+            tracing::trace!(
                 theorem = theorem_name,
                 step = step_idx,
                 candidates = candidates.len(),
@@ -1529,7 +1684,7 @@ async fn process_theorem(
                 candidate.text.clone()
             };
 
-            tracing::debug!(
+            tracing::trace!(
                 theorem = theorem_name,
                 step = step_idx,
                 candidate = candidate.text,
@@ -1621,7 +1776,7 @@ async fn process_theorem(
                     // path); otherwise they stay Negative (divergent).
                     let all_tactics = policy::extract_all_tactics(&candidate.raw_text);
                     if all_tactics.len() > 1 {
-                        tracing::debug!(
+                        tracing::trace!(
                             theorem = theorem_name,
                             step = step_idx,
                             total_tactics = all_tactics.len(),
@@ -1644,7 +1799,7 @@ async fn process_theorem(
                                 Ok(TacticResult::ProofComplete { .. }) => {
                                     chain_proved = true;
                                     outcome.alternative_proofs += 1;
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         theorem = theorem_name,
                                         chain_len = all_tactics.len(),
                                         "Multi-tactic chain completed proof"
@@ -1684,7 +1839,7 @@ async fn process_theorem(
                                     chain_state_id = next_id;
                                 }
                                 Ok(TacticResult::Failed { message }) => {
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         theorem = theorem_name,
                                         chain_tactic = chain_tactic.as_str(),
                                         error = message,
@@ -1693,7 +1848,7 @@ async fn process_theorem(
                                     break;
                                 }
                                 Err(e) => {
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         theorem = theorem_name,
                                         chain_tactic = chain_tactic.as_str(),
                                         error = %e,
@@ -1730,7 +1885,7 @@ async fn process_theorem(
                     }
                 }
                 Ok(TacticResult::Failed { message }) => {
-                    tracing::debug!(
+                    tracing::trace!(
                         theorem = theorem_name,
                         candidate = candidate.text,
                         error = message,
@@ -1738,7 +1893,7 @@ async fn process_theorem(
                     );
                 }
                 Err(e) => {
-                    tracing::debug!(
+                    tracing::trace!(
                         theorem = theorem_name,
                         candidate = candidate.text,
                         error = %e,
@@ -1888,7 +2043,7 @@ async fn process_theorem(
             }
 
             if probe_hits > 0 {
-                tracing::debug!(
+                tracing::trace!(
                     theorem = theorem_name,
                     step = step_idx,
                     probe_hits,
@@ -1923,7 +2078,7 @@ async fn process_theorem(
                     {
                         Ok(r) => Some(r),
                         Err(e) => {
-                            tracing::debug!(
+                            tracing::trace!(
                                 theorem = theorem_name,
                                 step = step_idx,
                                 tactic = step.tactic,
@@ -1935,7 +2090,7 @@ async fn process_theorem(
                     }
                 }
                 Err(e) => {
-                    tracing::debug!(
+                    tracing::trace!(
                         theorem = theorem_name,
                         step = step_idx,
                         tactic = step.tactic,
@@ -1960,7 +2115,7 @@ async fn process_theorem(
                     // succeeded earlier (use its state to explore deeper).
                     if let Some((adv_id, adv_pp)) = probe_advance_state.take()
                     {
-                        tracing::debug!(
+                        tracing::trace!(
                             theorem = theorem_name,
                             step = step_idx,
                             "Entering zombie walk (ground-truth failed, advancing via probe)"
@@ -1980,7 +2135,7 @@ async fn process_theorem(
                 current_state_id = adv_id;
                 pantograph_state_pp = adv_pp;
             } else {
-                tracing::debug!(
+                tracing::trace!(
                     theorem = theorem_name,
                     step = step_idx,
                     "Zombie walk ended (no probe could advance)"

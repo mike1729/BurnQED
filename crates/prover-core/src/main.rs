@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use pipeline::{CompareArgs, EvalArgs, GenerateNegativesArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
+use pipeline::{CompareArgs, EvalArgs, ExportProofPathsArgs, GenerateNegativesArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
 
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
@@ -70,6 +70,18 @@ enum Command {
         /// Path to the trajectory Parquet file.
         #[arg(long)]
         input: PathBuf,
+    },
+    /// Export proof paths from trajectory Parquet files to tactic-pairs JSONL.
+    ExportProofPaths {
+        /// Path(s) to trajectory Parquet files.
+        #[arg(long, required = true, num_args = 1..)]
+        trajectories: Vec<PathBuf>,
+        /// Output tactic-pairs JSONL file.
+        #[arg(long)]
+        output: PathBuf,
+        /// Minimum number of proof steps per theorem (filters out short proofs).
+        #[arg(long)]
+        min_steps: Option<usize>,
     },
     /// Evaluate a model at multiple search budgets.
     Eval {
@@ -252,6 +264,15 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Command::Summary { input } => pipeline::run_summary(SummaryArgs { input }),
+        Command::ExportProofPaths {
+            trajectories,
+            output,
+            min_steps,
+        } => pipeline::run_export_proof_paths(ExportProofPathsArgs {
+            trajectories,
+            output,
+            min_steps,
+        }),
         Command::Eval {
             config,
             server_url,

@@ -84,6 +84,14 @@ pub struct SearchStats {
     pub total_generate_time_ms: u64,
     /// Number of unique candidates returned per expansion (after dedup).
     pub candidates_per_expansion: Vec<usize>,
+    /// Number of probe tactic attempts (subset of total_tactic_attempts).
+    pub probe_attempts: u32,
+    /// Number of probe tactics that produced valid states.
+    pub probe_successes: u32,
+    /// Number of states detected as loops (visited before).
+    pub loops_detected: u32,
+    /// Number of sibling states mined after proof found.
+    pub sibling_states_mined: u32,
 }
 
 /// Result of searching for a proof of a single theorem.

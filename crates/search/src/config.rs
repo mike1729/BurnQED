@@ -28,6 +28,18 @@ pub struct SearchConfig {
     /// Fallback tactics to try when the LLM generates no candidates.
     #[serde(default = "default_fallback_tactics")]
     pub fallback_tactics: Vec<String>,
+
+    /// Built-in Lean tactics tried alongside LLM candidates at each expansion.
+    #[serde(default = "default_probe_tactics")]
+    pub probe_tactics: Vec<String>,
+
+    /// Whether to mine sibling states from the proof path after finding a proof.
+    #[serde(default)]
+    pub harvest_siblings: bool,
+
+    /// Number of nodes to expand per batch (1 = sequential, >1 = batched).
+    #[serde(default = "default_batch_expansion_size")]
+    pub batch_expansion_size: usize,
 }
 
 fn default_max_nodes() -> u32 {
@@ -50,6 +62,19 @@ fn default_timeout() -> u64 {
 }
 fn default_fallback_tactics() -> Vec<String> {
     Vec::new()
+}
+fn default_probe_tactics() -> Vec<String> {
+    [
+        "simp", "ring", "omega", "norm_num", "decide", "trivial", "rfl", "tauto",
+        "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left",
+        "right", "ext", "simp_all",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+fn default_batch_expansion_size() -> usize {
+    1
 }
 
 impl SearchConfig {
@@ -77,6 +102,9 @@ impl Default for SearchConfig {
             beta: default_beta(),
             timeout_per_theorem: default_timeout(),
             fallback_tactics: default_fallback_tactics(),
+            probe_tactics: default_probe_tactics(),
+            harvest_siblings: false,
+            batch_expansion_size: default_batch_expansion_size(),
         }
     }
 }
@@ -95,6 +123,9 @@ mod tests {
         assert!((cfg.beta - 0.5).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 600);
         assert!(cfg.fallback_tactics.is_empty());
+        assert_eq!(cfg.probe_tactics.len(), 17);
+        assert!(!cfg.harvest_siblings);
+        assert_eq!(cfg.batch_expansion_size, 1);
     }
 
     #[test]
@@ -141,6 +172,33 @@ mod tests {
         // Default config should not warn (alpha + beta == 1.0)
         let cfg = SearchConfig::default();
         cfg.validate(); // Should not panic
+    }
+
+    #[test]
+    fn test_probe_tactics_disabled() {
+        let toml_str = r#"
+            probe_tactics = []
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.probe_tactics.is_empty());
+    }
+
+    #[test]
+    fn test_harvest_siblings_enabled() {
+        let toml_str = r#"
+            harvest_siblings = true
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.harvest_siblings);
+    }
+
+    #[test]
+    fn test_batch_expansion_size() {
+        let toml_str = r#"
+            batch_expansion_size = 8
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.batch_expansion_size, 8);
     }
 
     #[test]

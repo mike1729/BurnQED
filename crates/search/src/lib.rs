@@ -14,12 +14,14 @@
 //! - [`InferencePolicyProvider`] — SGLang-backed policy adapter
 
 pub mod adapters;
+pub mod cache;
 pub mod config;
 pub mod engine;
 pub mod mocks;
 pub mod node;
 
 pub use adapters::InferencePolicyProvider;
+pub use cache::CachedPolicy;
 pub use config::SearchConfig;
 pub use engine::{
     PolicyProvider, ProofEnvironment, SearchEngine, SearchError, TacticRunner, ValueScorer,

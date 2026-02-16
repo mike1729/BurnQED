@@ -85,15 +85,33 @@ impl InferencePolicyProvider {
     }
 }
 
+#[async_trait]
 impl PolicyProvider for InferencePolicyProvider {
-    fn generate_candidates(
+    async fn generate_candidates(
         &self,
         proof_state: &str,
         n: usize,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
         self.handle
-            .generate_candidates_blocking(proof_state, n)
+            .generate_candidates(proof_state, n)
+            .await
             .map_err(SearchError::Policy)
+    }
+
+    async fn generate_candidates_batch(
+        &self,
+        states: &[String],
+        n: usize,
+    ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
+        let futs: Vec<_> = states
+            .iter()
+            .map(|s| self.handle.generate_candidates(s, n))
+            .collect();
+        let results = futures::future::join_all(futs).await;
+        results
+            .into_iter()
+            .map(|r| r.map_err(SearchError::Policy))
+            .collect()
     }
 }
 
