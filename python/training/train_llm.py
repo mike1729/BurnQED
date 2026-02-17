@@ -299,15 +299,27 @@ def train(args):
 
     # Validation dataset (optional, always unpacked — padding is fine for eval)
     eval_dataset = None
+    full_eval_dataset = None
     if args.val_data:
         val_records = load_base_data(args.val_data)
-        eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
+        full_eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
+        # Quick subset for frequent eval (every 100 steps)
+        eval_subset_size = 500
+        if len(val_records) > eval_subset_size:
+            import random as _rng
+            _rng.seed(args.seed)
+            eval_subset_records = _rng.sample(val_records, eval_subset_size)
+            eval_dataset = build_dataset(eval_subset_records, tokenizer, args.max_seq_len)
+            logger.info("Eval subset: %d / %d examples (quick eval every 100 steps, full eval every 500)",
+                        eval_subset_size, len(val_records))
+        else:
+            eval_dataset = full_eval_dataset
 
     logger.info(
         "Dataset split — train: %d %s, val: %s",
         len(train_dataset),
         "packed chunks" if args.pack else "examples",
-        f"{len(eval_dataset)} examples" if eval_dataset else "none",
+        f"{len(eval_dataset)} examples (quick) / {len(full_eval_dataset)} (full)" if eval_dataset else "none",
     )
 
     if args.pack and not eval_dataset:
@@ -365,6 +377,21 @@ def train(args):
         data_collator=data_collator,
     )
 
+    # Full eval callback every 500 steps (quick subset runs every 100 via eval_steps)
+    if full_eval_dataset is not None and full_eval_dataset is not eval_dataset:
+        from transformers import TrainerCallback
+
+        class FullEvalCallback(TrainerCallback):
+            def on_step_end(self, args, state, control, **kwargs):
+                if state.global_step > 0 and state.global_step % 500 == 0:
+                    metrics = trainer.evaluate(
+                        eval_dataset=full_eval_dataset,
+                        metric_key_prefix="full_eval",
+                    )
+                    trainer.log(metrics)
+
+        trainer.add_callback(FullEvalCallback())
+
     logger.info("Starting training...")
     train_result = trainer.train()
 
@@ -377,9 +404,9 @@ def train(args):
     metrics = train_result.metrics
     logger.info("Training complete. Metrics: %s", json.dumps(metrics, indent=2))
 
-    if eval_dataset:
-        eval_metrics = trainer.evaluate()
-        logger.info("Eval metrics: %s", json.dumps(eval_metrics, indent=2))
+    if full_eval_dataset:
+        eval_metrics = trainer.evaluate(eval_dataset=full_eval_dataset, metric_key_prefix="final_eval")
+        logger.info("Final eval metrics: %s", json.dumps(eval_metrics, indent=2))
 
     # Save training summary
     summary = {
