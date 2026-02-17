@@ -30,7 +30,7 @@ CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EVAL_MAX_THEOREMS="${EVAL_MAX_THEOREMS:-500}"
-EBM_STEPS="${EBM_STEPS:-2000}"
+EBM_STEPS="${EBM_STEPS:-1500}"
 ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-64}"
 ENCODE_CONCURRENCY="${ENCODE_CONCURRENCY:-8}"
 EBM_RESUME="${EBM_RESUME:-auto}"
@@ -59,32 +59,81 @@ echo "================================================================"
 # ── Step 2: EBM Training (skip iteration 0) ───────────────────────────────
 if [ "$ITER" -gt 0 ]; then
     echo ""
-    echo "=== Step 2: EBM Training ==="
+    echo "=== Step 2a: Preparing EBM Training Data ==="
 
+    # Collect trajectory files from all previous iterations.
+    # Includes: iter_N.parquet, iter_N_noisy.parquet, iter_N_harvest.parquet,
+    #           iter_N_negatives.parquet, etc.
+    # Excludes: *_test.parquet, *_debug.parquet, *_smoke.parquet (tiny artifacts)
     TRAJ_FILES=()
     for i in $(seq 0 "$PREV"); do
         pattern="${TRAJ_DIR}/iter_${i}*.parquet"
         # shellcheck disable=SC2086
         for f in $pattern; do
+            base=$(basename "$f")
+            case "$base" in
+                *_test.parquet|*_debug.parquet|*_smoke.parquet) continue ;;
+            esac
             [ -f "$f" ] && TRAJ_FILES+=("$f")
         done
     done
 
+    if [ ${#TRAJ_FILES[@]} -eq 0 ]; then
+        echo "ERROR: No trajectory files found for iterations 0..${PREV}"
+        exit 1
+    fi
+
+    # Data summary: report files, total size, and record stats
+    echo "  Trajectory files (${#TRAJ_FILES[@]}):"
+    TOTAL_SIZE=0
+    for f in "${TRAJ_FILES[@]}"; do
+        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+        fsize_mb=$((fsize / 1048576))
+        TOTAL_SIZE=$((TOTAL_SIZE + fsize))
+        echo "    $(basename "$f")  (${fsize_mb}MB)"
+    done
+    echo "  Total: $((TOTAL_SIZE / 1048576))MB across ${#TRAJ_FILES[@]} files"
+
+    # Quick record count via Python (fast — reads only Parquet metadata + label column)
+    python3 -c "
+import pyarrow.parquet as pq
+from collections import Counter
+import sys
+files = sys.argv[1:]
+total, labels = 0, Counter()
+states = set()
+for f in files:
+    t = pq.read_table(f, columns=['label', 'state_pp'])
+    total += len(t)
+    labels.update(t.column('label').to_pylist())
+    states.update(t.column('state_pp').to_pylist())
+print(f'  Records: {total:,} ({labels.get(\"positive\",0):,} pos, {labels.get(\"negative\",0):,} neg)')
+print(f'  Unique states to encode: {len(states):,}')
+print(f'  EBM network: 11M params (4096→2048→1024→512→1)')
+steps = int('${EBM_STEPS}')
+bs = 128
+draws = steps * bs
+print(f'  Training: {steps} steps × {bs} batch = {draws:,} samples')
+print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
+" "${TRAJ_FILES[@]}"
+
+    # EBM resume logic
     RESUME_FLAG=""
     PREV_EBM="${REPO_ROOT}/checkpoints/ebm/iter_${PREV}"
     if [ "$EBM_RESUME" = "none" ]; then
         RESUME_FLAG=""
+        echo "  Resume: disabled (EBM_RESUME=none)"
     elif [ "$EBM_RESUME" = "auto" ] && [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
         RESUME_FLAG="--resume-from ${PREV_EBM}"
+        echo "  Resume: from ${PREV_EBM}"
+    else
+        echo "  Resume: none (no previous checkpoint or EBM_RESUME=${EBM_RESUME})"
     fi
 
     EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"
 
-    TACTIC_PAIRS_FLAG=""
-    TACTIC_PAIRS_FILE="${REPO_ROOT}/data/tactic_pairs/train.jsonl"
-    if [ -f "$TACTIC_PAIRS_FILE" ]; then
-        TACTIC_PAIRS_FLAG="--tactic-pairs ${TACTIC_PAIRS_FILE}"
-    fi
+    echo ""
+    echo "=== Step 2b: EBM Training ==="
 
     # shellcheck disable=SC2086
     $PROVER train-ebm \
@@ -97,8 +146,7 @@ if [ "$ITER" -gt 0 ]; then
         --save-embeddings "$EMBEDDINGS_SAVE" \
         $RESUME_FLAG \
         --encode-batch-size "$ENCODE_BATCH_SIZE" \
-        --encode-concurrency "$ENCODE_CONCURRENCY" \
-        $TACTIC_PAIRS_FLAG
+        --encode-concurrency "$ENCODE_CONCURRENCY"
 else
     echo ""
     echo "=== Step 2: Skipping EBM training (iteration 0) ==="
