@@ -32,7 +32,7 @@ MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EVAL_MAX_THEOREMS="${EVAL_MAX_THEOREMS:-500}"
 EBM_STEPS="${EBM_STEPS:-1500}"
 ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-64}"
-ENCODE_CONCURRENCY="${ENCODE_CONCURRENCY:-8}"
+ENCODE_CONCURRENCY="${ENCODE_CONCURRENCY:-2}"
 EBM_RESUME="${EBM_RESUME:-auto}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
@@ -134,6 +134,13 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
 
     EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"
 
+    # Auto-resume from partial embeddings cache if it exists
+    EMBEDDINGS_CACHE_FLAG=""
+    if [ -f "$EMBEDDINGS_SAVE" ]; then
+        EMBEDDINGS_CACHE_FLAG="--embeddings-cache ${EMBEDDINGS_SAVE}"
+        echo "  Warm start: loading existing embeddings from ${EMBEDDINGS_SAVE}"
+    fi
+
     echo ""
     echo "=== Step 2b: EBM Training ==="
 
@@ -146,6 +153,7 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
         --steps "$EBM_STEPS" \
         --batch-size 128 \
         --save-embeddings "$EMBEDDINGS_SAVE" \
+        $EMBEDDINGS_CACHE_FLAG \
         $RESUME_FLAG \
         --encode-batch-size "$ENCODE_BATCH_SIZE" \
         --encode-concurrency "$ENCODE_CONCURRENCY"

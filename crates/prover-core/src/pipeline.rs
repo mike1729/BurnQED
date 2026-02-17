@@ -1926,10 +1926,12 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let encode_concurrency = args.encode_concurrency;
     let encode_batch_size = args.encode_batch_size;
 
+    let checkpoint_path = args.save_embeddings.as_deref();
+
     let (newly_encoded, encode_errors) = if encode_batch_size > 0 {
         // Batched: send N texts per HTTP request for GPU-optimal batching
         cache
-            .precompute_batched(
+            .precompute_batched_with_checkpoint(
                 &unique_states,
                 |texts: Vec<String>| {
                     let h = handle.clone();
@@ -1944,6 +1946,8 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
                 encode_batch_size,
                 encode_concurrency,
                 hidden_size,
+                checkpoint_path,
+                20_000,
             )
             .await
     } else {

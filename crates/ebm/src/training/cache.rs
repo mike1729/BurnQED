@@ -219,6 +219,9 @@ impl EmbeddingCache {
     /// and processes up to `concurrency` chunks concurrently via
     /// `buffer_unordered`. Progress bar increments per state (not per batch).
     ///
+    /// If `checkpoint_path` is provided, saves progress every `checkpoint_interval`
+    /// states so encoding can be resumed after crashes/restarts.
+    ///
     /// Returns `(newly_encoded, errors)`.
     pub async fn precompute_batched<F, Fut>(
         &mut self,
@@ -227,6 +230,25 @@ impl EmbeddingCache {
         batch_size: usize,
         concurrency: usize,
         dim: usize,
+    ) -> (usize, usize)
+    where
+        F: Fn(Vec<String>) -> Fut,
+        Fut: Future<Output = anyhow::Result<Vec<anyhow::Result<Vec<f32>>>>>,
+    {
+        self.precompute_batched_with_checkpoint(states, encode_batch_fn, batch_size, concurrency, dim, None, 20_000).await
+    }
+
+    /// Like [`precompute_batched`](Self::precompute_batched) but with periodic
+    /// checkpoint saves for crash resilience.
+    pub async fn precompute_batched_with_checkpoint<F, Fut>(
+        &mut self,
+        states: &HashSet<&str>,
+        encode_batch_fn: F,
+        batch_size: usize,
+        concurrency: usize,
+        dim: usize,
+        checkpoint_path: Option<&Path>,
+        checkpoint_interval: usize,
     ) -> (usize, usize)
     where
         F: Fn(Vec<String>) -> Fut,
@@ -270,6 +292,7 @@ impl EmbeddingCache {
         let mut errors = 0usize;
         let start = Instant::now();
         let mut done = 0usize;
+        let mut last_checkpoint = 0usize;
 
         // Chunk missing states into batches, stream with bounded concurrency
         let chunks: Vec<Vec<String>> = missing
@@ -320,6 +343,39 @@ impl EmbeddingCache {
                 }
             }
             pb.set_message(format_eta(start, done, total));
+
+            // Periodic checkpoint save
+            if let Some(cp_path) = checkpoint_path {
+                if encoded - last_checkpoint >= checkpoint_interval {
+                    if let Err(e) = self.save(cp_path) {
+                        tracing::warn!(error = %e, "Failed to save checkpoint");
+                    } else {
+                        tracing::info!(
+                            encoded,
+                            total_cached = self.embeddings.len(),
+                            path = %cp_path.display(),
+                            "Checkpoint saved"
+                        );
+                    }
+                    last_checkpoint = encoded;
+                }
+            }
+        }
+
+        // Final checkpoint save (capture any remaining since last checkpoint)
+        if let Some(cp_path) = checkpoint_path {
+            if encoded > last_checkpoint {
+                if let Err(e) = self.save(cp_path) {
+                    tracing::warn!(error = %e, "Failed to save final checkpoint");
+                } else {
+                    tracing::info!(
+                        encoded,
+                        total_cached = self.embeddings.len(),
+                        path = %cp_path.display(),
+                        "Final checkpoint saved"
+                    );
+                }
+            }
         }
 
         pb.finish_with_message("done");
