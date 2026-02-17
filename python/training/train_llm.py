@@ -347,7 +347,7 @@ def train(args):
         num_train_epochs=args.epochs,
         max_steps=args.max_steps if args.max_steps > 0 else -1,
         per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size * 4,
+        per_device_eval_batch_size=args.batch_size if args.pack else args.batch_size * 4,
         gradient_accumulation_steps=args.gradient_accumulation,
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
