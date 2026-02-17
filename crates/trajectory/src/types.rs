@@ -189,7 +189,7 @@ impl TheoremIndex {
 }
 
 /// Quick statistics from a trajectory file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TrajectorySummary {
     /// Total number of trajectory records.
     pub total_records: usize,
@@ -286,5 +286,23 @@ mod tests {
         assert!(record.parent_state_id.is_none());
         assert_eq!(record.label, TrajectoryLabel::Unknown);
         assert!(!record.is_proof_complete);
+    }
+
+    #[test]
+    fn test_trajectory_summary_json_roundtrip() {
+        let summary = TrajectorySummary {
+            total_records: 100,
+            positive_count: 60,
+            negative_count: 30,
+            unique_theorems: 20,
+            proved_theorems: 12,
+        };
+        let json = serde_json::to_string_pretty(&summary).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["total_records"], 100);
+        assert_eq!(parsed["positive_count"], 60);
+        assert_eq!(parsed["negative_count"], 30);
+        assert_eq!(parsed["unique_theorems"], 20);
+        assert_eq!(parsed["proved_theorems"], 12);
     }
 }
