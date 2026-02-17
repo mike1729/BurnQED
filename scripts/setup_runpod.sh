@@ -106,6 +106,25 @@ if [ -n "$PERSIST_DIR" ]; then
         fi
     done
 
+    # Symlink HuggingFace cache to workspace (avoids 13GB+ on overlay)
+    HF_CACHE_PERSIST="${PERSIST_DIR}/.cache/huggingface"
+    HF_CACHE_LOCAL="$HOME/.cache/huggingface"
+    mkdir -p "$(dirname "$HF_CACHE_PERSIST")"
+    if [ -L "$HF_CACHE_LOCAL" ]; then
+        echo "  ~/.cache/huggingface → already linked"
+    elif [ -d "$HF_CACHE_LOCAL" ]; then
+        echo "  ~/.cache/huggingface → migrating to persistent storage"
+        mkdir -p "$HF_CACHE_PERSIST"
+        cp -a "$HF_CACHE_LOCAL"/* "$HF_CACHE_PERSIST"/ 2>/dev/null || true
+        rm -rf "$HF_CACHE_LOCAL"
+        ln -s "$HF_CACHE_PERSIST" "$HF_CACHE_LOCAL"
+        echo "  ~/.cache/huggingface → linked"
+    else
+        mkdir -p "$HF_CACHE_PERSIST"
+        ln -s "$HF_CACHE_PERSIST" "$HF_CACHE_LOCAL"
+        echo "  ~/.cache/huggingface → linked (new)"
+    fi
+
     MODEL_CHECK="${PERSIST_DIR}/models/deepseek-prover-v2-7b"
     if [ -d "$MODEL_CHECK" ] && [ -n "$(ls -A "$MODEL_CHECK"/*.safetensors 2>/dev/null)" ]; then
         echo ""
@@ -212,6 +231,10 @@ fi
 # Configure accelerate for single-GPU
 echo "Configuring accelerate for single GPU..."
 accelerate config default 2>/dev/null || python -m accelerate config default 2>/dev/null || true
+
+# Purge pip cache to save overlay disk space (~5GB)
+echo "Purging pip cache..."
+pip cache purge 2>/dev/null || true
 
 # ── Step 7: Build prover-core (release) ───────────────────────────────────
 echo ""
