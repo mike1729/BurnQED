@@ -66,6 +66,8 @@ if [ "$ITER" -eq 0 ]; then
 else
     echo "Iteration ${ITER}: training with trajectory data from previous iterations"
 
+    # Collect all trajectory sources: iter_N parquets + negatives pipeline output.
+    # Each --extra-data flag takes one glob pattern (action="append" in argparse).
     EXTRA_DATA_ARGS=()
     for i in $(seq 0 "$PREV"); do
         pattern="${TRAJ_DIR}/iter_${i}*.parquet"
@@ -75,7 +77,17 @@ else
         fi
     done
 
+    # Include generate-negatives pipeline output (high-quality ground-truth data)
+    NEG_PATTERN="${TRAJ_DIR}/negatives_2*.parquet"
+    # shellcheck disable=SC2086
+    if compgen -G $NEG_PATTERN > /dev/null; then
+        EXTRA_DATA_ARGS+=(--extra-data "$NEG_PATTERN")
+    fi
+
     BASE_CKPT="${CKPT_DIR}/iter_${PREV}"
+    BASE_SUBSAMPLE="${BASE_SUBSAMPLE:-50000}"
+    TRAJECTORY_UPSAMPLE="${TRAJECTORY_UPSAMPLE:-1}"
+    MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
 
     # shellcheck disable=SC2086
     accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
@@ -85,9 +97,9 @@ else
         "${EXTRA_DATA_ARGS[@]}" \
         --output "${CKPT_DIR}/iter_${ITER}" \
         --base "$BASE_CKPT" \
-        --max-steps 800 \
-        --base-subsample 10000 \
-        --trajectory-upsample 10 \
+        --max-steps "$MAX_TRAIN_STEPS" \
+        --base-subsample "$BASE_SUBSAMPLE" \
+        --trajectory-upsample "$TRAJECTORY_UPSAMPLE" \
         --lr "$LR"
 fi
 

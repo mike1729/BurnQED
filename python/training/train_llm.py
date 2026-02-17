@@ -55,12 +55,18 @@ def load_trajectory_data(parquet_globs: list) -> list:
     """Load positive trajectory examples from Parquet files.
 
     Reads TrajectoryRecord fields: state_pp, tactic_applied, label.
-    Filters to label == "positive" and formats as [GOAL]{state}[PROOFSTEP]{tactic}.
+    Filters to label == "positive", removes sorry-containing tactics and
+    empty state/tactic records, deduplicates, and formats as
+    [GOAL]{state}[PROOFSTEP]{tactic}.
     """
     import pyarrow.parquet as pq
 
     records = []
+    seen = set()
     files = []
+    total_sorry = 0
+    total_empty = 0
+    total_dup = 0
     for pattern in parquet_globs:
         files.extend(sorted(glob.glob(pattern)))
 
@@ -73,24 +79,45 @@ def load_trajectory_data(parquet_globs: list) -> list:
             table = pq.read_table(path, columns=["state_pp", "tactic_applied", "label"])
             df = table.to_pandas()
             positive = df[df["label"] == "positive"]
+            file_added = 0
+            file_sorry = 0
+            file_empty = 0
+            file_dup = 0
 
             for _, row in positive.iterrows():
                 state = str(row["state_pp"]).strip()
                 tactic = str(row["tactic_applied"]).strip()
-                if state and tactic:
-                    text = f"[GOAL]{state}[PROOFSTEP]{tactic}"
-                    records.append({"text": text, "theorem": "", "depth": 0})
+                if not state or not tactic:
+                    file_empty += 1
+                    continue
+                if "sorry" in tactic:
+                    file_sorry += 1
+                    continue
+                key = (state, tactic)
+                if key in seen:
+                    file_dup += 1
+                    continue
+                seen.add(key)
+                text = f"[GOAL]{state}[PROOFSTEP]{tactic}"
+                records.append({"text": text, "theorem": "", "depth": 0})
+                file_added += 1
 
+            total_sorry += file_sorry
+            total_empty += file_empty
+            total_dup += file_dup
             logger.info(
-                "Loaded %d positive examples from %s (%d total rows)",
-                len(positive),
-                path,
-                len(df),
+                "Loaded %d usable examples from %s (%d positive, %d total rows, "
+                "filtered: %d empty, %d sorry, %d dup)",
+                file_added, path, len(positive), len(df),
+                file_empty, file_sorry, file_dup,
             )
         except Exception as e:
             logger.warning("Failed to read %s: %s", path, e)
 
-    logger.info("Total trajectory examples: %d", len(records))
+    logger.info(
+        "Total trajectory examples: %d unique (filtered: %d empty, %d sorry, %d dup)",
+        len(records), total_empty, total_sorry, total_dup,
+    )
     return records
 
 
@@ -333,9 +360,10 @@ def main():
     )
     parser.add_argument(
         "--extra-data",
-        nargs="*",
+        action="append",
         default=None,
-        help="Glob patterns for trajectory Parquet files (iterations > 0)",
+        help="Glob pattern for trajectory Parquet files (repeatable, e.g. "
+        "--extra-data 'iter_0*.parquet' --extra-data 'negatives_*.parquet')",
     )
     parser.add_argument(
         "--output",
