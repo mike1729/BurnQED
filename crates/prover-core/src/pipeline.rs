@@ -1947,7 +1947,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
                 encode_concurrency,
                 hidden_size,
                 checkpoint_path,
-                20_000,
+                10_000,
             )
             .await
     } else {
