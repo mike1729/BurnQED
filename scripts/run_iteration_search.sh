@@ -54,6 +54,8 @@ echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
 echo "  Max theorems:    ${MAX_THEOREMS} (eval: ${EVAL_MAX_THEOREMS})"
 echo "  EBM steps:       ${EBM_STEPS}"
+echo "  EBM resume:      ${EBM_RESUME}"
+echo "  Encode:          batch_size=${ENCODE_BATCH_SIZE} concurrency=${ENCODE_CONCURRENCY}"
 echo "================================================================"
 
 # ── Step 2: EBM Training (skip iteration 0) ───────────────────────────────
