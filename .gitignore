@@ -29,6 +29,10 @@ models/
 # Claude Code local settings
 .claude/
 
+# Claude Code temp files (used by Gemini review agents)
+.claude_tmp/*
+!.claude_tmp/.gitkeep
+
 # Generated data (large, reproducible via scripts/prepare_data.sh)
 data/tactic_pairs/
 data/theorem_index.json
