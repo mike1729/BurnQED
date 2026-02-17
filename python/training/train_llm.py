@@ -149,6 +149,49 @@ def build_dataset(records: list, tokenizer, max_seq_len: int):
     return dataset
 
 
+def pack_sequences(dataset, eos_token_id: int, max_seq_len: int):
+    """Pack tokenized sequences into fixed-length chunks for efficient training.
+
+    Concatenates all input_ids with EOS separators, then chunks into
+    fixed max_seq_len pieces. Each chunk becomes one training example
+    with labels = input_ids (standard causal LM training).
+    """
+    from datasets import Dataset as HFDataset
+
+    # Concatenate all sequences with EOS between them
+    all_ids = []
+    for ids in dataset["input_ids"]:
+        all_ids.extend(ids)
+        all_ids.append(eos_token_id)
+
+    # Chunk into fixed-length sequences
+    packed_input_ids = []
+    for i in range(0, len(all_ids) - max_seq_len + 1, max_seq_len):
+        chunk = all_ids[i : i + max_seq_len]
+        packed_input_ids.append(chunk)
+
+    # Drop remainder (< max_seq_len tokens)
+    original_count = len(dataset)
+    packed_count = len(packed_input_ids)
+    total_tokens = len(all_ids)
+    logger.info(
+        "Packed %d examples → %d chunks of %d tokens (%.1fx compression, %d tokens total, %d remainder dropped)",
+        original_count,
+        packed_count,
+        max_seq_len,
+        original_count / max(packed_count, 1),
+        total_tokens,
+        total_tokens - packed_count * max_seq_len,
+    )
+
+    packed_dataset = HFDataset.from_dict({
+        "input_ids": packed_input_ids,
+        "labels": packed_input_ids,  # causal LM: labels = input_ids
+        "attention_mask": [[1] * max_seq_len for _ in range(packed_count)],
+    })
+    return packed_dataset
+
+
 def train(args):
     """Run QLoRA fine-tuning."""
     from peft import LoraConfig, get_peft_model, PeftModel
@@ -159,6 +202,7 @@ def train(args):
         DataCollatorForSeq2Seq,
         Trainer,
         TrainingArguments,
+        default_data_collator,
     )
 
     # Quantization config for QLoRA
@@ -249,18 +293,28 @@ def train(args):
 
     train_dataset = build_dataset(train_records, tokenizer, args.max_seq_len)
 
-    # Validation dataset (optional)
+    # Pack training sequences for efficiency (unless --no-pack)
+    if args.pack:
+        train_dataset = pack_sequences(train_dataset, tokenizer.eos_token_id, args.max_seq_len)
+
+    # Validation dataset (optional, always unpacked — padding is fine for eval)
     eval_dataset = None
     if args.val_data:
         val_records = load_base_data(args.val_data)
         eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
 
-    # Data collator with dynamic padding (pads both input_ids and labels)
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer=tokenizer,
-        padding=True,
-        pad_to_multiple_of=8,
-    )
+    if args.pack and not eval_dataset:
+        # All sequences are fixed-length, no padding needed
+        data_collator = default_data_collator
+    else:
+        # Need padding collator (for unpacked train, or packed train + unpacked eval).
+        # DataCollatorForSeq2Seq handles both: fixed-length inputs pass through,
+        # variable-length inputs get padded.
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer=tokenizer,
+            padding=True,
+            pad_to_multiple_of=8,
+        )
 
     # Detect bf16 support
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -441,7 +495,14 @@ def main():
         default=42,
         help="Random seed (default: %(default)s)",
     )
+    parser.add_argument(
+        "--no-pack",
+        action="store_true",
+        default=False,
+        help="Disable sequence packing (use dynamic padding instead)",
+    )
     args = parser.parse_args()
+    args.pack = not args.no_pack
 
     train(args)
 
