@@ -297,12 +297,14 @@ def train(args):
     if args.pack:
         train_dataset = pack_sequences(train_dataset, tokenizer.eos_token_id, args.max_seq_len)
 
-    # Validation dataset (optional, always unpacked — padding is fine for eval)
+    # Validation dataset
     eval_dataset = None
     full_eval_dataset = None
     if args.val_data:
         val_records = load_base_data(args.val_data)
         full_eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
+        if args.pack:
+            full_eval_dataset = pack_sequences(full_eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
         # Quick subset for frequent eval (every 100 steps)
         eval_subset_size = 500
         if len(val_records) > eval_subset_size:
@@ -310,25 +312,25 @@ def train(args):
             _rng.seed(args.seed)
             eval_subset_records = _rng.sample(val_records, eval_subset_size)
             eval_dataset = build_dataset(eval_subset_records, tokenizer, args.max_seq_len)
+            if args.pack:
+                eval_dataset = pack_sequences(eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
             logger.info("Eval subset: %d / %d examples (quick eval every 100 steps, full eval every 500)",
                         eval_subset_size, len(val_records))
         else:
             eval_dataset = full_eval_dataset
 
+    unit = "packed chunks" if args.pack else "examples"
     logger.info(
         "Dataset split — train: %d %s, val: %s",
         len(train_dataset),
-        "packed chunks" if args.pack else "examples",
-        f"{len(eval_dataset)} examples (quick) / {len(full_eval_dataset)} (full)" if eval_dataset else "none",
+        unit,
+        f"{len(eval_dataset)} {unit} (quick) / {len(full_eval_dataset)} {unit} (full)" if eval_dataset else "none",
     )
 
-    if args.pack and not eval_dataset:
-        # All sequences are fixed-length, no padding needed
+    if args.pack:
+        # All datasets are fixed-length packed chunks, no padding needed
         data_collator = default_data_collator
     else:
-        # Need padding collator (for unpacked train, or packed train + unpacked eval).
-        # DataCollatorForSeq2Seq handles both: fixed-length inputs pass through,
-        # variable-length inputs get padded.
         data_collator = DataCollatorForSeq2Seq(
             tokenizer=tokenizer,
             padding=True,
