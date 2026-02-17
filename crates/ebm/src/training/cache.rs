@@ -122,6 +122,8 @@ impl EmbeddingCache {
         encode_fn: F,
         concurrency: usize,
         dim: usize,
+        checkpoint_path: Option<&Path>,
+        checkpoint_interval: usize,
     ) -> (usize, usize)
     where
         F: Fn(String) -> Fut,
@@ -160,6 +162,7 @@ impl EmbeddingCache {
         let mut errors = 0usize;
         let start = Instant::now();
         let mut done = 0usize;
+        let mut last_checkpoint = 0usize;
 
         // Stream of (state, result) pairs with bounded concurrency
         let mut result_stream = stream::iter(missing.into_iter().map(|state| {
@@ -189,6 +192,39 @@ impl EmbeddingCache {
             pb.inc(1);
             if done % 100 == 0 {
                 pb.set_message(format_eta(start, done, total));
+            }
+
+            // Periodic checkpoint save
+            if let Some(cp_path) = checkpoint_path {
+                if encoded - last_checkpoint >= checkpoint_interval {
+                    if let Err(e) = self.save(cp_path) {
+                        tracing::warn!(error = %e, "Failed to save checkpoint");
+                    } else {
+                        tracing::info!(
+                            encoded,
+                            total_cached = self.embeddings.len(),
+                            path = %cp_path.display(),
+                            "Checkpoint saved"
+                        );
+                    }
+                    last_checkpoint = encoded;
+                }
+            }
+        }
+
+        // Final checkpoint save
+        if let Some(cp_path) = checkpoint_path {
+            if encoded > last_checkpoint {
+                if let Err(e) = self.save(cp_path) {
+                    tracing::warn!(error = %e, "Failed to save final checkpoint");
+                } else {
+                    tracing::info!(
+                        encoded,
+                        total_cached = self.embeddings.len(),
+                        path = %cp_path.display(),
+                        "Final checkpoint saved"
+                    );
+                }
             }
         }
 
@@ -772,7 +808,7 @@ mod tests {
         };
 
         let (encoded, errors) = cache
-            .precompute_concurrent(&states, encode_fn, 4, 2)
+            .precompute_concurrent(&states, encode_fn, 4, 2, None, 10_000)
             .await;
 
         // "⊢ cached" should be skipped (not re-encoded)
