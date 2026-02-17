@@ -339,7 +339,7 @@ def train(args):
         save_steps=500,
         save_total_limit=3,
         eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=500 if eval_dataset else None,
+        eval_steps=100 if eval_dataset else None,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to="none",

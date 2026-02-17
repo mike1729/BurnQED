@@ -88,8 +88,8 @@ else
     BASE_SUBSAMPLE="${BASE_SUBSAMPLE:-50000}"
     TRAJECTORY_UPSAMPLE="${TRAJECTORY_UPSAMPLE:-1}"
     MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
-    BATCH_SIZE="${BATCH_SIZE:-4}"
-    GRAD_ACCUM="${GRAD_ACCUM:-4}"
+    BATCH_SIZE="${BATCH_SIZE:-8}"
+    GRAD_ACCUM="${GRAD_ACCUM:-2}"
 
     # shellcheck disable=SC2086
     accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
