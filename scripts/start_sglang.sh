@@ -44,4 +44,5 @@ python -m sglang.launch_server \
     --tp "$TP" \
     --trust-remote-code \
     --mem-fraction-static "$MEM_FRACTION" \
-    --enable-return-hidden-states
+    --enable-return-hidden-states \
+    --is-embedding
