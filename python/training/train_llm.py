@@ -303,6 +303,13 @@ def train(args):
         val_records = load_base_data(args.val_data)
         eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
 
+    logger.info(
+        "Dataset split — train: %d %s, val: %s",
+        len(train_dataset),
+        "packed chunks" if args.pack else "examples",
+        f"{len(eval_dataset)} examples" if eval_dataset else "none",
+    )
+
     if args.pack and not eval_dataset:
         # All sequences are fixed-length, no padding needed
         data_collator = default_data_collator
