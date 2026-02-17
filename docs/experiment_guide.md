@@ -51,13 +51,21 @@ The SGLang server handles request batching and scheduling internally. Multiple c
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `NUM_WORKERS` | 6 | Number of Lean worker processes |
-| `CONCURRENCY` | 6 | Number of theorems searched in parallel |
+| `NUM_WORKERS` | 8 | Number of Lean worker processes |
+| `CONCURRENCY` | 8 | Number of theorems searched in parallel |
 | `MAX_ITER` | 4 | Maximum iteration number (0-indexed) |
+| `MAX_THEOREMS` | 2000 | Maximum theorems per search run |
+| `EVAL_MAX_THEOREMS` | 500 | Maximum theorems per eval run |
 | `LLM_BASE` | `deepseek-ai/DeepSeek-Prover-V2-7B` | Base model for fine-tuning |
 | `SKIP_BASELINE` | 0 | Set to 1 to skip Phase B baseline |
 | `MODEL_PATH` | (none) | Local model dir for tokenizer in data prep |
 | `MATHLIB_COMMIT` | `v4.26.0` | Mathlib4 tag to trace (matches Pantograph lean-toolchain) |
+| `THEOREM_INDEX` | `data/theorem_index.json` | Path to theorem index for search |
+| `EBM_STEPS` | 1500 | Number of EBM training steps |
+| `EBM_RESUME` | `auto` | EBM checkpoint resume: `auto` (from prev iter), `none` (fresh) |
+| `ENCODE_BATCH_SIZE` | 64 | Texts per HTTP request during embedding precomputation |
+| `ENCODE_CONCURRENCY` | 2 | Concurrent encode HTTP requests |
+| `SGLANG_URL` | `http://localhost:30000` | SGLang inference server URL |
 
 ## Experiment Outputs
 
@@ -92,6 +100,26 @@ checkpoints/
 models/llm/iter_0 ... iter_4        # Merged safetensors for SGLang
 logs/iter_0.log ... iter_4.log      # Per-iteration logs
 ```
+
+## EBM Embedding Precomputation
+
+EBM training requires precomputing embeddings for all unique proof states (~100K+).
+This is the most time-consuming step.
+
+**Crash-resilient encoding:** Progress is checkpointed every 20K states to
+`${EBM_DIR}/embeddings.parquet`. On re-run, the script auto-loads the partial cache
+and encodes only the remaining states.
+
+**SGLang `--is-embedding` flag:** Enables the fast `/encode` endpoint (~7× faster
+than legacy path). However, may disable `/generate` — restart SGLang without it
+before proof search. See `docs/sglang.md` for details.
+
+**Tuning encode throughput:**
+
+| Parameter | Default | Notes |
+|-----------|---------|-------|
+| `ENCODE_BATCH_SIZE` | 64 | Texts per HTTP request. Reduce to 16 on OOM. |
+| `ENCODE_CONCURRENCY` | 2 | Concurrent requests. Keep low (1-2) on 24GB GPUs. |
 
 ## Go/No-Go Checkpoints
 

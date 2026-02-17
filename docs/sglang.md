@@ -243,8 +243,21 @@ TP="${TENSOR_PARALLEL:-1}"
 python -m sglang.launch_server \
     --model-path "$MODEL_PATH" --port "$PORT" --tp "$TP" \
     --trust-remote-code --mem-fraction-static 0.85 \
-    --enable-return-hidden-states
+    --enable-return-hidden-states \
+    --is-embedding
 ```
+
+**Flags:**
+- `--enable-return-hidden-states`: Enables hidden state extraction via `/generate` (legacy encode path)
+- `--is-embedding`: Enables the fast `/encode` endpoint for mean-pooled embeddings (~7× faster than legacy). **Required for EBM embedding precomputation.** Note: this flag may disable `/generate` for tactic generation — restart SGLang without it before proof search.
+
+**Dual-mode workflow** (EBM training + search in one iteration):
+1. Start SGLang with `--is-embedding` for EBM embedding precomputation (Step 2)
+2. Restart SGLang without `--is-embedding` for proof search (Steps 3-5)
+
+The `/encode` endpoint auto-detection in `SglangClient` handles both modes:
+- With `--is-embedding`: uses fast `/encode` (pooled, ~16KB response)
+- Without `--is-embedding`: falls back to `/generate` + `return_hidden_states` (legacy, ~10MB response)
 
 ### Step 9: Update shell scripts for `SGLANG_URL`
 
@@ -287,7 +300,8 @@ Tested with SGLang 0.5.8 + DeepSeek-Prover-V2-7B on GPU.
 | Mean-pooled embedding | **Works** | Norm ~18, matches expected range |
 | Multi-candidate generation | **Works** | `n=4` in sampling_params, returns 4 completions |
 | Log probabilities | **Works** | `return_logprob=True` top-level kwarg. `output_token_logprobs`: list of `(logprob, token_id, None)` tuples |
-| HTTP server hidden states | **Not tested** | Requires separate server launch with `--enable-return-hidden-states` |
+| HTTP server hidden states | **Works** | Requires `--enable-return-hidden-states` flag at launch |
+| `/encode` endpoint (pooled) | **Works** | Requires `--is-embedding` flag. Returns `{"embedding": [f32...]}` per input. Batch returns top-level array `[{"embedding": [...]}, ...]` |
 
 **Key API notes:**
 - `return_logprob` and `return_hidden_states` are **top-level kwargs** on `engine.generate()`, NOT inside `sampling_params`

@@ -46,11 +46,13 @@ You must use Secure Cloud (spot or on-demand) to attach a Network Volume.
 
 ### EBM Training
 
-- **GPU**: 1x any GPU with 8GB+ VRAM (only ~5M params)
+- **GPU**: 1x any GPU with 8GB+ VRAM (only ~11M params)
   - Even a T4 or RTX 3090 works
-  - Most time is spent on embedding precomputation (LLM forward passes)
+  - Most time is spent on embedding precomputation (LLM forward passes via SGLang)
 - **RAM**: 16GB+
-- **Time**: ~30 min for 50K steps with precomputed embeddings
+- **Time**: ~20 min for embedding precomputation (112K states, batch_size=64) + ~15 min for 1500 training steps
+- **SGLang note**: Use `--is-embedding` flag for fast `/encode` endpoint during precomputation.
+  Restart without it before proof search. ENCODE_CONCURRENCY=2 recommended on 24GB GPUs.
 
 ### Combined (One Iteration)
 
@@ -349,6 +351,7 @@ The Rust search loop handles SIGTERM (sent by cloud providers before spot termin
 |-----------|-----------|-------|
 | LLM fine-tuning | Partial | HuggingFace Trainer saves checkpoints every 500 steps; resume manually |
 | LLM export | No | Fast (~5 min), just re-run |
+| EBM embedding precompute | Yes | Checkpointed every 20K states to `embeddings.parquet`; auto-resumes on re-run |
 | EBM training | Yes | `--resume-from` loads checkpoint |
 | Search | Yes | `--resume-from` skips done theorems |
 | Evaluation | No | Fast per-budget; re-run entirely |

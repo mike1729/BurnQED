@@ -72,35 +72,78 @@ This is the headline result: a single LoRA fine-tuning pass on Mathlib tactic pa
 - Positive records: 324 (normal) + 575 (noisy) = 899
 - After filtering (non-empty state+tactic): 309 usable trajectory examples
 
-## Iteration 1 — Expert Iteration with Trajectory Data (In Progress)
+## Iteration 1 — Expert Iteration with Trajectory Data
 
-### Training Design Changes
+### Training (Step 1)
 
-Based on iter 0 observations, several training adjustments were made for iter 1:
+Based on iter 0 observations, several training adjustments were made:
 
-1. **Reduced max_steps: 1500 → 800.** Iter 0 loss plateaued around step 1200. With warm LoRA and halved LR, convergence should be faster.
-
-2. **Base data subsampling (10K).** The model already learned from the full 246K base in iter 0. Subsampling to 10K prevents redundant training and makes trajectory data more impactful.
-
-3. **Trajectory upsampling (×10).** 309 unique trajectory examples × 10 = ~3,090 copies. Combined with 10K base = ~13K total. Trajectory is ~23% of training mix, ensuring meaningful gradient signal from self-generated proofs.
-
-4. **LR halved: 2e-4 → 1e-4.** Standard cosine decay schedule, prevents overwriting learned representations.
+1. **Reduced max_steps: 1500 → 800.** Iter 0 loss plateaued around step 1200.
+2. **Base data subsampling (10K).** Model already learned from full 246K base in iter 0.
+3. **Trajectory upsampling (×10).** 309 unique trajectory examples × 10 = ~3,090 copies. ~23% of training mix.
+4. **LR halved: 2e-4 → 1e-4.** Prevents overwriting learned representations.
 
 **Training configuration:**
 - Base: `checkpoints/llm/iter_0` (warm LoRA adapter)
 - Data: 10K base subsample + ~3K trajectory (×10 upsample) = ~13K total
 - 800 steps × 32 effective batch = ~25K samples = ~2 passes through dataset
-- Estimated duration: ~1.2h
 
-### Upcoming Steps (Iter 1)
+### Search (Steps 2-5)
 
-After training completes:
-1. Export merged safetensors to `models/llm/iter_1`
-2. Restart SGLang with iter 1 model
-3. **EBM training** — first iteration with EBM (10K steps on iter 0 trajectories)
-4. Proof search with EBM guidance
-5. miniF2F eval with and without EBM (ablation study)
-6. Summary + comparison vs iter 0
+- EBM trained on iter 0 trajectories
+- Proof search with EBM guidance on 2000 theorems
+- Generate-negatives pipeline for contrastive training data (see `docs/ebm_overhaul.md`)
+- 127K records generated including probe tactics + zombie walk
+
+### Trajectory Data Collected
+
+| File | Records | Notes |
+|------|---------|-------|
+| `iter_0.parquet` | 3,830 | Normal search (T=0.8) |
+| `iter_0_noisy.parquet` | 4,619 | Noise injection (T=1.2) |
+| `iter_1.parquet` | ~100K+ | 2000-theorem search |
+| `iter_1_harvest.parquet` | ~15K | Harvested proof paths |
+| `iter_1_negatives.parquet` | 127K | Contrastive negatives (probes + LLM candidates) |
+| **Total** | **314,402** | 112,257 positive, 202,145 negative |
+
+## Iteration 2 — Scaling Up (In Progress)
+
+### LLM Training (Step 1)
+
+- **Base:** Merged iter 1 model (`models/llm/iter_1`)
+- **Checkpoint selection:** 3 checkpoints evaluated (1000, 1500, 2000 steps). `full_eval_loss` plateaued at step 1500 (0.4148), while `traj_eval_loss` kept decreasing — sign of overfitting to trajectory distribution. **Selected: checkpoint-1500.**
+- **Export:** Merged safetensors to `models/llm/iter_2` (6 shards, 25.75 GB)
+
+### Theorem Selection
+
+15,000 theorems selected from 61,542 total, excluding:
+- 21,776 depth≤1 theorems (from tactic_pairs metadata)
+- 3,164 probe-easy theorems (solved by built-in tactics only)
+- 3,600 already-searched theorems (from iter 0-1 runs)
+- Remaining 36,488 eligible → random 15K sample (seed=42)
+- Stored in `data/iter2_search_theorems.json`
+
+### EBM Training (Step 2)
+
+- **Data:** 314,402 records across 5 trajectory files (76MB total)
+- **States to encode:** 112,254 unique (after dedup)
+- **Network:** 11M params (4096→2048→1024→512→1)
+- **Training:** 1500 steps × 128 batch = 192K samples (~1.5 effective epochs)
+- **Resume:** Fresh start (EBM_RESUME=none — new model means incompatible embeddings)
+- **Encoding:** Checkpoint saves every 20K states for crash resilience
+
+### SGLang `--is-embedding` Discovery
+
+The `/encode` endpoint requires `--is-embedding` flag. Without it, SGLang returns 400
+and encoding falls back to slow `/generate` + `return_hidden_states` (~1.2 states/sec).
+With `--is-embedding`, encoding runs at ~86 states/sec (batch_size=64, concurrency=2).
+
+**Stability issues:** SGLang with `--is-embedding` on a generative model (DeepSeek-Prover-V2-7B)
+can freeze after processing ~8-28K states. Health check returns 503, GPU shows 0% utilization.
+Mitigated by periodic checkpoint saves (every 20K states) + auto-resume on re-run.
+
+**Batch response format:** SGLang native embedding mode returns `[{"embedding": [...]}, ...]`
+(top-level array), not `{"embeddings": [...]}` (object wrapper). Code updated to handle both.
 
 ## Key Findings So Far
 
