@@ -87,7 +87,7 @@ else
     BASE_CKPT="${CKPT_DIR}/iter_${PREV}"
     BASE_SUBSAMPLE="${BASE_SUBSAMPLE:-50000}"
     TRAJECTORY_UPSAMPLE="${TRAJECTORY_UPSAMPLE:-1}"
-    MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
+    MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-4000}"
 
     # shellcheck disable=SC2086
     accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
