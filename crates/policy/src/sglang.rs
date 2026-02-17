@@ -447,11 +447,13 @@ impl SglangClient {
                         return Ok(emb);
                     }
                     Err(e) => {
-                        // Only fall back to legacy if /encode returned 404 (endpoint doesn't exist).
+                        // Fall back to legacy if /encode returned a client error (400, 404).
+                        // 404 = endpoint doesn't exist; 400 = exists but --is-embedding not set.
                         // For transient errors (500, timeout), propagate so caller can retry.
-                        let is_not_found = e.to_string().contains("404");
-                        if is_not_found {
-                            tracing::debug!(error = %e, "Server /encode returned 404, falling back to legacy path");
+                        let err_str = e.to_string();
+                        let is_client_error = err_str.contains("404") || err_str.contains("400");
+                        if is_client_error {
+                            tracing::debug!(error = %e, "Server /encode unavailable, falling back to legacy path");
                             let emb = self.encode_legacy(text).await?;
                             self.encode_capability.store(ENCODE_LEGACY, Ordering::Relaxed);
                             tracing::info!(
