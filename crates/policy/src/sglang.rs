@@ -541,29 +541,41 @@ impl SglangClient {
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode /encode batch response: {e}"))?;
 
-        // Batch response: {"embeddings": [[f32...], ...]}
-        let embeddings_val = body.get("embeddings")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                let preview: String = body.to_string().chars().take(200).collect();
-                anyhow::anyhow!("Expected 'embeddings' array in /encode batch response, got: {preview}")
-            })?;
+        // Batch response formats:
+        //   SGLang --is-embedding: [{"embedding": [f32...]}, ...]  (top-level array)
+        //   Custom /encode server:  {"embeddings": [[f32...], ...]} (object wrapper)
+        let items: &Vec<serde_json::Value> = if let Some(arr) = body.as_array() {
+            // Top-level array: SGLang native embedding mode
+            arr
+        } else if let Some(arr) = body.get("embeddings").and_then(|v| v.as_array()) {
+            // Object wrapper: custom server
+            arr
+        } else {
+            let preview: String = body.to_string().chars().take(200).collect();
+            anyhow::bail!("Expected array or {{\"embeddings\": [...]}} in /encode batch response, got: {preview}");
+        };
 
-        if embeddings_val.len() != texts.len() {
+        if items.len() != texts.len() {
             anyhow::bail!(
                 "/encode batch response length mismatch: expected {}, got {}",
                 texts.len(),
-                embeddings_val.len()
+                items.len()
             );
         }
 
-        let results: Vec<anyhow::Result<Embedding>> = embeddings_val
+        let results: Vec<anyhow::Result<Embedding>> = items
             .iter()
             .enumerate()
             .map(|(i, emb_val)| {
-                let data: Vec<f32> = emb_val
-                    .as_array()
-                    .ok_or_else(|| anyhow::anyhow!("Batch item {i}: embedding is not an array"))?
+                // Each item is either [f32...] directly or {"embedding": [f32...]}
+                let arr = if let Some(inner) = emb_val.get("embedding").and_then(|v| v.as_array()) {
+                    inner
+                } else if let Some(inner) = emb_val.as_array() {
+                    inner
+                } else {
+                    anyhow::bail!("Batch item {i}: expected array or {{\"embedding\": [...]}}")
+                };
+                let data: Vec<f32> = arr
                     .iter()
                     .filter_map(|v| v.as_f64().map(|f| f as f32))
                     .collect();
