@@ -86,7 +86,6 @@ else
 
     BASE_CKPT="${CKPT_DIR}/iter_${PREV}"
     BASE_SUBSAMPLE="${BASE_SUBSAMPLE:-50000}"
-    TRAJECTORY_UPSAMPLE="${TRAJECTORY_UPSAMPLE:-1}"
     MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
     BATCH_SIZE="${BATCH_SIZE:-8}"
     GRAD_ACCUM="${GRAD_ACCUM:-2}"
@@ -101,7 +100,6 @@ else
         --base "$BASE_CKPT" \
         --max-steps "$MAX_TRAIN_STEPS" \
         --base-subsample "$BASE_SUBSAMPLE" \
-        --trajectory-upsample "$TRAJECTORY_UPSAMPLE" \
         --batch-size "$BATCH_SIZE" \
         --gradient-accumulation "$GRAD_ACCUM" \
         --lr "$LR"

@@ -270,25 +270,28 @@ def train(args):
         train_records = random.sample(train_records, args.base_subsample)
         logger.info("Subsampled base data: %d examples", len(train_records))
 
-    # Add trajectory data from previous iterations (optionally upsampled)
+    # Add trajectory data from previous iterations (90/10 train/val split)
+    traj_val_records = []
     if args.extra_data:
         extra_records = load_trajectory_data(args.extra_data)
-        if extra_records and args.trajectory_upsample > 1:
-            original_count = len(extra_records)
-            extra_records = extra_records * args.trajectory_upsample
-            logger.info(
-                "Upsampled trajectory data: %d → %d (×%d)",
-                original_count,
-                len(extra_records),
-                args.trajectory_upsample,
-            )
         if extra_records:
-            train_records.extend(extra_records)
+            random.seed(args.seed)
+            random.shuffle(extra_records)
+            split_idx = max(1, len(extra_records) // 10)
+            traj_val_records = extra_records[:split_idx]
+            traj_train_records = extra_records[split_idx:]
+            logger.info(
+                "Trajectory split: %d train / %d val",
+                len(traj_train_records),
+                len(traj_val_records),
+            )
+            base_count = len(train_records)
+            train_records.extend(traj_train_records)
             logger.info(
                 "Combined training set: %d examples (base: %d, trajectory: %d)",
                 len(train_records),
-                len(train_records) - len(extra_records),
-                len(extra_records),
+                base_count,
+                len(traj_train_records),
             )
 
     train_dataset = build_dataset(train_records, tokenizer, args.max_seq_len)
@@ -319,12 +322,21 @@ def train(args):
         else:
             eval_dataset = full_eval_dataset
 
+    # Trajectory eval dataset (from held-out 10% of trajectory data)
+    traj_eval_dataset = None
+    if traj_val_records:
+        traj_eval_dataset = build_dataset(traj_val_records, tokenizer, args.max_seq_len)
+        if args.pack:
+            traj_eval_dataset = pack_sequences(traj_eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
+
     unit = "packed chunks" if args.pack else "examples"
+    traj_str = f", traj_val: {len(traj_eval_dataset)} {unit}" if traj_eval_dataset else ""
     logger.info(
-        "Dataset split — train: %d %s, val: %s",
+        "Dataset split — train: %d %s, val: %s%s",
         len(train_dataset),
         unit,
         f"{len(eval_dataset)} {unit} (quick) / {len(full_eval_dataset)} {unit} (full)" if eval_dataset else "none",
+        traj_str,
     )
 
     if args.pack:
@@ -381,17 +393,25 @@ def train(args):
     )
 
     # Full eval callback every 500 steps (quick subset runs every 100 via eval_steps)
-    if full_eval_dataset is not None and full_eval_dataset is not eval_dataset:
+    has_periodic_eval = (full_eval_dataset is not None and full_eval_dataset is not eval_dataset) or traj_eval_dataset is not None
+    if has_periodic_eval:
         from transformers import TrainerCallback
 
         class FullEvalCallback(TrainerCallback):
             def on_step_end(self, args, state, control, **kwargs):
                 if state.global_step > 0 and state.global_step % 500 == 0:
-                    metrics = trainer.evaluate(
-                        eval_dataset=full_eval_dataset,
-                        metric_key_prefix="full_eval",
-                    )
-                    trainer.log(metrics)
+                    if full_eval_dataset is not None and full_eval_dataset is not eval_dataset:
+                        metrics = trainer.evaluate(
+                            eval_dataset=full_eval_dataset,
+                            metric_key_prefix="full_eval",
+                        )
+                        trainer.log(metrics)
+                    if traj_eval_dataset is not None:
+                        traj_metrics = trainer.evaluate(
+                            eval_dataset=traj_eval_dataset,
+                            metric_key_prefix="traj_eval",
+                        )
+                        trainer.log(traj_metrics)
 
         trainer.add_callback(FullEvalCallback())
 
@@ -410,6 +430,9 @@ def train(args):
     if full_eval_dataset:
         eval_metrics = trainer.evaluate(eval_dataset=full_eval_dataset, metric_key_prefix="final_eval")
         logger.info("Final eval metrics: %s", json.dumps(eval_metrics, indent=2))
+    if traj_eval_dataset:
+        traj_eval_metrics = trainer.evaluate(eval_dataset=traj_eval_dataset, metric_key_prefix="final_traj_eval")
+        logger.info("Final traj eval metrics: %s", json.dumps(traj_eval_metrics, indent=2))
 
     # Save training summary
     summary = {
@@ -513,12 +536,6 @@ def main():
         type=int,
         default=None,
         help="Subsample base data to this many examples (default: use all)",
-    )
-    parser.add_argument(
-        "--trajectory-upsample",
-        type=int,
-        default=1,
-        help="Repeat trajectory examples this many times (default: %(default)s, no upsampling)",
     )
     parser.add_argument(
         "--max-seq-len",
