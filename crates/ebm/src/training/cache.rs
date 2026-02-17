@@ -476,7 +476,7 @@ impl EmbeddingCache {
         self.dim
     }
 
-    /// Save the cache to a Parquet file.
+    /// Save the cache to a Parquet file (atomic write via temp file + rename).
     ///
     /// Schema: `state_pp: Utf8`, `embedding: List<Float32>`.
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
@@ -507,10 +507,13 @@ impl EmbeddingCache {
             vec![Arc::new(state_array), Arc::new(list_array)],
         )?;
 
-        let file = std::fs::File::create(path)?;
+        // Write to temp file then rename for atomic save (prevents corruption on crash)
+        let tmp_path = path.with_extension("parquet.tmp");
+        let file = std::fs::File::create(&tmp_path)?;
         let mut writer = ArrowWriter::try_new(file, schema, None)?;
         writer.write(&batch)?;
         writer.close()?;
+        std::fs::rename(&tmp_path, path)?;
 
         tracing::info!(
             entries = self.embeddings.len(),
