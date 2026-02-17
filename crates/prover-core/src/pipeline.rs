@@ -65,6 +65,8 @@ pub struct SearchArgs {
 pub struct SummaryArgs {
     /// Path to the trajectory Parquet file.
     pub input: PathBuf,
+    /// Output as JSON instead of human-readable text.
+    pub json: bool,
 }
 
 /// Arguments for the `eval` subcommand.
@@ -823,21 +825,399 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 pub fn run_summary(args: SummaryArgs) -> anyhow::Result<()> {
     let summary = TrajectoryReader::read_summary(&args.input)?;
 
-    println!("--- Trajectory Summary ---");
-    println!("File: {}", args.input.display());
-    println!("Total records: {}", summary.total_records);
-    println!("Positive: {}", summary.positive_count);
-    println!("Negative: {}", summary.negative_count);
-    println!(
-        "Unknown: {}",
-        summary.total_records - summary.positive_count - summary.negative_count
-    );
-    println!("Unique theorems: {}", summary.unique_theorems);
-    println!("Proved theorems: {}", summary.proved_theorems);
-    if summary.unique_theorems > 0 {
-        let rate = summary.proved_theorems as f64 / summary.unique_theorems as f64 * 100.0;
-        println!("Prove rate: {rate:.1}%");
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("--- Trajectory Summary ---");
+        println!("File: {}", args.input.display());
+        println!("Total records: {}", summary.total_records);
+        println!("Positive: {}", summary.positive_count);
+        println!("Negative: {}", summary.negative_count);
+        println!(
+            "Unknown: {}",
+            summary.total_records - summary.positive_count - summary.negative_count
+        );
+        println!("Unique theorems: {}", summary.unique_theorems);
+        println!("Proved theorems: {}", summary.proved_theorems);
+        if summary.unique_theorems > 0 {
+            let rate = summary.proved_theorems as f64 / summary.unique_theorems as f64 * 100.0;
+            println!("Prove rate: {rate:.1}%");
+        }
     }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Probe — probe-only tactic search (no LLM)
+// ---------------------------------------------------------------------------
+
+/// Arguments for the `probe` subcommand.
+#[derive(Debug)]
+pub struct ProbeArgs {
+    /// Path to the search config TOML file.
+    pub config: PathBuf,
+    /// Path to the theorem index JSON file.
+    pub theorems: PathBuf,
+    /// Path for the output JSON file (easy/hard/stats).
+    pub output: PathBuf,
+    /// Override the number of Lean workers.
+    pub num_workers: Option<usize>,
+    /// Number of theorems to search in parallel.
+    pub concurrency: usize,
+    /// Maximum number of theorems to process (truncates the index).
+    pub max_theorems: Option<usize>,
+    /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
+    pub imports: Option<Vec<String>>,
+    /// Override max_nodes for probe search (default: 100).
+    pub max_nodes: Option<u32>,
+    /// Optional path to write hard theorems as TheoremIndex JSON.
+    pub hard_theorems: Option<PathBuf>,
+}
+
+/// Result entry for an easily-proved theorem.
+#[derive(serde::Serialize)]
+struct ProbeEasyEntry {
+    name: String,
+    statement: String,
+    depth: u32,
+    tactics: Vec<String>,
+}
+
+/// Result entry for a hard (unproved by probes) theorem.
+#[derive(serde::Serialize)]
+struct ProbeHardEntry {
+    name: String,
+    statement: String,
+}
+
+/// Overall probe output structure.
+#[derive(serde::Serialize)]
+struct ProbeOutput {
+    easy: Vec<ProbeEasyEntry>,
+    hard: Vec<ProbeHardEntry>,
+    stats: ProbeStats,
+}
+
+/// Summary statistics for the probe run.
+#[derive(serde::Serialize)]
+struct ProbeStats {
+    total: usize,
+    easy: usize,
+    hard: usize,
+    errors: usize,
+    elapsed_secs: f64,
+}
+
+/// Outcome of a single theorem probe task, returned from spawned tasks.
+struct ProbeOutcome {
+    name: String,
+    statement: String,
+    result: Result<trajectory::SearchResult, search::SearchError>,
+}
+
+/// Run probe-only tactic search over a batch of theorems.
+///
+/// Uses `NullPolicyProvider` so only the engine's built-in probe tactics
+/// (simp, ring, omega, etc.) are tried. No SGLang server required.
+pub async fn run_probe(args: ProbeArgs) -> anyhow::Result<()> {
+    let start = Instant::now();
+    let concurrency = args.concurrency.max(1);
+
+    // 1. Load search config from TOML
+    let toml = load_search_toml(&args.config)?;
+    let mut search_config = toml.search;
+
+    // Override max_nodes for probe search (default: 100)
+    if let Some(max) = args.max_nodes {
+        search_config.max_nodes = max;
+    } else {
+        search_config.max_nodes = 100;
+    }
+    tracing::info!(max_nodes = search_config.max_nodes, "Probe search config");
+
+    // 2. Build Lean pool (no SGLang needed)
+    let lean_config = build_lean_pool_config(
+        &toml.lean_pool,
+        args.num_workers,
+        args.imports.as_deref(),
+    )?;
+    tracing::info!(
+        num_workers = lean_config.num_workers,
+        "Starting Lean worker pool"
+    );
+    let pool = Arc::new(LeanPool::new(lean_config).await?);
+
+    // 3. Load theorem index
+    let mut index = TheoremIndex::from_json(&args.theorems)?;
+    if let Some(max) = args.max_theorems {
+        if max < index.len() {
+            tracing::info!(total = index.len(), max, "Truncating theorem index");
+            index.theorems.truncate(max);
+        }
+    }
+    let total = index.len();
+    tracing::info!(count = total, "Loaded theorems for probe search");
+
+    // 4. Create engine with NullPolicyProvider
+    let engine = SearchEngine::new(search_config);
+    let null_policy: Arc<search::NullPolicyProvider> = Arc::new(search::NullPolicyProvider);
+
+    // 5. Progress bar
+    let pb = ProgressBar::new(total as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) easy={prefix} {msg}")
+            .expect("valid progress bar template")
+            .progress_chars("=> "),
+    );
+    pb.set_prefix("0");
+    pb.enable_steady_tick(Duration::from_secs(1));
+
+    // CTRL-C handler
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let sig_flag = interrupted.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        sig_flag.store(true, Ordering::Relaxed);
+        tracing::warn!("Interrupted by CTRL-C, finishing in-flight probes");
+    });
+
+    // 6. Concurrent probe search
+    let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut join_set: tokio::task::JoinSet<ProbeOutcome> = tokio::task::JoinSet::new();
+
+    let mut easy = Vec::new();
+    let mut hard = Vec::new();
+    let mut error_count = 0usize;
+    let mut easy_count = 0u32;
+
+    for task in &index.theorems {
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        // Drain completed tasks before waiting for a permit
+        while let Some(join_result) = join_set.try_join_next() {
+            match join_result {
+                Ok(outcome) => {
+                    match outcome.result {
+                        Ok(result) => {
+                            if result.proved {
+                                easy_count += 1;
+                                easy.push(ProbeEasyEntry {
+                                    name: outcome.name,
+                                    statement: outcome.statement,
+                                    depth: result.max_depth_reached,
+                                    tactics: result.proof_tactics,
+                                });
+                            } else {
+                                hard.push(ProbeHardEntry {
+                                    name: outcome.name,
+                                    statement: outcome.statement,
+                                });
+                            }
+                        }
+                        Err(e) => {
+                            error_count += 1;
+                            tracing::debug!(
+                                theorem = outcome.name,
+                                error = %e,
+                                "Probe failed, counting as hard"
+                            );
+                            hard.push(ProbeHardEntry {
+                                name: outcome.name,
+                                statement: outcome.statement,
+                            });
+                        }
+                    }
+                    pb.inc(1);
+                    pb.set_prefix(format!("{easy_count}"));
+                }
+                Err(e) => {
+                    error_count += 1;
+                    tracing::error!(error = %e, "Probe task panicked");
+                    pb.inc(1);
+                }
+            }
+        }
+
+        let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+        if interrupted.load(Ordering::Relaxed) {
+            break;
+        }
+
+        pb.set_message(task.name.clone());
+
+        let pool = Arc::clone(&pool);
+        let policy = Arc::clone(&null_policy);
+        let engine = engine.clone();
+        let name = task.name.clone();
+        let statement = task.statement.clone();
+        let interrupted = Arc::clone(&interrupted);
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            if interrupted.load(Ordering::Relaxed) {
+                return ProbeOutcome {
+                    name: name.clone(),
+                    statement,
+                    result: Err(search::SearchError::ProofStart("interrupted".into())),
+                };
+            }
+            let result = engine
+                .search_one(&pool, &*policy, None, &name, &statement)
+                .await;
+            ProbeOutcome {
+                name,
+                statement,
+                result,
+            }
+        });
+    }
+
+    // Final drain
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(outcome) => {
+                match outcome.result {
+                    Ok(result) => {
+                        if result.proved {
+                            easy_count += 1;
+                            easy.push(ProbeEasyEntry {
+                                name: outcome.name,
+                                statement: outcome.statement,
+                                depth: result.max_depth_reached,
+                                tactics: result.proof_tactics,
+                            });
+                        } else {
+                            hard.push(ProbeHardEntry {
+                                name: outcome.name,
+                                statement: outcome.statement,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        tracing::debug!(
+                            theorem = outcome.name,
+                            error = %e,
+                            "Probe failed, counting as hard"
+                        );
+                        hard.push(ProbeHardEntry {
+                            name: outcome.name,
+                            statement: outcome.statement,
+                        });
+                    }
+                }
+                pb.inc(1);
+                pb.set_prefix(format!("{easy_count}"));
+            }
+            Err(e) => {
+                error_count += 1;
+                tracing::error!(error = %e, "Probe task panicked");
+                pb.inc(1);
+            }
+        }
+    }
+
+    pb.finish_with_message("done");
+    pool.shutdown().await;
+
+    let elapsed = start.elapsed();
+    let elapsed_secs = elapsed.as_secs_f64();
+
+    // 7. Write output JSON
+    let output = ProbeOutput {
+        stats: ProbeStats {
+            total,
+            easy: easy.len(),
+            hard: hard.len(),
+            errors: error_count,
+            elapsed_secs,
+        },
+        easy,
+        hard,
+    };
+
+    let json = serde_json::to_string_pretty(&output)?;
+    std::fs::write(&args.output, &json)?;
+    tracing::info!(path = %args.output.display(), "Wrote probe results");
+
+    // 8. Optionally write hard theorems as TheoremIndex JSON
+    if let Some(ref hard_path) = args.hard_theorems {
+        // Build a TheoremIndex-compatible JSON: {"theorems": [{name, statement}, ...]}
+        let hard_tasks: Vec<serde_json::Value> = output
+            .hard
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "name": h.name,
+                    "statement": h.statement,
+                })
+            })
+            .collect();
+        let hard_json = serde_json::to_string_pretty(&serde_json::json!({
+            "theorems": hard_tasks,
+        }))?;
+        std::fs::write(hard_path, &hard_json)?;
+        tracing::info!(
+            path = %hard_path.display(),
+            count = hard_tasks.len(),
+            "Wrote hard theorems index"
+        );
+    }
+
+    // 9. Print summary
+    let partial_note = if interrupted.load(Ordering::Relaxed) {
+        " (Partial — interrupted by CTRL-C)"
+    } else {
+        ""
+    };
+
+    println!();
+    println!("══════════════════════════════════════════");
+    println!(" burn-qed Probe Results{partial_note}");
+    println!("──────────────────────────────────────────");
+    println!(
+        " Total:  {} theorems ({:.1}s)",
+        output.stats.total, elapsed_secs
+    );
+    println!(
+        " Easy:   {} ({:.1}%)",
+        output.stats.easy,
+        if output.stats.total > 0 {
+            output.stats.easy as f64 / output.stats.total as f64 * 100.0
+        } else {
+            0.0
+        }
+    );
+    println!(
+        " Hard:   {} ({:.1}%)",
+        output.stats.hard,
+        if output.stats.total > 0 {
+            output.stats.hard as f64 / output.stats.total as f64 * 100.0
+        } else {
+            0.0
+        }
+    );
+    if output.stats.errors > 0 {
+        println!(" Errors: {}", output.stats.errors);
+    }
+    println!("──────────────────────────────────────────");
+    println!(" Output:  {}", args.output.display());
+    if let Some(ref hard_path) = args.hard_theorems {
+        println!(" Hard index: {}", hard_path.display());
+    }
+    println!(
+        " Throughput: {:.1} theorems/min",
+        if elapsed_secs > 0.0 {
+            output.stats.total as f64 / elapsed_secs * 60.0
+        } else {
+            0.0
+        }
+    );
+    println!("══════════════════════════════════════════");
 
     Ok(())
 }

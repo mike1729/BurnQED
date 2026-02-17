@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use pipeline::{CompareArgs, EvalArgs, ExportProofPathsArgs, GenerateNegativesArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
+use pipeline::{CompareArgs, EvalArgs, ExportProofPathsArgs, GenerateNegativesArgs, ProbeArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
 
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
@@ -70,6 +70,9 @@ enum Command {
         /// Path to the trajectory Parquet file.
         #[arg(long)]
         input: PathBuf,
+        /// Output as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
     },
     /// Export proof paths from trajectory Parquet files to tactic-pairs JSONL.
     ExportProofPaths {
@@ -170,6 +173,36 @@ enum Command {
         #[arg(long, default_value = "configs/search.toml")]
         config: PathBuf,
     },
+    /// Probe-only tactic search: filter easy theorems using built-in tactics (no LLM).
+    Probe {
+        /// Path to search config TOML file.
+        #[arg(long, default_value = "configs/search.toml")]
+        config: PathBuf,
+        /// Path to the theorem index JSON file.
+        #[arg(long)]
+        theorems: PathBuf,
+        /// Path for the output JSON file (easy/hard/stats).
+        #[arg(long)]
+        output: PathBuf,
+        /// Override the number of Lean workers.
+        #[arg(long)]
+        num_workers: Option<usize>,
+        /// Number of theorems to search in parallel.
+        #[arg(long, default_value_t = 32)]
+        concurrency: usize,
+        /// Maximum number of theorems to process (truncates the index).
+        #[arg(long)]
+        max_theorems: Option<usize>,
+        /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
+        #[arg(long, value_delimiter = ',')]
+        imports: Option<Vec<String>>,
+        /// Override max_nodes for probe search (default: 100).
+        #[arg(long)]
+        max_nodes: Option<u32>,
+        /// Write hard theorems as TheoremIndex JSON for use with --theorems in search.
+        #[arg(long)]
+        hard_theorems: Option<PathBuf>,
+    },
     /// Train the Energy-Based Model from trajectory data.
     TrainEbm {
         /// Path(s) to trajectory Parquet files.
@@ -263,7 +296,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await
         }
-        Command::Summary { input } => pipeline::run_summary(SummaryArgs { input }),
+        Command::Summary { input, json } => pipeline::run_summary(SummaryArgs { input, json }),
         Command::ExportProofPaths {
             trajectories,
             output,
@@ -333,6 +366,30 @@ async fn main() -> anyhow::Result<()> {
                 imports,
                 concurrency,
                 num_workers,
+            })
+            .await
+        }
+        Command::Probe {
+            config,
+            theorems,
+            output,
+            num_workers,
+            concurrency,
+            max_theorems,
+            imports,
+            max_nodes,
+            hard_theorems,
+        } => {
+            pipeline::run_probe(ProbeArgs {
+                config,
+                theorems,
+                output,
+                num_workers,
+                concurrency,
+                max_theorems,
+                imports,
+                max_nodes,
+                hard_theorems,
             })
             .await
         }

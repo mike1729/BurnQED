@@ -13,6 +13,35 @@ use crate::encode_batcher::BatchEncoder;
 use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner, ValueScorer};
 
 // ---------------------------------------------------------------------------
+// NullPolicyProvider — returns no candidates (probe-only search)
+// ---------------------------------------------------------------------------
+
+/// A policy provider that always returns empty candidates.
+///
+/// Used for probe-only search where only built-in probe tactics (simp, ring,
+/// omega, etc.) are tried via the engine's `inject_probes()`. No LLM server needed.
+pub struct NullPolicyProvider;
+
+#[async_trait]
+impl PolicyProvider for NullPolicyProvider {
+    async fn generate_candidates(
+        &self,
+        _proof_state: &str,
+        _n: usize,
+    ) -> Result<Vec<GeneratedTactic>, SearchError> {
+        Ok(vec![])
+    }
+
+    async fn generate_candidates_batch(
+        &self,
+        states: &[String],
+        _n: usize,
+    ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
+        Ok(states.iter().map(|_| vec![]).collect())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ProofEnvironment for Arc<LeanPool>
 // ---------------------------------------------------------------------------
 

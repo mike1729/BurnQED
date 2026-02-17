@@ -24,7 +24,7 @@ pub mod engine;
 pub mod mocks;
 pub mod node;
 
-pub use adapters::{CachingEncoder, InferencePolicyProvider};
+pub use adapters::{CachingEncoder, InferencePolicyProvider, NullPolicyProvider};
 pub use batcher::GlobalBatcher;
 pub use cache::CachedPolicy;
 pub use encode_batcher::{BatchEncoder, GlobalEncodeBatcher};
