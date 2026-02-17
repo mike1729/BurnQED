@@ -22,7 +22,7 @@ LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 EVAL_DIR="${REPO_ROOT}/eval_results"
-THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
+THEOREM_INDEX="${THEOREM_INDEX:-${REPO_ROOT}/data/theorem_index.json}"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ensure_sglang "$SGLANG_URL"
@@ -31,6 +31,9 @@ NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EVAL_MAX_THEOREMS="${EVAL_MAX_THEOREMS:-500}"
 EBM_STEPS="${EBM_STEPS:-2000}"
+ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-64}"
+ENCODE_CONCURRENCY="${ENCODE_CONCURRENCY:-8}"
+EBM_RESUME="${EBM_RESUME:-auto}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
@@ -69,7 +72,9 @@ if [ "$ITER" -gt 0 ]; then
 
     RESUME_FLAG=""
     PREV_EBM="${REPO_ROOT}/checkpoints/ebm/iter_${PREV}"
-    if [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
+    if [ "$EBM_RESUME" = "none" ]; then
+        RESUME_FLAG=""
+    elif [ "$EBM_RESUME" = "auto" ] && [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
         RESUME_FLAG="--resume-from ${PREV_EBM}"
     fi
 
@@ -91,6 +96,8 @@ if [ "$ITER" -gt 0 ]; then
         --batch-size 128 \
         --save-embeddings "$EMBEDDINGS_SAVE" \
         $RESUME_FLAG \
+        --encode-batch-size "$ENCODE_BATCH_SIZE" \
+        --encode-concurrency "$ENCODE_CONCURRENCY" \
         $TACTIC_PAIRS_FLAG
 else
     echo ""
