@@ -27,6 +27,7 @@ LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 EVAL_DIR="${REPO_ROOT}/eval_results"
+SEARCH_THEOREMS="${REPO_ROOT}/data/iter${ITER}_search_theorems.json"
 THEOREM_INDEX="${THEOREM_INDEX:-${REPO_ROOT}/data/theorem_index.json}"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
@@ -54,7 +55,8 @@ echo "================================================================"
 echo "  LLM model:      ${LLM_DIR}"
 echo "  EBM output:     ${EBM_DIR}"
 echo "  Trajectory dir:  ${TRAJ_DIR}"
-echo "  Theorem index:   ${THEOREM_INDEX}"
+echo "  Search theorems: ${SEARCH_THEOREMS}"
+echo "  Eval theorems:   ${THEOREM_INDEX}"
 echo "  Config:          ${SEARCH_CONFIG}"
 echo "  SGLang:          ${SGLANG_URL}"
 echo "  Workers:         ${NUM_WORKERS}"
@@ -203,6 +205,13 @@ if [ "$START_STEP" -gt 3 ]; then
 else
     echo ""
     echo "=== Step 3: Proof Search ==="
+
+    if [ ! -f "$SEARCH_THEOREMS" ]; then
+        echo "ERROR: Search theorem file not found: ${SEARCH_THEOREMS}"
+        echo "  Generate it before running search (e.g., filter theorem_index.json for this iteration)."
+        exit 1
+    fi
+
     STEP_LOG="${LOG_DIR}/iter_${ITER}_step_3_search.log"
     echo "  Logging to: ${STEP_LOG}"
 
@@ -211,7 +220,7 @@ else
         --config $SEARCH_CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
-        --theorems $THEOREM_INDEX \
+        --theorems $SEARCH_THEOREMS \
         --output $TRAJ_OUTPUT \
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
@@ -232,7 +241,7 @@ else
             --config $SEARCH_CONFIG \
             --server-url $SGLANG_URL \
             --temperature 1.2 \
-            --theorems $THEOREM_INDEX \
+            --theorems $SEARCH_THEOREMS \
             --output $NOISY_OUTPUT \
             --num-workers $NUM_WORKERS \
             --concurrency $CONCURRENCY \
