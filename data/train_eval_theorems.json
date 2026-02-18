@@ -589,10 +589,6 @@
       "statement": "𝕜 : Type u_1\ninst✝⁴ : NontriviallyNormedField 𝕜\nE : Type u_2\ninst✝³ : NormedAddCommGroup E\ninst✝² : NormedSpace 𝕜 E\nF : Type u_3\ninst✝¹ : NormedAddCommGroup F\ninst✝ : NormedSpace 𝕜 F\np : FormalMultilinearSeries 𝕜 E F\ni : E ≃L[𝕜] F\nhp : 0 < p.radius\n⊢ 0 < (p.rightInv i).radius"
     },
     {
-      "name": "AlgebraicGeometry.PresheafedSpace.map_id_c_app",
-      "statement": "J : Type u'\ninst✝¹ : Category.{v', u'} J\nC : Type u\ninst✝ : Category.{v, u} C\nF : J ⥤ PresheafedSpace C\nj : J\nU : Opens ↑↑(F.obj j)\n⊢ 𝟙 ↑(F.obj j) = (F.map (𝟙 j)).base"
-    },
-    {
       "name": "Finset.surj_on_of_inj_on_of_card_le",
       "statement": "α : Type u_1\nβ : Type u_2\nR : Type u_3\ns t✝ u : Finset α\nf✝ : α → β\nn : ℕ\nt : Finset β\nf : (a : α) → a ∈ s → β\nhf : ∀ (a : α) (ha : a ∈ s), f a ha ∈ t\nhinj : ∀ (a₁ a₂ : α) (ha₁ : a₁ ∈ s) (ha₂ : a₂ ∈ s), f a₁ ha₁ = f a₂ ha₂ → a₁ = a₂\nhst : t.card ≤ s.card\n⊢ ∀ b ∈ t, ∃ a, ∃ (ha : a ∈ s), b = f a ha"
     },
@@ -671,10 +667,6 @@
     {
       "name": "LieModule.mem_weightSpace",
       "statement": "K : Type u_1\nR : Type u_2\nL : Type u_3\nM : Type u_4\ninst✝⁷ : CommRing R\ninst✝⁶ : LieRing L\ninst✝⁵ : LieAlgebra R L\ninst✝⁴ : LieAlgebra.IsNilpotent R L\ninst✝³ : AddCommGroup M\ninst✝² : Module R M\ninst✝¹ : LieRingModule L M\ninst✝ : LieModule R L M\nχ : L → R\nm : M\n⊢ m ∈ weightSpace M χ ↔ ∀ (x : L), ∃ k, (((toEnd R L M) x - χ x • 1) ^ k) m = 0"
-    },
-    {
-      "name": "CategoryTheory.PreOneHypercover.sieve₁_eq_pullback_sieve₁'",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nA : Type u_1\ninst✝¹ : Category.{?u.6702, u_1} A\nS : C\nE : PreOneHypercover S\ni₁ i₂ : E.I₀\ninst✝ : HasPullback (E.f i₁) (E.f i₂)\nW : C\np₁ : W ⟶ E.X i₁\np₂ : W ⟶ E.X i₂\nw : p₁ ≫ E.f i₁ = p₂ ≫ E.f i₂\n⊢ E.sieve₁ p₁ p₂ = Sieve.pullback (pullback.lift p₁ p₂ w) (E.sieve₁' i₁ i₂)"
     },
     {
       "name": "ZMod.natAbs_mod_two",

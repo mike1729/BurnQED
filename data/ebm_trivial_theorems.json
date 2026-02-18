@@ -169,22 +169,6 @@
       "statement": "X : LocallyRingedSpace\nr : ↑(Γ.obj { unop := X })\n⊢ X.toΓSpecFun ⁻¹' (basicOpen r).carrier = (X.toRingedSpace.basicOpen r).carrier"
     },
     {
-      "name": "AlgebraicGeometry.PresheafedSpace.GlueData.f_invApp_f_app",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nD : GlueData C\ni j k : D.J\nU : Opens ↑↑(D.V (i, j))\n⊢ {\n      unop :=\n        (opensFunctor pullback.snd).obj\n          { unop := (Opens.map pullback.fst.base).toPrefunctor.1 { unop := U }.unop }.unop } =\n    (Opens.map (D.f i k).base).op.obj { unop := (opensFunctor (D.f i j)).obj U }"
-    },
-    {
-      "name": "AlgebraicGeometry.PresheafedSpace.GlueData.snd_invApp_t_app",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nD : GlueData C\ni j k : D.J\nU : Opens ↑↑(pullback (D.f i j) (D.f i k))\n⊢ invApp pullback.snd U ≫ (D.t k i).c.app { unop := (opensFunctor pullback.snd).obj U } =\n    (D.t' k i j).c.app { unop := U } ≫\n      invApp pullback.fst { unop := { carrier := ⇑(D.t' k i j).base ⁻¹' ↑{ unop := U }.unop, is_open' := ⋯ } }.unop ≫\n        (D.V (k, i)).presheaf.map (eqToHom ⋯)"
-    },
-    {
-      "name": "AlgebraicGeometry.PresheafedSpace.map_comp_c_app",
-      "statement": "J : Type u'\ninst✝¹ : Category.{v', u'} J\nC : Type u\ninst✝ : Category.{v, u} C\nF : J ⥤ PresheafedSpace C\nj₁ j₂ j₃ : J\nf : j₁ ⟶ j₂\ng : j₂ ⟶ j₃\nU : Opens ↑↑(F.obj j₃)\n⊢ (F.map f).base ≫ (F.map g).base = (F.map (f ≫ g)).base"
-    },
-    {
-      "name": "AlgebraicGeometry.PresheafedSpace.map_id_c_app",
-      "statement": "J : Type u'\ninst✝¹ : Category.{v', u'} J\nC : Type u\ninst✝ : Category.{v, u} C\nF : J ⥤ PresheafedSpace C\nj : J\nU : Opens ↑↑(F.obj j)\n⊢ 𝟙 ↑(F.obj j) = (F.map (𝟙 j)).base"
-    },
-    {
       "name": "AlgebraicGeometry.ProjIsoSpecTopComponent.toSpec_injective",
       "statement": "R : Type u_1\nA : Type u_2\ninst✝³ : CommRing R\ninst✝² : CommRing A\ninst✝¹ : Algebra R A\n𝒜 : ℕ → Submodule R A\ninst✝ : GradedAlgebra 𝒜\nf : A\nm : ℕ\nf_deg : f ∈ 𝒜 m\nhm : 0 < m\n⊢ Function.Injective ⇑(toSpec 𝒜 f)"
     },
@@ -365,10 +349,6 @@
       "statement": "⊢ StrictMono beth"
     },
     {
-      "name": "Cardinal.isUnit_iff",
-      "statement": "a b : Cardinal.{u}\nn m : ℕ\n⊢ IsUnit a ↔ a = 1"
-    },
-    {
       "name": "Cardinal.lift_iInf",
       "statement": "α β : Type u\nι : Sort u_1\nf : ι → Cardinal.{v}\n⊢ lift.{u, v} (iInf f) = ⨅ i, lift.{u, v} (f i)"
     },
@@ -413,10 +393,6 @@
       "statement": "a b : Cardinal.{u}\nn m : ℕ\nha : ℵ₀ ≤ a\n⊢ Prime a"
     },
     {
-      "name": "CategoryTheory.Abelian.Pseudoelement.epi_of_pseudo_surjective",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : Abelian C\nP Q : C\nf : P ⟶ Q\n⊢ Function.Surjective (pseudoApply f) → Epi f"
-    },
-    {
       "name": "CategoryTheory.Adjunction.leftAdjointUniq_trans_app",
       "statement": "C : Type u_1\nD : Type u_2\ninst✝¹ : Category.{u_3, u_1} C\ninst✝ : Category.{u_4, u_2} D\nF F' F'' : C ⥤ D\nG : D ⥤ C\nadj1 : F ⊣ G\nadj2 : F' ⊣ G\nadj3 : F'' ⊣ G\nx : C\n⊢ (adj1.leftAdjointUniq adj2).hom.app x ≫ (adj2.leftAdjointUniq adj3).hom.app x = (adj1.leftAdjointUniq adj3).hom.app x"
     },
@@ -443,14 +419,6 @@
     {
       "name": "CategoryTheory.Bifunctor.map_id_comp",
       "statement": "C : Type u₁\nD : Type u₂\nE : Type u₃\ninst✝² : Category.{v₁, u₁} C\ninst✝¹ : Category.{v₂, u₂} D\ninst✝ : Category.{v₃, u₃} E\nF : C × D ⥤ E\nW : C\nX Y Z : D\nf : X ⟶ Y\ng : Y ⟶ Z\n⊢ F.map (𝟙 W, f ≫ g) = F.map (𝟙 W, f) ≫ F.map (𝟙 W, g)"
-    },
-    {
-      "name": "CategoryTheory.Biprod.inl_ofComponents",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\ninst✝¹ : Preadditive C\ninst✝ : HasBinaryBiproducts C\nX₁ X₂ Y₁ Y₂ : C\nf₁₁ : X₁ ⟶ Y₁\nf₁₂ : X₁ ⟶ Y₂\nf₂₁ : X₂ ⟶ Y₁\nf₂₂ : X₂ ⟶ Y₂\n⊢ biprod.inl ≫ ofComponents f₁₁ f₁₂ f₂₁ f₂₂ = f₁₁ ≫ biprod.inl + f₁₂ ≫ biprod.inr"
-    },
-    {
-      "name": "CategoryTheory.BraidedCategory.braiding_inv_tensor_left",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\ninst✝¹ : MonoidalCategory C\ninst✝ : BraidedCategory C\nX Y Z : C\n⊢ inv (β_ (X ⊗ Y) Z).inv = inv ((α_ Z X Y).inv ≫ (β_ X Z).inv ▷ Y ≫ (α_ X Z Y).hom ≫ X ◁ (β_ Y Z).inv ≫ (α_ X Y Z).inv)"
     },
     {
       "name": "CategoryTheory.Cat.associator_hom_app",
@@ -509,10 +477,6 @@
       "statement": "C : Type u₁\ninst✝² : Category.{v₁, u₁} C\nβ : Sort u_1\nD : Type u₂\ninst✝¹ : Category.{v₂, u₂} D\nE : Type u₃\ninst✝ : Category.{v₃, u₃} E\nF G : C ⥤ D\nX Y Z : C\nf : X ⟶ Y\ng : Y ⟶ Z\nhobj : ∀ (X : C), F.obj X = G.obj X\nhmap : ∀ {X Y : C} (f : X ⟶ Y), HEq (F.map f) (G.map f)\n⊢ HEq (F.map (f ≫ g)) (G.map (f ≫ g))"
     },
     {
-      "name": "CategoryTheory.Functor.map_inv",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX✝ Y✝ Z : C\nD : Type u₂\ninst✝¹ : Category.{v₂, u₂} D\nF : C ⥤ D\nX Y : C\nf : X ⟶ Y\ninst✝ : IsIso f\n⊢ F.map (inv f) = inv (F.map f)"
-    },
-    {
       "name": "CategoryTheory.GlueData.types_ι_jointly_surjective",
       "statement": "C : Type u₁\ninst✝¹ : Category.{v, u₁} C\nC' : Type u₂\ninst✝ : Category.{v, u₂} C'\nD✝ : GlueData C\nD : GlueData (Type v)\nx : D.glued\n⊢ ∃ i y, D.ι i y = x"
     },
@@ -525,48 +489,12 @@
       "statement": "I : Type u_1\nJ : Type u_2\nK : Type u_3\nC : Type u_4\ninst✝³ : Category.{u_5, u_4} C\nX Y Z : GradedObject I C\nφ : X ⟶ Y\ne : X ≅ Y\nψ : Y ⟶ Z\np : I → J\nj : J\ninst✝² : X.HasMap p\ninst✝¹ : Y.HasMap p\ninst✝ : Z.HasMap p\n⊢ mapMap (𝟙 X) p = 𝟙 (X.mapObj p)"
     },
     {
-      "name": "CategoryTheory.GrothendieckTopology.diagramNatTrans_id",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nJ : GrothendieckTopology C\nD : Type w\ninst✝¹ : Category.{max v u, w} D\ninst✝ : ∀ (P : Cᵒᵖ ⥤ D) (X : C) (S : J.Cover X), HasMultiequalizer (S.index P)\nP✝ : Cᵒᵖ ⥤ D\nX : C\nP : Cᵒᵖ ⥤ D\n⊢ J.diagramNatTrans (𝟙 P) X = 𝟙 (J.diagram P X)"
-    },
-    {
-      "name": "CategoryTheory.GrothendieckTopology.isoToPlus_inv",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nJ : GrothendieckTopology C\nD : Type w\ninst✝² : Category.{max v u, w} D\ninst✝¹ : ∀ (P : Cᵒᵖ ⥤ D) (X : C) (S : J.Cover X), HasMultiequalizer (S.index P)\nP : Cᵒᵖ ⥤ D\ninst✝ : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ D\nhP : Presheaf.IsSheaf J P\n⊢ (J.isoToPlus P hP).inv = J.plusLift (𝟙 P) hP"
-    },
-    {
-      "name": "CategoryTheory.GrothendieckTopology.plusCompIso_whiskerRight",
-      "statement": "C : Type u\ninst✝⁸ : Category.{v, u} C\nJ : GrothendieckTopology C\nD : Type w₁\ninst✝⁷ : Category.{max v u, w₁} D\nE : Type w₂\ninst✝⁶ : Category.{max v u, w₂} E\nF : D ⥤ E\ninst✝⁵ : ∀ (α β : Type (max v u)) (fst snd : β → α), HasLimitsOfShape (WalkingMulticospan fst snd) D\ninst✝⁴ : ∀ (α β : Type (max v u)) (fst snd : β → α), HasLimitsOfShape (WalkingMulticospan fst snd) E\ninst✝³ : (X : C) → (W : J.Cover X) → (P : Cᵒᵖ ⥤ D) → PreservesLimit (W.index P).multicospan F\nP✝ : Cᵒᵖ ⥤ D\ninst✝² : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ D\ninst✝¹ : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ E\ninst✝ : (X : C) → PreservesColimitsOfShape (J.Cover X)ᵒᵖ F\nP Q : Cᵒᵖ ⥤ D\nη : P ⟶ Q\n⊢ whiskerRight (J.plusMap η) F ≫ (J.plusCompIso F Q).hom = (J.plusCompIso F P).hom ≫ J.plusMap (whiskerRight η F)"
-    },
-    {
-      "name": "CategoryTheory.GrothendieckTopology.sheafificationWhiskerRightIso_hom_app",
-      "statement": "C : Type u\ninst✝⁸ : Category.{v, u} C\nJ : GrothendieckTopology C\nD : Type w₁\ninst✝⁷ : Category.{max v u, w₁} D\nE : Type w₂\ninst✝⁶ : Category.{max v u, w₂} E\nF : D ⥤ E\ninst✝⁵ : ∀ (α β : Type (max v u)) (fst snd : β → α), HasLimitsOfShape (WalkingMulticospan fst snd) D\ninst✝⁴ : ∀ (α β : Type (max v u)) (fst snd : β → α), HasLimitsOfShape (WalkingMulticospan fst snd) E\ninst✝³ : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ D\ninst✝² : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ E\ninst✝¹ : (X : C) → PreservesColimitsOfShape (J.Cover X)ᵒᵖ F\ninst✝ : (X : C) → (W : J.Cover X) → (P : Cᵒᵖ ⥤ D) → PreservesLimit (W.index P).multicospan F\nP : Cᵒᵖ ⥤ D\n⊢ (J.sheafificationWhiskerRightIso F).hom.app P = (J.sheafifyCompIso F P).hom"
-    },
-    {
-      "name": "CategoryTheory.GrothendieckTopology.sheafifyCompIso_inv_eq_sheafifyLift",
-      "statement": "C : Type u\ninst✝¹² : Category.{v, u} C\nJ : GrothendieckTopology C\nD : Type w₁\ninst✝¹¹ : Category.{max v u, w₁} D\nE : Type w₂\ninst✝¹⁰ : Category.{max v u, w₂} E\nF : D ⥤ E\ninst✝⁹ : ∀ (α β : Type (max v u)) (fst snd : β → α), HasLimitsOfShape (WalkingMulticospan fst snd) D\ninst✝⁸ : ∀ (α β : Type (max v u)) (fst snd : β → α), HasLimitsOfShape (WalkingMulticospan fst snd) E\ninst✝⁷ : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ D\ninst✝⁶ : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ E\ninst✝⁵ : (X : C) → PreservesColimitsOfShape (J.Cover X)ᵒᵖ F\ninst✝⁴ : (X : C) → (W : J.Cover X) → (P : Cᵒᵖ ⥤ D) → PreservesLimit (W.index P).multicospan F\nP : Cᵒᵖ ⥤ D\ninst✝³ : ConcreteCategory D\ninst✝² : PreservesLimits (forget D)\ninst✝¹ : (X : C) → PreservesColimitsOfShape (J.Cover X)ᵒᵖ (forget D)\ninst✝ : (forget D).ReflectsIsomorphisms\n⊢ (J.sheafifyCompIso F P).inv = J.sheafifyLift (whiskerRight (J.toSheafify P) F) ⋯"
-    },
-    {
-      "name": "CategoryTheory.GrothendieckTopology.toPlus_naturality",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nJ : GrothendieckTopology C\nD : Type w\ninst✝² : Category.{max v u, w} D\ninst✝¹ : ∀ (P : Cᵒᵖ ⥤ D) (X : C) (S : J.Cover X), HasMultiequalizer (S.index P)\nP✝ : Cᵒᵖ ⥤ D\ninst✝ : ∀ (X : C), HasColimitsOfShape (J.Cover X)ᵒᵖ D\nP Q : Cᵒᵖ ⥤ D\nη : P ⟶ Q\n⊢ η ≫ J.toPlus Q = J.toPlus P ≫ J.plusMap η"
-    },
-    {
       "name": "CategoryTheory.HasShift.Induced.add_hom_app_obj",
       "statement": "C : Type u_5\nD : Type u_2\ninst✝⁵ : Category.{u_4, u_5} C\ninst✝⁴ : Category.{u_1, u_2} D\nF : C ⥤ D\nA : Type u_3\ninst✝³ : AddMonoid A\ninst✝² : HasShift C A\ns : A → D ⥤ D\ni : (a : A) → F ⋙ s a ≅ shiftFunctor C a ⋙ F\ninst✝¹ : ((whiskeringLeft C D D).obj F).Full\ninst✝ : ((whiskeringLeft C D D).obj F).Faithful\na b : A\nX : C\n⊢ (add F s i a b).hom.app (F.obj X) =\n    (i (a + b)).hom.app X ≫\n      F.map ((shiftFunctorAdd C a b).hom.app X) ≫ (i b).inv.app ((shiftFunctor C a).obj X) ≫ (s b).map ((i a).inv.app X)"
     },
     {
-      "name": "CategoryTheory.HomOrthogonal.matrixDecomposition_id",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nι : Type u_1\ns : ι → C\ninst✝² : Preadditive C\ninst✝¹ : HasFiniteBiproducts C\no : HomOrthogonal s\nα : Type\ninst✝ : Finite α\nf : α → ι\ni : ι\n⊢ o.matrixDecomposition (𝟙 (⨁ fun a => s (f a))) i = 1"
-    },
-    {
       "name": "CategoryTheory.Idempotents.isIdempotentComplete_iff_opposite",
       "statement": "C : Type u_1\ninst✝ : Category.{u_2, u_1} C\n⊢ IsIdempotentComplete Cᵒᵖ ↔ IsIdempotentComplete C"
-    },
-    {
-      "name": "CategoryTheory.InjectiveResolution.homotopyEquiv_hom_ι",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : Abelian C\nX : C\nI J : InjectiveResolution X\n⊢ I.ι ≫ (I.homotopyEquiv J).hom = J.ι"
-    },
-    {
-      "name": "CategoryTheory.IsIso.inv_hom_id_assoc",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y Z✝ : C\nf : X ⟶ Y\nI : IsIso f\nZ : C\ng : Y ⟶ Z\n⊢ inv f ≫ f ≫ g = g"
     },
     {
       "name": "CategoryTheory.IsPullback.zero_right",
@@ -577,36 +505,12 @@
       "statement": "C : Type u₁\ninst✝ : Category.{v₁, u₁} C\nX✝ Y✝ X Y : C\nf : X ≅ Y\n⊢ f.op.unop = f"
     },
     {
-      "name": "CategoryTheory.Iso.trans_refl",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y Z : C\nα : X ≅ Y\n⊢ α ≪≫ refl Y = α"
-    },
-    {
-      "name": "CategoryTheory.Limits.Fork.ofCone_π",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y : C\nf g : X ⟶ Y\nF : WalkingParallelPair ⥤ C\nt : Cone F\nj : WalkingParallelPair\n⊢ F.obj j = (parallelPair (F.map left) (F.map right)).obj j"
-    },
-    {
-      "name": "CategoryTheory.Limits.Fork.π_comp_hom",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y : C\nf✝ g : X ⟶ Y\ns t : Cofork f✝ g\nf : s ⟶ t\n⊢ s.π ≫ f.hom = t.π"
-    },
-    {
-      "name": "CategoryTheory.Limits.HasLimit.isoOfEquivalence_hom_π",
-      "statement": "J : Type u₁\ninst✝⁴ : Category.{v₁, u₁} J\nK : Type u₂\ninst✝³ : Category.{v₂, u₂} K\nC : Type u\ninst✝² : Category.{v, u} C\nF✝ F : J ⥤ C\ninst✝¹ : HasLimit F\nG : K ⥤ C\ninst✝ : HasLimit G\ne : J ≌ K\nw : e.functor ⋙ G ≅ F\nk : K\n⊢ (isoOfEquivalence e w).hom ≫ limit.π G k =\n    limit.π F (e.inverse.obj k) ≫ w.inv.app (e.inverse.obj k) ≫ G.map (e.counit.app k)"
-    },
-    {
       "name": "CategoryTheory.Limits.IsColimit.coconePointUniqueUpToIso_inv_desc",
       "statement": "J : Type u₁\ninst✝² : Category.{v₁, u₁} J\nK : Type u₂\ninst✝¹ : Category.{v₂, u₂} K\nC : Type u₃\ninst✝ : Category.{v₃, u₃} C\nF : J ⥤ C\nr s t : Cocone F\nP : IsColimit s\nQ : IsColimit t\n⊢ ∀ (j : J), t.ι.app j ≫ (P.coconePointUniqueUpToIso Q).inv ≫ P.desc r = r.ι.app j"
     },
     {
-      "name": "CategoryTheory.Limits.Multifork.app_right_eq_ι_comp_fst",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nI : MulticospanIndex C\nK : Multifork I\nb : I.R\n⊢ K.π.app (WalkingMulticospan.right b) = K.ι (I.fstTo b) ≫ I.fst b"
-    },
-    {
       "name": "CategoryTheory.Limits.PullbackCone.unop_inl",
       "statement": "C : Type u₁\ninst✝¹ : Category.{v₁, u₁} C\nJ : Type u₂\ninst✝ : Category.{v₂, u₂} J\nX✝ : Type v₂\nX Y Z : Cᵒᵖ\nf : X ⟶ Z\ng : Y ⟶ Z\nc : PullbackCone f g\n⊢ c.unop.inl = c.fst.unop"
-    },
-    {
-      "name": "CategoryTheory.Limits.Sigma.map_id",
-      "statement": "β : Type w\nα : Type w₂\nγ : Type w₃\nC : Type u\ninst✝¹ : Category.{v, u} C\nf : α → C\ninst✝ : HasCoproduct f\n⊢ (map fun a => 𝟙 (f a)) = 𝟙 (∐ f)"
     },
     {
       "name": "CategoryTheory.Limits.Types.Pushout.inr_rel'_inr_iff",
@@ -615,10 +519,6 @@
     {
       "name": "CategoryTheory.Limits.Types.pi_lift_π_apply'",
       "statement": "β : Type v\nf : β → Type v\nP : Type v\ns : (b : β) → P ⟶ f b\nb : β\nx : P\n⊢ Pi.π f b (Pi.lift s x) = s b x"
-    },
-    {
-      "name": "CategoryTheory.Limits.WidePushout.head_desc",
-      "statement": "J : Type w\nC✝ : Type u\ninst✝² : Category.{v, u} C✝\nC : Type u\ninst✝¹ : Category.{v, u} C\nB : C\nobjs : J → C\narrows : (j : J) → B ⟶ objs j\ninst✝ : HasWidePushout B objs arrows\nX : C\nf : B ⟶ X\nfs : (j : J) → objs j ⟶ X\nw : ∀ (j : J), arrows j ≫ fs j = f\n⊢ head arrows ≫ desc f fs w = f"
     },
     {
       "name": "CategoryTheory.Limits.biprod.inr_map",
@@ -633,128 +533,12 @@
       "statement": "J : Type w\nC : Type u\ninst✝⁴ : Category.{v, u} C\ninst✝³ : HasZeroMorphisms C\nD : Type uD\ninst✝² : Category.{uD', uD} D\ninst✝¹ : HasZeroMorphisms D\nP Q A B : C\ninst✝ : HasBinaryBiproduct A B\n⊢ IsZero (A ⊞ B) ↔ IsZero A ∧ IsZero B"
     },
     {
-      "name": "CategoryTheory.Limits.coequalizerComparison_map_desc",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nX Y : C\nf g : X ⟶ Y\nD : Type u₂\ninst✝² : Category.{v₂, u₂} D\nG : C ⥤ D\ninst✝¹ : HasCoequalizer f g\ninst✝ : HasCoequalizer (G.map f) (G.map g)\nZ : C\nh : Y ⟶ Z\nw : f ≫ h = g ≫ h\n⊢ G.map f ≫ G.map h = G.map g ≫ G.map h"
-    },
-    {
-      "name": "CategoryTheory.Limits.colimit.post_post",
-      "statement": "J : Type u₁\ninst✝⁶ : Category.{v₁, u₁} J\nK : Type u₂\ninst✝⁵ : Category.{v₂, u₂} K\nC : Type u\ninst✝⁴ : Category.{v, u} C\nF : J ⥤ C\nD : Type u'\ninst✝³ : Category.{v', u'} D\ninst✝² : HasColimit F\nG : C ⥤ D\ninst✝¹ : HasColimit (F ⋙ G)\nE : Type u''\ninst✝ : Category.{v'', u''} E\nH : D ⥤ E\nh : HasColimit ((F ⋙ G) ⋙ H)\n⊢ post (F ⋙ G) H ≫ H.map (post F G) = post F (G ⋙ H)"
-    },
-    {
       "name": "CategoryTheory.Limits.colimitCurrySwapCompColimIsoColimitCurryCompColim_ι_ι_inv",
       "statement": "J K : Type v\ninst✝³ : SmallCategory J\ninst✝² : SmallCategory K\nC : Type u\ninst✝¹ : Category.{v, u} C\nF : J ⥤ K ⥤ C\nG : J × K ⥤ C\ninst✝ : HasColimits C\nj : J\nk : K\n⊢ colimit.ι ((curry.obj G).obj j) k ≫\n      colimit.ι (curry.obj G ⋙ colim) j ≫ (colimitCurrySwapCompColimIsoColimitCurryCompColim G).inv =\n    colimit.ι ((curry.obj (Prod.swap K J ⋙ G)).obj k) j ≫ colimit.ι (curry.obj (Prod.swap K J ⋙ G) ⋙ colim) k"
     },
     {
-      "name": "CategoryTheory.Limits.coprod.desc_comp_inl_comp_inr",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX✝ Y✝ W X Y Z : C\ninst✝¹ : HasBinaryCoproduct W Y\ninst✝ : HasBinaryCoproduct X Z\ng : W ⟶ X\ng' : Y ⟶ Z\n⊢ desc (g ≫ inl) (g' ≫ inr) = map g g'"
-    },
-    {
-      "name": "CategoryTheory.Limits.coprod.map_desc",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX Y S T U V W : C\ninst✝¹ : HasBinaryCoproduct U W\ninst✝ : HasBinaryCoproduct T V\nf : U ⟶ S\ng : W ⟶ S\nh : T ⟶ U\nk : V ⟶ W\n⊢ map h k ≫ desc f g = desc (h ≫ f) (k ≫ g)"
-    },
-    {
-      "name": "CategoryTheory.Limits.equalizer.isoSourceOfSelf_inv",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y : C\nf g : X ⟶ Y\n⊢ 𝟙 X ≫ f = 𝟙 X ≫ f"
-    },
-    {
-      "name": "CategoryTheory.Limits.factorThruImageSubobject_comp_self",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nX Y Z : C\nf : X ⟶ Y\ninst✝ : HasImage f\nW : C\nk : W ⟶ X\nh : (imageSubobject f).Factors (k ≫ f)\n⊢ (imageSubobject f).factorThru (k ≫ f) h = k ≫ factorThruImageSubobject f"
-    },
-    {
-      "name": "CategoryTheory.Limits.image.map_ι",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nf g : Arrow C\ninst✝² : HasImage f.hom\ninst✝¹ : HasImage g.hom\nsq : f ⟶ g\ninst✝ : HasImageMap sq\n⊢ map sq ≫ ι g.hom = ι f.hom ≫ sq.right"
-    },
-    {
-      "name": "CategoryTheory.Limits.image.ι_zero",
-      "statement": "C : Type u\ninst✝⁴ : Category.{v, u} C\nD : Type u'\ninst✝³ : Category.{v', u'} D\ninst✝² : HasZeroMorphisms C\ninst✝¹ : HasZeroObject C\nX Y : C\ninst✝ : HasImage 0\n⊢ ι 0 = 0"
-    },
-    {
-      "name": "CategoryTheory.Limits.imageMonoIsoSource_hom_self",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nX Y : C\nf : X ⟶ Y\ninst✝ : Mono f\n⊢ (imageMonoIsoSource f).hom ≫ f = image.ι f"
-    },
-    {
-      "name": "CategoryTheory.Limits.imageSubobjectCompIso_inv_arrow",
-      "statement": "C : Type u\ninst✝⁴ : Category.{v, u} C\nX Y Z : C\nf✝ : X ⟶ Y\ninst✝³ : HasImage f✝\ninst✝² : HasEqualizers C\nf : X ⟶ Y\ninst✝¹ : HasImage f\nY' : C\nh : Y ⟶ Y'\ninst✝ : IsIso h\n⊢ (imageSubobjectCompIso f h).inv ≫ (imageSubobject (f ≫ h)).arrow = (imageSubobject f).arrow ≫ h"
-    },
-    {
-      "name": "CategoryTheory.Limits.inl_inl_pushoutAssoc_hom",
-      "statement": "C : Type u\ninst✝⁵ : Category.{v, u} C\nD : Type u₂\ninst✝⁴ : Category.{v₂, u₂} D\nW X Y Z X₁ X₂ X₃ Z₁ Z₂ : C\ng₁ : Z₁ ⟶ X₁\ng₂ : Z₁ ⟶ X₂\ng₃ : Z₂ ⟶ X₂\ng₄ : Z₂ ⟶ X₃\ninst✝³ : HasPushout g₁ g₂\ninst✝² : HasPushout g₃ g₄\ninst✝¹ : HasPushout (g₃ ≫ pushout.inr) g₄\ninst✝ : HasPushout g₁ (g₂ ≫ pushout.inl)\n⊢ pushout.inl ≫ pushout.inl ≫ (pushoutAssoc g₁ g₂ g₃ g₄).hom = pushout.inl"
-    },
-    {
-      "name": "CategoryTheory.Limits.inr_inl_pushoutAssoc_hom",
-      "statement": "C : Type u\ninst✝⁵ : Category.{v, u} C\nD : Type u₂\ninst✝⁴ : Category.{v₂, u₂} D\nW X Y Z X₁ X₂ X₃ Z₁ Z₂ : C\ng₁ : Z₁ ⟶ X₁\ng₂ : Z₁ ⟶ X₂\ng₃ : Z₂ ⟶ X₂\ng₄ : Z₂ ⟶ X₃\ninst✝³ : HasPushout g₁ g₂\ninst✝² : HasPushout g₃ g₄\ninst✝¹ : HasPushout (g₃ ≫ pushout.inr) g₄\ninst✝ : HasPushout g₁ (g₂ ≫ pushout.inl)\n⊢ pushout.inr ≫ pushout.inl ≫ (pushoutAssoc g₁ g₂ g₃ g₄).hom = pushout.inl ≫ pushout.inr"
-    },
-    {
-      "name": "CategoryTheory.Limits.inr_inr_pushoutAssoc_inv",
-      "statement": "C : Type u\ninst✝⁵ : Category.{v, u} C\nD : Type u₂\ninst✝⁴ : Category.{v₂, u₂} D\nW X Y Z X₁ X₂ X₃ Z₁ Z₂ : C\ng₁ : Z₁ ⟶ X₁\ng₂ : Z₁ ⟶ X₂\ng₃ : Z₂ ⟶ X₂\ng₄ : Z₂ ⟶ X₃\ninst✝³ : HasPushout g₁ g₂\ninst✝² : HasPushout g₃ g₄\ninst✝¹ : HasPushout (g₃ ≫ pushout.inr) g₄\ninst✝ : HasPushout g₁ (g₂ ≫ pushout.inl)\n⊢ pushout.inr ≫ pushout.inr ≫ (pushoutAssoc g₁ g₂ g₃ g₄).inv = pushout.inr"
-    },
-    {
-      "name": "CategoryTheory.Limits.inr_pushoutAssoc_hom",
-      "statement": "C : Type u\ninst✝⁵ : Category.{v, u} C\nD : Type u₂\ninst✝⁴ : Category.{v₂, u₂} D\nW X Y Z X₁ X₂ X₃ Z₁ Z₂ : C\ng₁ : Z₁ ⟶ X₁\ng₂ : Z₁ ⟶ X₂\ng₃ : Z₂ ⟶ X₂\ng₄ : Z₂ ⟶ X₃\ninst✝³ : HasPushout g₁ g₂\ninst✝² : HasPushout g₃ g₄\ninst✝¹ : HasPushout (g₃ ≫ pushout.inr) g₄\ninst✝ : HasPushout g₁ (g₂ ≫ pushout.inl)\n⊢ pushout.inr ≫ (pushoutAssoc g₁ g₂ g₃ g₄).hom = pushout.inr ≫ pushout.inr"
-    },
-    {
-      "name": "CategoryTheory.Limits.kernelSubobjectMap_arrow",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nX Y Z : C\ninst✝² : HasZeroMorphisms C\nf : X ⟶ Y\ninst✝¹ : HasKernel f\nX' Y' : C\nf' : X' ⟶ Y'\ninst✝ : HasKernel f'\nsq : Arrow.mk f ⟶ Arrow.mk f'\n⊢ kernelSubobjectMap sq ≫ (kernelSubobject f').arrow = (kernelSubobject f).arrow ≫ sq.left"
-    },
-    {
-      "name": "CategoryTheory.Limits.kernelSubobject_zero",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX Y Z : C\ninst✝¹ : HasZeroMorphisms C\nf : X ⟶ Y\ninst✝ : HasKernel f\nA B : C\n⊢ IsIso (kernel.ι 0)"
-    },
-    {
-      "name": "CategoryTheory.Limits.kernelZeroIsoSource_inv",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\ninst✝¹ : HasZeroMorphisms C\nX Y : C\nf : X ⟶ Y\ninst✝ : HasKernel f\n⊢ 𝟙 X ≫ 0 = 0"
-    },
-    {
-      "name": "CategoryTheory.Limits.limit.lift_map",
-      "statement": "J : Type u₁\ninst✝⁴ : Category.{v₁, u₁} J\nK : Type u₂\ninst✝³ : Category.{v₂, u₂} K\nC : Type u\ninst✝² : Category.{v, u} C\nF✝ F G : J ⥤ C\ninst✝¹ : HasLimit F\ninst✝ : HasLimit G\nc : Cone F\nα : F ⟶ G\n⊢ lift F c ≫ limMap α = lift G ((Cones.postcompose α).obj c)"
-    },
-    {
-      "name": "CategoryTheory.Limits.limit.post_post",
-      "statement": "J : Type u₁\ninst✝⁶ : Category.{v₁, u₁} J\nK : Type u₂\ninst✝⁵ : Category.{v₂, u₂} K\nC : Type u\ninst✝⁴ : Category.{v, u} C\nF✝ : J ⥤ C\nD : Type u'\ninst✝³ : Category.{v', u'} D\nF : J ⥤ C\ninst✝² : HasLimit F\nG : C ⥤ D\ninst✝¹ : HasLimit (F ⋙ G)\nE : Type u''\ninst✝ : Category.{v'', u''} E\nH : D ⥤ E\nh : HasLimit ((F ⋙ G) ⋙ H)\n⊢ H.map (post F G) ≫ post (F ⋙ G) H = post F (G ⋙ H)"
-    },
-    {
       "name": "CategoryTheory.Limits.limitCurrySwapCompLimIsoLimitCurryCompLim_hom_π_π",
       "statement": "J K : Type v\ninst✝³ : SmallCategory J\ninst✝² : SmallCategory K\nC : Type u\ninst✝¹ : Category.{v, u} C\nF : J ⥤ K ⥤ C\nG : J × K ⥤ C\ninst✝ : HasLimits C\nj : J\nk : K\n⊢ (limitCurrySwapCompLimIsoLimitCurryCompLim G).hom ≫ limit.π (curry.obj G ⋙ lim) j ≫ limit.π ((curry.obj G).obj j) k =\n    limit.π (curry.obj (Prod.swap K J ⋙ G) ⋙ lim) k ≫ limit.π ((curry.obj (Prod.swap K J ⋙ G)).obj k) j"
-    },
-    {
-      "name": "CategoryTheory.Limits.limitObjIsoLimitCompEvaluation_hom_π",
-      "statement": "C : Type u\ninst✝⁴ : Category.{v, u} C\nD : Type u'\ninst✝³ : Category.{v', u'} D\nJ : Type u₁\ninst✝² : Category.{v₁, u₁} J\nK : Type u₂\ninst✝¹ : Category.{v₂, u₂} K\ninst✝ : HasLimitsOfShape J C\nF : J ⥤ K ⥤ C\nj : J\nk : K\n⊢ (limitObjIsoLimitCompEvaluation F k).hom ≫ limit.π (F ⋙ (evaluation K C).obj k) j = (limit.π F j).app k"
-    },
-    {
-      "name": "CategoryTheory.Limits.map_lift_kernelComparison",
-      "statement": "C : Type u\ninst✝⁶ : Category.{v, u} C\ninst✝⁵ : HasZeroMorphisms C\nX Y : C\nf : X ⟶ Y\nD : Type u₂\ninst✝⁴ : Category.{v₂, u₂} D\ninst✝³ : HasZeroMorphisms D\nG : C ⥤ D\ninst✝² : G.PreservesZeroMorphisms\ninst✝¹ : HasKernel f\ninst✝ : HasKernel (G.map f)\nZ : C\nh : Z ⟶ X\nw : h ≫ f = 0\n⊢ G.map h ≫ G.map f = 0"
-    },
-    {
-      "name": "CategoryTheory.Limits.parallelPair_functor_obj",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y : C\nF : WalkingParallelPair ⥤ C\nj : WalkingParallelPair\n⊢ (parallelPair (F.map left) (F.map right)).obj j = F.obj j"
-    },
-    {
-      "name": "CategoryTheory.Limits.prod.diag_map_fst_snd",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX✝ Y✝ X Y : C\ninst✝¹ : HasBinaryProduct X Y\ninst✝ : HasBinaryProduct (X ⨯ Y) (X ⨯ Y)\n⊢ diag (X ⨯ Y) ≫ map fst snd = 𝟙 (X ⨯ Y)"
-    },
-    {
-      "name": "CategoryTheory.Limits.prod.lift_fst_snd",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nX✝ Y✝ X Y : C\ninst✝ : HasBinaryProduct X Y\n⊢ lift fst snd = 𝟙 (X ⨯ Y)"
-    },
-    {
-      "name": "CategoryTheory.Limits.prod.pentagon",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nX✝ Y✝ : C\ninst✝ : HasBinaryProducts C\nW X Y Z : C\n⊢ map (associator W X Y).hom (𝟙 Z) ≫ (associator W (X ⨯ Y) Z).hom ≫ map (𝟙 W) (associator X Y Z).hom =\n    (associator (W ⨯ X) Y Z).hom ≫ (associator W X (Y ⨯ Z)).hom"
-    },
-    {
-      "name": "CategoryTheory.Limits.prod_rightUnitor_inv_naturality",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX Y : C\ninst✝¹ : HasTerminal C\ninst✝ : HasBinaryProducts C\nf : X ⟶ Y\n⊢ (prod.rightUnitor X).inv ≫ prod.map f (𝟙 (⊤_ C)) = f ≫ (prod.rightUnitor Y).inv"
-    },
-    {
-      "name": "CategoryTheory.Limits.pullback.congrHom_inv",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\nD : Type u₂\ninst✝² : Category.{v₂, u₂} D\nW X✝ Y✝ Z✝ X Y Z : C\nf₁ f₂ : X ⟶ Z\ng₁ g₂ : Y ⟶ Z\nh₁ : f₁ = f₂\nh₂ : g₁ = g₂\ninst✝¹ : HasPullback f₁ g₁\ninst✝ : HasPullback f₂ g₂\n⊢ f₂ ≫ 𝟙 Z = 𝟙 X ≫ f₁"
-    },
-    {
-      "name": "CategoryTheory.Limits.pullbackAssoc_hom_fst",
-      "statement": "C : Type u\ninst✝⁷ : Category.{v, u} C\nD : Type u₂\ninst✝⁶ : Category.{v₂, u₂} D\nW X Y Z X₁ X₂ X₃ Y₁ Y₂ : C\nf₁ : X₁ ⟶ Y₁\nf₂ : X₂ ⟶ Y₁\nf₃ : X₂ ⟶ Y₂\nf₄ : X₃ ⟶ Y₂\ninst✝⁵ : HasPullback f₁ f₂\ninst✝⁴ : HasPullback f₃ f₄\ninst✝³ : HasPullback (pullback.snd ≫ sorryAx (sorryAx C true ⟶ Y₂) true) f₄\ninst✝² : HasPullback f₁ (pullback.fst ≫ f₂)\ninst✝¹ : HasPullback (pullback.snd ≫ f₃) f₄\ninst✝ : HasPullback f₁ (pullback.fst ≫ f₂)\n⊢ (pullbackAssoc f₁ f₂ f₃ f₄).hom ≫ pullback.fst = pullback.fst ≫ pullback.fst"
-    },
-    {
-      "name": "CategoryTheory.Limits.pullbackAssoc_hom_snd_fst",
-      "statement": "C : Type u\ninst✝⁷ : Category.{v, u} C\nD : Type u₂\ninst✝⁶ : Category.{v₂, u₂} D\nW X Y Z X₁ X₂ X₃ Y₁ Y₂ : C\nf₁ : X₁ ⟶ Y₁\nf₂ : X₂ ⟶ Y₁\nf₃ : X₂ ⟶ Y₂\nf₄ : X₃ ⟶ Y₂\ninst✝⁵ : HasPullback f₁ f₂\ninst✝⁴ : HasPullback f₃ f₄\ninst✝³ : HasPullback (pullback.snd ≫ sorryAx (sorryAx C true ⟶ Y₂) true) f₄\ninst✝² : HasPullback f₁ (pullback.fst ≫ f₂)\ninst✝¹ : HasPullback (pullback.snd ≫ f₃) f₄\ninst✝ : HasPullback f₁ (pullback.fst ≫ f₂)\n⊢ (pullbackAssoc f₁ f₂ f₃ f₄).hom ≫ pullback.snd ≫ pullback.fst = pullback.fst ≫ pullback.snd"
     },
     {
       "name": "CategoryTheory.Limits.pullbackDiagonalMapIdIso_inv_fst",
@@ -781,10 +565,6 @@
       "statement": "C✝ : Type u₁\ninst✝³ : Category.{v₁, u₁} C✝\nJ : Type u_1\ninst✝² : Category.{u_3, u_1} J\nC : Type u_2\ninst✝¹ : Category.{u_4, u_2} C\ninst✝ : HasInitial C\nj : J\n⊢ colimit.ι ((Functor.const J).obj (⊥_ C)) j ≫ colimitConstInitial.hom = initial.to (⊥_ C)"
     },
     {
-      "name": "CategoryTheory.Limits.ι_colimitLimitIso_limit_π",
-      "statement": "J : Type u₁\nK : Type u₂\ninst✝¹¹ : SmallCategory J\ninst✝¹⁰ : Category.{v₂, u₂} K\ninst✝⁹ : Small.{v, u₂} K\ninst✝⁸ : FinCategory J\nF✝ : J × K ⥤ Type v\ninst✝⁷ : IsFiltered K\nC : Type u\ninst✝⁶ : Category.{v, u} C\ninst✝⁵ : ConcreteCategory C\ninst✝⁴ : HasLimitsOfShape J C\ninst✝³ : HasColimitsOfShape K C\ninst✝² : ReflectsLimitsOfShape J (forget C)\ninst✝¹ : PreservesColimitsOfShape K (forget C)\ninst✝ : PreservesLimitsOfShape J (forget C)\nF : J ⥤ K ⥤ C\na : K\nb : J\n⊢ colimit.ι (limit F) a ≫ (colimitLimitIso F).hom ≫ limit.π (colimit F.flip) b =\n    (limit.π F b).app a ≫ (colimit.ι F.flip a).app b"
-    },
-    {
       "name": "CategoryTheory.Localization.Construction.fac",
       "statement": "C : Type uC\ninst✝¹ : Category.{uC', uC} C\nW : MorphismProperty C\nD : Type uD\ninst✝ : Category.{uD', uD} D\nG : C ⥤ D\nhG : W.IsInvertedBy G\n⊢ ∀ (X Y : C) (f : X ⟶ Y), (W.Q ⋙ lift G hG).map f = eqToHom ⋯ ≫ G.map f ≫ eqToHom ⋯"
     },
@@ -801,48 +581,8 @@
       "statement": "C : Type u₁\ninst✝⁴ : Category.{v₁, u₁} C\ninst✝³ : Preadditive C\nD : Type u₁\ninst✝² : Category.{v₁, u₁} D\ninst✝¹ : Preadditive D\nF : Mat_ C ⥤ D\ninst✝ : F.Additive\nM : Mat_ C\ni : M.ι\n⊢ biproduct.ι (fun i => F.obj ((embedding C).obj (M.X i))) i ≫ (additiveObjIsoBiproduct F M).inv =\n    F.map (biproduct.ι (fun i => (embedding C).obj (M.X i)) i ≫ M.isoBiproductEmbedding.inv)"
     },
     {
-      "name": "CategoryTheory.MonoidalCategory.inv_hom_id_tensor",
-      "statement": "C✝ : Type u\n𝒞 : Category.{v, u} C✝\ninst✝² : MonoidalCategory C✝\nC : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : MonoidalCategory C\nU V✝ W✝ X✝ Y✝ Z✝ V W X Y Z : C\nf : V ≅ W\ng : X ⟶ Y\nh : Y ⟶ Z\n⊢ (f.inv ⊗ g) ≫ (f.hom ⊗ h) = (𝟙 W ⊗ g) ≫ (𝟙 W ⊗ h)"
-    },
-    {
       "name": "CategoryTheory.MonoidalCategory.leftUnitor_inv_tensor_id",
       "statement": "C : Type u_1\ninst✝¹ : Category.{u_2, u_1} C\ninst✝ : MonoidalCategory C\nX Y : C\n⊢ (λ_ X).inv ⊗ 𝟙 Y = (λ_ (X ⊗ Y)).inv ≫ (α_ (𝟙_ C) X Y).inv"
-    },
-    {
-      "name": "CategoryTheory.MonoidalCategory.pentagon_hom_hom_inv_inv_hom",
-      "statement": "C✝ : Type u\n𝒞 : Category.{v, u} C✝\ninst✝² : MonoidalCategory C✝\nC : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : MonoidalCategory C\nU V W X Y Z : C\n⊢ inv ((α_ W (X ⊗ Y) Z).hom ≫ W ◁ (α_ X Y Z).hom ≫ (α_ W X (Y ⊗ Z)).inv) =\n    inv ((α_ W X Y).inv ▷ Z ≫ (α_ (W ⊗ X) Y Z).hom)"
-    },
-    {
-      "name": "CategoryTheory.MonoidalCategory.whiskerLeft_hom_inv'",
-      "statement": "C : Type u\n𝒞 : Category.{v, u} C\ninst✝¹ : MonoidalCategory C\nX Y Z : C\nf : Y ⟶ Z\ninst✝ : IsIso f\n⊢ X ◁ f ≫ X ◁ inv f = 𝟙 (X ⊗ Y)"
-    },
-    {
-      "name": "CategoryTheory.MorphismProperty.RespectsIso.inverseImage",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nD : Type u_1\ninst✝ : Category.{u_2, u_1} D\nP : MorphismProperty D\nh : P.RespectsIso\nF : C ⥤ D\n⊢ (P.inverseImage F).RespectsIso"
-    },
-    {
-      "name": "CategoryTheory.MorphismProperty.map_id_eq_isoClosure",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nD : Type u_1\ninst✝ : Category.{?u.18707, u_1} D\nP : MorphismProperty C\n⊢ P.map (𝟭 C) = P.isoClosure"
-    },
-    {
-      "name": "CategoryTheory.MorphismProperty.map_isoClosure",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\nD : Type u_1\ninst✝ : Category.{u_2, u_1} D\nP : MorphismProperty C\nF : C ⥤ D\n⊢ P.isoClosure.map F = P.map F"
-    },
-    {
-      "name": "CategoryTheory.NatTrans.rightDerived_id",
-      "statement": "C : Type u\ninst✝⁵ : Category.{v, u} C\nD : Type u_1\ninst✝⁴ : Category.{u_2, u_1} D\ninst✝³ : Abelian C\ninst✝² : HasInjectiveResolutions C\ninst✝¹ : Abelian D\nF : C ⥤ D\ninst✝ : F.Additive\nn : ℕ\n⊢ rightDerived (𝟙 F) n = 𝟙 (F.rightDerived n)"
-    },
-    {
-      "name": "CategoryTheory.NonPreadditiveAbelian.lift_σ",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : NonPreadditiveAbelian C\nX : C\n⊢ prod.lift (𝟙 X) 0 ≫ σ = 𝟙 X"
-    },
-    {
-      "name": "CategoryTheory.OverPresheafAux.YonedaCollection.map₂_comp",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nA : Cᵒᵖ ⥤ Type v\nF : (CostructuredArrow yoneda A)ᵒᵖ ⥤ Type v\nX Y Z : C\nf : X ⟶ Y\ng : Y ⟶ Z\n⊢ map₂ F (f ≫ g) = map₂ F f ∘ map₂ F g"
-    },
-    {
-      "name": "CategoryTheory.OverPresheafAux.YonedaCollection.map₂_id",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nA : Cᵒᵖ ⥤ Type v\nF : (CostructuredArrow yoneda A)ᵒᵖ ⥤ Type v\nX : C\n⊢ map₂ F (𝟙 X) = id"
     },
     {
       "name": "CategoryTheory.PreGaloisCategory.fiberPullbackEquiv_symm_snd_apply",
@@ -857,28 +597,8 @@
       "statement": "C : Type u_2\nD : Type ?u.1161\ninst✝¹ : Category.{u_1, u_2} C\ninst✝ : Category.{?u.1169, ?u.1161} D\nX : C\nS T : Presieve X\n⊢ S.FactorsThruAlong T (𝟙 X) ↔ S.FactorsThru T"
     },
     {
-      "name": "CategoryTheory.ProjectiveResolution.π_f_succ",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\ninst✝¹ : HasZeroObject C\ninst✝ : HasZeroMorphisms C\nZ : C\nP : ProjectiveResolution Z\nn : ℕ\n⊢ n + 1 ≠ 0"
-    },
-    {
-      "name": "CategoryTheory.Quotient.compClosure_iff_self",
-      "statement": "C : Type u_1\ninst✝ : Category.{u_2, u_1} C\nr : HomRel C\nh : Congruence r\nX Y : C\nf g : X ⟶ Y\n⊢ CompClosure r f g ↔ r f g"
-    },
-    {
-      "name": "CategoryTheory.ShortComplex.Exact.epi_f_iff",
-      "statement": "C : Type u_1\nD : Type u_2\ninst✝³ : Category.{u_3, u_1} C\ninst✝² : Category.{?u.72458, u_2} D\ninst✝¹ : Preadditive C\ninst✝ : Preadditive D\nS : ShortComplex C\nhS : S.Exact\n⊢ Epi S.f ↔ S.g = 0"
-    },
-    {
-      "name": "CategoryTheory.ShortComplex.HomologyMapData.congr_left_φH",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : HasZeroMorphisms C\nS S₁ S₂ S₃ S₄ : ShortComplex C\nφ : S₁ ⟶ S₂\nh₁ : S₁.HomologyData\nh₂ : S₂.HomologyData\nγ₁ γ₂ : HomologyMapData φ h₁ h₂\neq : γ₁ = γ₂\n⊢ γ₁.left.φH = γ₂.left.φH"
-    },
-    {
       "name": "CategoryTheory.ShortComplex.LeftHomologyData.cyclesIso_hom_comp_i",
       "statement": "C : Type u_1\ninst✝² : Category.{u_2, u_1} C\ninst✝¹ : HasZeroMorphisms C\nS S₁ S₂ S₃ : ShortComplex C\nh : S.LeftHomologyData\ninst✝ : S.HasLeftHomology\n⊢ h.cyclesIso.hom ≫ h.i = S.iCycles"
-    },
-    {
-      "name": "CategoryTheory.ShortComplex.RightHomologyData.homologyIso_inv_comp_homologyι",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : HasZeroMorphisms C\nS S₁ S₂ S₃ S₄ : ShortComplex C\nφ : S₁ ⟶ S₂\nh₁ : S₁.HomologyData\nh₂ : S₂.HomologyData\nA : C\ninst✝¹ : S.HasHomology\nh : S.RightHomologyData\ninst✝ : S.HasHomology\n⊢ h.homologyIso.inv ≫ S.homologyι = h.ι ≫ h.opcyclesIso.inv"
     },
     {
       "name": "CategoryTheory.ShortComplex.cyclesMap'_add",
@@ -893,28 +613,8 @@
       "statement": "C : Type u_1\ninst✝¹ : Category.{u_2, u_1} C\ninst✝ : Preadditive C\nS₁ S₂ S₃ : ShortComplex C\nφ φ' : S₁ ⟶ S₂\nh₁ : S₁.RightHomologyData\nh₂ : S₂.RightHomologyData\n⊢ opcyclesMap' (φ - φ') h₁ h₂ = opcyclesMap' φ h₁ h₂ - opcyclesMap' φ' h₁ h₂"
     },
     {
-      "name": "CategoryTheory.ShortComplex.π_leftRightHomologyComparison'_ι",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : HasZeroMorphisms C\nS S₁ S₂ S₃ S₄ : ShortComplex C\nφ : S₁ ⟶ S₂\nh₁✝ : S₁.HomologyData\nh₂✝ : S₂.HomologyData\nh₁ : S.LeftHomologyData\nh₂ : S.RightHomologyData\n⊢ h₁.π ≫ leftRightHomologyComparison' h₁ h₂ ≫ h₂.ι = h₁.i ≫ h₂.p"
-    },
-    {
-      "name": "CategoryTheory.Sieve.functorPushforward_over_map",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y : C\nf : X ⟶ Y\nZ : Over X\nS : Sieve Z.left\n⊢ functorPushforward (Over.map f) ((overEquiv Z).symm S) = (overEquiv ((Over.map f).obj Z)).symm S"
-    },
-    {
       "name": "CategoryTheory.Sieve.mem_ofObjects_iff",
       "statement": "C : Type u₁\ninst✝¹ : Category.{v₁, u₁} C\nD : Type u₂\ninst✝ : Category.{v₂, u₂} D\nF : C ⥤ D\nX✝ Y✝ Z✝ : C\nf : Y✝ ⟶ X✝\nS R : Sieve X✝\nI : Type u_1\nY : I → C\nZ X : C\ng : Z ⟶ X\n⊢ (ofObjects Y X).arrows g ↔ ∃ i, Nonempty (Z ⟶ Y i)"
-    },
-    {
-      "name": "CategoryTheory.Sieve.overEquiv_top",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX : C\nY : Over X\n⊢ (overEquiv Y) ⊤ = ⊤"
-    },
-    {
-      "name": "CategoryTheory.SmallObject.ιFunctorObj_naturality",
-      "statement": "C : Type u\ninst✝⁴ : Category.{v, u} C\nI : Type w\nA B : I → C\nf : (i : I) → A i ⟶ B i\nS X Y Z : C\nπX : X ⟶ S\nπY : Y ⟶ S\nφ : X ⟶ Y\nhφ : φ ≫ πY = πX\ninst✝³ : HasColimitsOfShape (Discrete (FunctorObjIndex f πX)) C\ninst✝² : HasColimitsOfShape (Discrete (FunctorObjIndex f πY)) C\ninst✝¹ : HasPushout (functorObjTop f πX) (functorObjLeft f πX)\ninst✝ : HasPushout (functorObjTop f πY) (functorObjLeft f πY)\n⊢ ιFunctorObj f πX ≫ functorMap f πX πY φ hφ = φ ≫ ιFunctorObj f πY"
-    },
-    {
-      "name": "CategoryTheory.SmallObject.ρFunctorObj_π",
-      "statement": "C : Type u\ninst✝⁴ : Category.{v, u} C\nI : Type w\nA B : I → C\nf : (i : I) → A i ⟶ B i\nS X Y Z : C\nπX : X ⟶ S\nπY : Y ⟶ S\nφ : X ⟶ Y\nhφ : φ ≫ πY = πX\ninst✝³ : HasColimitsOfShape (Discrete (FunctorObjIndex f πX)) C\ninst✝² : HasColimitsOfShape (Discrete (FunctorObjIndex f πY)) C\ninst✝¹ : HasPushout (functorObjTop f πX) (functorObjLeft f πX)\ninst✝ : HasPushout (functorObjTop f πY) (functorObjLeft f πY)\n⊢ ρFunctorObj f πX ≫ πFunctorObj f πX = π'FunctorObj f πX"
     },
     {
       "name": "CategoryTheory.StructuredArrow.eqToHom_right",
@@ -981,28 +681,8 @@
       "statement": "C : Type u\ninst✝² : Category.{v, u} C\nX✝ Y✝ : C\ninst✝¹ : HasTerminal C\ninst✝ : HasBinaryProducts C\nX Y Z : C\n⊢ (α_ X Y Z).hom ≫ prod.fst = prod.fst ≫ prod.fst"
     },
     {
-      "name": "CategoryTheory.obj_ε_app",
-      "statement": "C : Type u\ninst✝² : Category.{v, u} C\nM : Type u_1\ninst✝¹ : Category.{u_2, u_1} M\ninst✝ : MonoidalCategory M\nF : MonoidalFunctor M (C ⥤ C)\nn : M\nX : C\n⊢ (F.obj n).map (F.ε.app X) = (F.map (λ_ n).inv).app X ≫ (F.μIso (𝟙_ M) n).inv.app X"
-    },
-    {
-      "name": "CategoryTheory.sheafComposeIso_inv_fac",
-      "statement": "C : Type u\ninst✝⁶ : Category.{v, u} C\nJ : GrothendieckTopology C\nA : Type u_1\nB : Type u_2\ninst✝⁵ : Category.{u_4, u_1} A\ninst✝⁴ : Category.{u_3, u_2} B\nF : A ⥤ B\ninst✝³ : HasWeakSheafify J A\ninst✝² : HasWeakSheafify J B\ninst✝¹ : J.HasSheafCompose F\ninst✝ : J.PreservesSheafification F\nP : Cᵒᵖ ⥤ A\n⊢ whiskerRight (toSheafify J P) F ≫ (sheafifyComposeIso J F P).inv = toSheafify J (P ⋙ F)"
-    },
-    {
-      "name": "CategoryTheory.shiftComm_symm",
-      "statement": "C : Type u\nA : Type u_1\ninst✝² : Category.{v, u} C\ninst✝¹ : AddCommMonoid A\ninst✝ : HasShift C A\nX Y : C\nf : X ⟶ Y\ni j : A\n⊢ (shiftComm X i j).symm = shiftComm X j i"
-    },
-    {
       "name": "CategoryTheory.tensorRightHomEquiv_whiskerRight_comp_evaluation",
       "statement": "C : Type u₁\ninst✝² : Category.{v₁, u₁} C\ninst✝¹ : MonoidalCategory C\nX Y : C\ninst✝ : HasRightDual X\nf : Y ⟶ Xᘁ\n⊢ (tensorRightHomEquiv Y X Xᘁ (𝟙_ C)) (f ▷ X ≫ ε_ X Xᘁ) = 𝟙 Y ⊗≫ (Y ◁ η_ X Xᘁ ≫ f ▷ (X ⊗ Xᘁ)) ⊗≫ ε_ X Xᘁ ▷ Xᘁ"
-    },
-    {
-      "name": "CategoryTheory.transferNatTransSelf_comp",
-      "statement": "C : Type u₁\nD : Type u₂\ninst✝¹ : Category.{v₁, u₁} C\ninst✝ : Category.{v₂, u₂} D\nL₁ L₂ L₃ : C ⥤ D\nR₁ R₂ R₃ : D ⥤ C\nadj₁ : L₁ ⊣ R₁\nadj₂ : L₂ ⊣ R₂\nadj₃ : L₃ ⊣ R₃\nf : L₂ ⟶ L₁\ng : L₃ ⟶ L₂\n⊢ (transferNatTransSelf adj₁ adj₂) f ≫ (transferNatTransSelf adj₂ adj₃) g = (transferNatTransSelf adj₁ adj₃) (g ≫ f)"
-    },
-    {
-      "name": "CategoryTheory.whisker_eq",
-      "statement": "C : Type u\ninst✝ : Category.{v, u} C\nX Y Z : C\nf : X ⟶ Y\ng h : Y ⟶ Z\nw : g = h\n⊢ f ≫ g = f ≫ h"
     },
     {
       "name": "ChainComplex.mk'_d_1_0",
@@ -1033,50 +713,6 @@
       "statement": "R : Type u_1\ninst✝² : CommRing R\nM : Type u_2\ninst✝¹ : AddCommGroup M\ninst✝ : Module R M\nQ : QuadraticForm R M\nn : ℕ\nm : M\n⊢ (ι Q) m * (ι Q) m = (algebraMap R (CliffordAlgebra Q)) (Q m)"
     },
     {
-      "name": "CochainComplex.HomComplex.Cochain.comp_add",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn m n₁ n₂ n₁₂ : ℤ\nz₁ : Cochain F G n₁\nz₂ z₂' : Cochain G K n₂\nh : n₁ + n₂ = n₁₂\n⊢ z₁.comp (z₂ + z₂') h = z₁.comp z₂ h + z₁.comp z₂' h"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.comp_assoc_of_second_is_zero_cochain",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn m n₁ n₃ n₁₃ : ℤ\nz₁ : Cochain F G n₁\nz₂ : Cochain G K 0\nz₃ : Cochain K L n₃\nh₁₃ : n₁ + n₃ = n₁₃\n⊢ n₁ + 0 + n₃ = n₁₃"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.comp_id",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn✝ m n : ℤ\nz₁ : Cochain F G n\n⊢ z₁.comp (ofHom (𝟙 G)) ⋯ = z₁"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.congr_v",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn m : ℤ\nz₁ z₂ : Cochain F G n\nh : z₁ = z₂\np q : ℤ\nhpq : p + n = q\n⊢ z₁.v p q hpq = z₂.v p q hpq"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.d_comp_ofHoms_v",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn m : ℤ\nψ : (p : ℤ) → F.X p ⟶ G.X p\np' p q : ℤ\nhpq : p + 0 = q\n⊢ F.d p' p ≫ (ofHoms ψ).v p q hpq = F.d p' q ≫ ψ q"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.id_comp",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn✝ m n : ℤ\nz₂ : Cochain F G n\n⊢ (ofHom (𝟙 F)).comp z₂ ⋯ = z₂"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.leftShift_comp_zero_cochain",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nK L M : CochainComplex C ℤ\nn : ℤ\nγ γ₁ γ₂ : Cochain K L n\na n' : ℤ\nhn' : n + a = n'\nγ' : Cochain L M 0\n⊢ (γ.comp γ' ⋯).leftShift a n' hn' = (γ.leftShift a n' hn').comp γ' ⋯"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cochain.leftShift_units_smul",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nK L M : CochainComplex C ℤ\nn : ℤ\nγ γ₁ γ₂ : Cochain K L n\na n' : ℤ\nhn' : n + a = n'\nx : Rˣ\n⊢ (x • γ).leftShift a n' hn' = x • γ.leftShift a n' hn'"
-    },
-    {
-      "name": "CochainComplex.HomComplex.Cocycle.homOf_ofHom_eq_self",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn m : ℤ\nφ : F ⟶ G\n⊢ (ofHom φ).homOf = φ"
-    },
-    {
-      "name": "CochainComplex.HomComplex.δ_map",
-      "statement": "C : Type u\ninst✝⁶ : Category.{v, u} C\ninst✝⁵ : Preadditive C\nR : Type u_1\ninst✝⁴ : Ring R\ninst✝³ : Linear R C\nF G K L : CochainComplex C ℤ\nn m : ℤ\nD : Type u_2\ninst✝² : Category.{u_3, u_2} D\ninst✝¹ : Preadditive D\nz z' : Cochain K L n\nf : K ⟶ L\nΦ : C ⥤ D\ninst✝ : Φ.Additive\n⊢ δ n m (z.map Φ) = (δ n m z).map Φ"
-    },
-    {
-      "name": "CochainComplex.HomComplex.δ_zero_cocycle_comp",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nR : Type u_1\ninst✝¹ : Ring R\ninst✝ : Linear R C\nF G K L : CochainComplex C ℤ\nn✝ m✝ n : ℤ\nz₁ : Cocycle F G 0\nz₂ : Cochain G K n\nm : ℤ\n⊢ δ n m ((↑z₁).comp z₂ ⋯) = (↑z₁).comp (δ n m z₂) ⋯"
-    },
-    {
       "name": "CochainComplex.cochainComplex_d_succ_succ_zero",
       "statement": "V : Type u\ninst✝¹ : Category.{v, u} V\ninst✝ : HasZeroMorphisms V\nC : CochainComplex V ℕ\ni : ℕ\n⊢ C.d 0 (i + 2) = 0"
     },
@@ -1091,10 +727,6 @@
     {
       "name": "CochainComplex.of_d_ne",
       "statement": "ι : Type u_1\nV : Type u\ninst✝⁴ : Category.{v, u} V\ninst✝³ : HasZeroMorphisms V\nα : Type u_2\ninst✝² : AddRightCancelSemigroup α\ninst✝¹ : One α\ninst✝ : DecidableEq α\nX : α → V\nd : (n : α) → X n ⟶ X (n + 1)\nsq : ∀ (n : α), d n ≫ d (n + 1) = 0\ni j : α\nh : i + 1 ≠ j\n⊢ (of X d sq).d i j = 0"
-    },
-    {
-      "name": "CochainComplex.shiftFunctorAdd_hom_app_f",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : Preadditive C\nD : Type u'\ninst✝¹ : Category.{v', u'} D\ninst✝ : Preadditive D\nK : CochainComplex C ℤ\na b n : ℤ\n⊢ n + { as := a + b }.as = n + { as := b }.as + { as := a }.as"
     },
     {
       "name": "Combinatorics.Line.vertical_apply",
@@ -2311,10 +1943,6 @@
     {
       "name": "HomologicalComplex.opcyclesToCycles_iCycles",
       "statement": "C : Type u_1\nι : Type u_2\ninst✝⁵ : Category.{u_3, u_1} C\ninst✝⁴ : HasZeroMorphisms C\nc : ComplexShape ι\nK L : HomologicalComplex C c\nφ : K ⟶ L\ni j : ι\ninst✝³ : K.HasHomology i\ninst✝² : K.HasHomology j\ninst✝¹ : L.HasHomology i\ninst✝ : L.HasHomology j\n⊢ K.opcyclesToCycles i j ≫ K.iCycles j = K.fromOpcycles i j"
-    },
-    {
-      "name": "HomologicalComplex.singleObjHomologySelfIso_inv_homologyι",
-      "statement": "C : Type u\ninst✝³ : Category.{v, u} C\ninst✝² : HasZeroMorphisms C\ninst✝¹ : HasZeroObject C\nι : Type u_1\ninst✝ : DecidableEq ι\nc : ComplexShape ι\nj : ι\nA : C\n⊢ (singleObjHomologySelfIso c j A).inv ≫ ((single C c j).obj A).homologyι j = (singleObjOpcyclesSelfIso c j A).hom"
     },
     {
       "name": "HomologicalComplex₂.D₁_D₂",
@@ -4031,10 +3659,6 @@
     {
       "name": "Nat.le_and_le_add_one_iff",
       "statement": "a b c d m n k : ℕ\np q : ℕ → Prop\n⊢ n ≤ m ∧ m ≤ n + 1 ↔ m = n ∨ m = n + 1"
-    },
-    {
-      "name": "Nat.le_div_two_iff_mul_two_le",
-      "statement": "n m : ℕ\n⊢ m ≤ n / 2 ↔ ↑m * 2 ≤ ↑n"
     },
     {
       "name": "Nat.log_div_mul_self",
@@ -6019,10 +5643,6 @@
     {
       "name": "TopCat.Presheaf.covering_presieve_eq_self",
       "statement": "X : TopCat\nY : Opens ↑X\nR : Presieve Y\n⊢ presieveOfCoveringAux (coveringOfPresieve Y R) Y = R"
-    },
-    {
-      "name": "TopCat.Presheaf.stalkSpecializes_stalkFunctor_map",
-      "statement": "C : Type u\ninst✝¹ : Category.{v, u} C\ninst✝ : HasColimits C\nX Y Z : TopCat\nF G : Presheaf C X\nf : F ⟶ G\nx y : ↑X\nh : x ⤳ y\n⊢ F.stalkSpecializes h ≫ (stalkFunctor C x).map f = (stalkFunctor C y).map f ≫ G.stalkSpecializes h"
     },
     {
       "name": "TopCat.of_isoOfHomeo",
