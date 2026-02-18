@@ -7,6 +7,10 @@
 #   ./scripts/run_iteration_search.sh <iteration_number>
 #   ./scripts/run_iteration_search.sh 0
 #   NUM_WORKERS=30 ./scripts/run_iteration_search.sh 1
+#   START_STEP=3 ./scripts/run_iteration_search.sh 2   # skip EBM, start at search
+#   START_STEP=4 ./scripts/run_iteration_search.sh 2   # skip EBM+search, start at eval
+#
+# Steps: 2=EBM training, 3=proof search, 4=evaluation, 5=summary
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
@@ -34,6 +38,7 @@ EBM_STEPS="${EBM_STEPS:-50000}"
 ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-64}"
 ENCODE_CONCURRENCY="${ENCODE_CONCURRENCY:-2}"
 EBM_RESUME="${EBM_RESUME:-auto}"
+START_STEP="${START_STEP:-2}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
@@ -56,10 +61,14 @@ echo "  Max theorems:    ${MAX_THEOREMS} (eval: ${EVAL_MAX_THEOREMS})"
 echo "  EBM steps:       ${EBM_STEPS}"
 echo "  EBM resume:      ${EBM_RESUME}"
 echo "  Encode:          batch_size=${ENCODE_BATCH_SIZE} concurrency=${ENCODE_CONCURRENCY}"
+echo "  Start step:      ${START_STEP} (2=EBM, 3=search, 4=eval, 5=summary)"
 echo "================================================================"
 
 # ── Step 2: EBM Training (skip iteration 0) ───────────────────────────────
-if [ "$ITER" -gt 0 ]; then
+if [ "$START_STEP" -gt 2 ]; then
+    echo ""
+    echo "=== Step 2: EBM Training [SKIPPED — START_STEP=${START_STEP}] ==="
+elif [ "$ITER" -gt 0 ]; then
     echo ""
     echo "=== Step 2a: Preparing EBM Training Data ==="
 
@@ -163,9 +172,8 @@ else
 fi
 
 # ── Step 3: Proof Search ──────────────────────────────────────────────────
-echo ""
-echo "=== Step 3: Proof Search ==="
 
+# EBM flag needed by both search and eval — resolve before skip check
 EBM_FLAG=""
 if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
     EBM_FLAG="--ebm-path ${EBM_DIR}"
@@ -173,79 +181,92 @@ fi
 
 TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
 
-# shellcheck disable=SC2086
-$PROVER search \
-    --config "$SEARCH_CONFIG" \
-    --server-url "$SGLANG_URL" \
-    $EBM_FLAG \
-    --theorems "$THEOREM_INDEX" \
-    --output "$TRAJ_OUTPUT" \
-    --num-workers "$NUM_WORKERS" \
-    --concurrency "$CONCURRENCY" \
-    --max-theorems "$MAX_THEOREMS" \
-    --imports Mathlib
-
-# ── Step 3b: Noise injection search (iteration 0 only) ────────────────────
-if [ "$ITER" -eq 0 ]; then
+if [ "$START_STEP" -gt 3 ]; then
     echo ""
-    echo "=== Step 3b: Noise Injection Search (temperature=1.2) ==="
+    echo "=== Step 3: Proof Search [SKIPPED — START_STEP=${START_STEP}] ==="
+else
+    echo ""
+    echo "=== Step 3: Proof Search ==="
 
-    NOISY_OUTPUT="${TRAJ_DIR}/iter_0_noisy.parquet"
-
+    # shellcheck disable=SC2086
     $PROVER search \
         --config "$SEARCH_CONFIG" \
         --server-url "$SGLANG_URL" \
-        --temperature 1.2 \
+        $EBM_FLAG \
         --theorems "$THEOREM_INDEX" \
-        --output "$NOISY_OUTPUT" \
+        --output "$TRAJ_OUTPUT" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
         --imports Mathlib
+
+    # ── Step 3b: Noise injection search (iteration 0 only) ────────────────
+    if [ "$ITER" -eq 0 ]; then
+        echo ""
+        echo "=== Step 3b: Noise Injection Search (temperature=1.2) ==="
+
+        NOISY_OUTPUT="${TRAJ_DIR}/iter_0_noisy.parquet"
+
+        $PROVER search \
+            --config "$SEARCH_CONFIG" \
+            --server-url "$SGLANG_URL" \
+            --temperature 1.2 \
+            --theorems "$THEOREM_INDEX" \
+            --output "$NOISY_OUTPUT" \
+            --num-workers "$NUM_WORKERS" \
+            --concurrency "$CONCURRENCY" \
+            --max-theorems "$MAX_THEOREMS" \
+            --imports Mathlib
+    fi
 fi
 
 # ── Step 4: Evaluation ────────────────────────────────────────────────────
-echo ""
-echo "=== Step 4: Evaluation ==="
-
-if [ -f "$MINIF2F" ]; then
-    EVAL_THEOREMS="$MINIF2F"
-else
-    echo "Warning: miniF2F file not found at ${MINIF2F}, using theorem_index.json"
-    EVAL_THEOREMS="$THEOREM_INDEX"
-fi
-
-# Eval WITH EBM (if available)
-# shellcheck disable=SC2086
-$PROVER eval \
-    --config "$SEARCH_CONFIG" \
-    --server-url "$SGLANG_URL" \
-    $EBM_FLAG \
-    --theorems "$EVAL_THEOREMS" \
-    --budgets 600 \
-    --output "${EVAL_DIR}/iter_${ITER}.json" \
-    --num-workers "$NUM_WORKERS" \
-    --concurrency "$CONCURRENCY" \
-    --max-theorems "$EVAL_MAX_THEOREMS" \
-    --num-candidates 16 \
-    --imports Mathlib
-
-# ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────────
-if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
+if [ "$START_STEP" -gt 4 ]; then
     echo ""
-    echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
+    echo "=== Step 4: Evaluation [SKIPPED — START_STEP=${START_STEP}] ==="
+else
+    echo ""
+    echo "=== Step 4: Evaluation ==="
 
+    if [ -f "$MINIF2F" ]; then
+        EVAL_THEOREMS="$MINIF2F"
+    else
+        echo "Warning: miniF2F file not found at ${MINIF2F}, using theorem_index.json"
+        EVAL_THEOREMS="$THEOREM_INDEX"
+    fi
+
+    # Eval WITH EBM (if available)
+    # shellcheck disable=SC2086
     $PROVER eval \
         --config "$SEARCH_CONFIG" \
         --server-url "$SGLANG_URL" \
+        $EBM_FLAG \
         --theorems "$EVAL_THEOREMS" \
         --budgets 600 \
-        --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
+        --output "${EVAL_DIR}/iter_${ITER}.json" \
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$EVAL_MAX_THEOREMS" \
         --num-candidates 16 \
         --imports Mathlib
+
+    # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────
+    if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
+        echo ""
+        echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
+
+        $PROVER eval \
+            --config "$SEARCH_CONFIG" \
+            --server-url "$SGLANG_URL" \
+            --theorems "$EVAL_THEOREMS" \
+            --budgets 600 \
+            --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
+            --num-workers "$NUM_WORKERS" \
+            --concurrency "$CONCURRENCY" \
+            --max-theorems "$EVAL_MAX_THEOREMS" \
+            --num-candidates 16 \
+            --imports Mathlib
+    fi
 fi
 
 # ── Step 5: Summary ──────────────────────────────────────────────────────

@@ -8,6 +8,9 @@
 #   ./scripts/run_iteration_train.sh <iteration_number>
 #   ./scripts/run_iteration_train.sh 0   # First iteration (base model fine-tune)
 #   ./scripts/run_iteration_train.sh 1   # Second iteration (adds trajectory data)
+#   START_STEP=2 ./scripts/run_iteration_train.sh 1  # Skip training, only export
+#
+# Steps: 1=LLM fine-tuning, 2=export to safetensors
 #
 # Prerequisites:
 #   - Python deps installed (pip install -r python/requirements.txt)
@@ -29,6 +32,8 @@ CKPT_DIR="${REPO_ROOT}/checkpoints/llm"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
 
+START_STEP="${START_STEP:-1}"
+
 mkdir -p "$CKPT_DIR" "$LLM_DIR"
 mkdir -p "${REPO_ROOT}/logs"
 
@@ -42,67 +47,72 @@ echo "  Train data:      ${TRAIN_DATA}"
 echo "================================================================"
 
 # ── Step 1: LLM Fine-tuning ───────────────────────────────────────────────
-echo ""
-echo "=== Step 1: LLM Fine-tuning ==="
-
-# Compute learning rate: halve each iteration (2e-4, 1e-4, 5e-5, ...)
-LR=$(python3 -c "print(2e-4 / (2 ** ${ITER}))")
-
-VAL_DATA_FLAG=""
-if [ -f "$VAL_DATA" ]; then
-    VAL_DATA_FLAG="--val-data ${VAL_DATA}"
-fi
-
-if [ "$ITER" -eq 0 ]; then
-    echo "Iteration 0: training on base Mathlib tactic pairs only"
-    # shellcheck disable=SC2086
-    accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
-        --model-name "$LLM_BASE" \
-        --data "$TRAIN_DATA" \
-        $VAL_DATA_FLAG \
-        --output "${CKPT_DIR}/iter_0" \
-        --max-steps 1500 \
-        --lr "$LR"
+if [ "$START_STEP" -gt 1 ]; then
+    echo ""
+    echo "=== Step 1: LLM Fine-tuning [SKIPPED — START_STEP=${START_STEP}] ==="
 else
-    echo "Iteration ${ITER}: training with trajectory data from previous iterations"
+    echo ""
+    echo "=== Step 1: LLM Fine-tuning ==="
 
-    # Collect all trajectory sources: iter_N parquets + negatives pipeline output.
-    # Each --extra-data flag takes one glob pattern (action="append" in argparse).
-    EXTRA_DATA_ARGS=()
-    for i in $(seq 0 "$PREV"); do
-        pattern="${TRAJ_DIR}/iter_${i}*.parquet"
-        # shellcheck disable=SC2086
-        if compgen -G $pattern > /dev/null; then
-            EXTRA_DATA_ARGS+=(--extra-data "$pattern")
-        fi
-    done
+    # Compute learning rate: halve each iteration (2e-4, 1e-4, 5e-5, ...)
+    LR=$(python3 -c "print(2e-4 / (2 ** ${ITER}))")
 
-    # Include generate-negatives pipeline output (high-quality ground-truth data)
-    NEG_PATTERN="${TRAJ_DIR}/negatives_2*.parquet"
-    # shellcheck disable=SC2086
-    if compgen -G $NEG_PATTERN > /dev/null; then
-        EXTRA_DATA_ARGS+=(--extra-data "$NEG_PATTERN")
+    VAL_DATA_FLAG=""
+    if [ -f "$VAL_DATA" ]; then
+        VAL_DATA_FLAG="--val-data ${VAL_DATA}"
     fi
 
-    BASE_CKPT="${CKPT_DIR}/iter_${PREV}"
-    BASE_SUBSAMPLE="${BASE_SUBSAMPLE:-50000}"
-    MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
-    BATCH_SIZE="${BATCH_SIZE:-8}"
-    GRAD_ACCUM="${GRAD_ACCUM:-2}"
+    if [ "$ITER" -eq 0 ]; then
+        echo "Iteration 0: training on base Mathlib tactic pairs only"
+        # shellcheck disable=SC2086
+        accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
+            --model-name "$LLM_BASE" \
+            --data "$TRAIN_DATA" \
+            $VAL_DATA_FLAG \
+            --output "${CKPT_DIR}/iter_0" \
+            --max-steps 1500 \
+            --lr "$LR"
+    else
+        echo "Iteration ${ITER}: training with trajectory data from previous iterations"
 
-    # shellcheck disable=SC2086
-    accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
-        --model-name "$LLM_BASE" \
-        --data "$TRAIN_DATA" \
-        $VAL_DATA_FLAG \
-        "${EXTRA_DATA_ARGS[@]}" \
-        --output "${CKPT_DIR}/iter_${ITER}" \
-        --base "$BASE_CKPT" \
-        --max-steps "$MAX_TRAIN_STEPS" \
-        --base-subsample "$BASE_SUBSAMPLE" \
-        --batch-size "$BATCH_SIZE" \
-        --gradient-accumulation "$GRAD_ACCUM" \
-        --lr "$LR"
+        # Collect all trajectory sources: iter_N parquets + negatives pipeline output.
+        # Each --extra-data flag takes one glob pattern (action="append" in argparse).
+        EXTRA_DATA_ARGS=()
+        for i in $(seq 0 "$PREV"); do
+            pattern="${TRAJ_DIR}/iter_${i}*.parquet"
+            # shellcheck disable=SC2086
+            if compgen -G $pattern > /dev/null; then
+                EXTRA_DATA_ARGS+=(--extra-data "$pattern")
+            fi
+        done
+
+        # Include generate-negatives pipeline output (high-quality ground-truth data)
+        NEG_PATTERN="${TRAJ_DIR}/negatives_2*.parquet"
+        # shellcheck disable=SC2086
+        if compgen -G $NEG_PATTERN > /dev/null; then
+            EXTRA_DATA_ARGS+=(--extra-data "$NEG_PATTERN")
+        fi
+
+        BASE_CKPT="${CKPT_DIR}/iter_${PREV}"
+        BASE_SUBSAMPLE="${BASE_SUBSAMPLE:-50000}"
+        MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
+        BATCH_SIZE="${BATCH_SIZE:-8}"
+        GRAD_ACCUM="${GRAD_ACCUM:-2}"
+
+        # shellcheck disable=SC2086
+        accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
+            --model-name "$LLM_BASE" \
+            --data "$TRAIN_DATA" \
+            $VAL_DATA_FLAG \
+            "${EXTRA_DATA_ARGS[@]}" \
+            --output "${CKPT_DIR}/iter_${ITER}" \
+            --base "$BASE_CKPT" \
+            --max-steps "$MAX_TRAIN_STEPS" \
+            --base-subsample "$BASE_SUBSAMPLE" \
+            --batch-size "$BATCH_SIZE" \
+            --gradient-accumulation "$GRAD_ACCUM" \
+            --lr "$LR"
+    fi
 fi
 
 # ── Step 1b: Export to safetensors ─────────────────────────────────────────
