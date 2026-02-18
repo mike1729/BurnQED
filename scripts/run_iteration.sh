@@ -22,5 +22,5 @@ set -euo pipefail
 ITER=${1:?"Usage: ./scripts/run_iteration.sh <iteration_number>"}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-"${SCRIPT_DIR}/run_iteration_train.sh" "$ITER"
-"${SCRIPT_DIR}/run_iteration_search.sh" "$ITER"
+bash "${SCRIPT_DIR}/run_iteration_train.sh" "$ITER"
+bash "${SCRIPT_DIR}/run_iteration_search.sh" "$ITER"

@@ -42,7 +42,7 @@ if [ "$SKIP_BASELINE" -eq 0 ]; then
     echo ">>> Phase B: Running baseline evaluation..."
     LOG_FILE="${REPO_ROOT}/logs/baseline.log"
 
-    if "${REPO_ROOT}/scripts/run_baseline.sh" 2>&1 | tee "$LOG_FILE"; then
+    if bash "${REPO_ROOT}/scripts/run_baseline.sh" 2>&1 | tee "$LOG_FILE"; then
         echo ">>> Phase B completed successfully."
     else
         echo ">>> Phase B FAILED. Check ${LOG_FILE} for details."
@@ -62,7 +62,7 @@ for i in $(seq 0 "$MAX_ITER"); do
     echo ">>> Starting iteration ${i} (log: ${LOG_FILE})"
     echo ""
 
-    if "${REPO_ROOT}/scripts/run_iteration.sh" "$i" 2>&1 | tee "$LOG_FILE"; then
+    if bash "${REPO_ROOT}/scripts/run_iteration.sh" "$i" 2>&1 | tee "$LOG_FILE"; then
         echo ">>> Iteration ${i} completed successfully."
     else
         echo ">>> Iteration ${i} FAILED. Check ${LOG_FILE} for details."
