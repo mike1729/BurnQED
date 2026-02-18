@@ -617,11 +617,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) proved={prefix}")
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) {prefix}")
             .expect("valid progress bar template")
             .progress_chars("=> "),
     );
-    pb.set_prefix("0");
+    pb.set_prefix("proved=0");
     pb.set_message("?");
     pb.enable_steady_tick(Duration::from_secs(1));
 
@@ -711,12 +711,16 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             }
             Err(e) => {
                 agg.error_count += 1;
-                tracing::debug!(theorem = outcome.name, error = %e, "Search failed, skipping");
+                tracing::warn!(theorem = outcome.name, error = %e, "Search error, skipping");
             }
         }
         agg.record_completion();
         pb.inc(1);
-        pb.set_prefix(format!("{}", agg.proved_count));
+        if agg.error_count > 0 {
+            pb.set_prefix(format!("proved={} err={}", agg.proved_count, agg.error_count));
+        } else {
+            pb.set_prefix(format!("proved={}", agg.proved_count));
+        }
         let done = agg.searched_count + agg.error_count;
         let remaining = total.saturating_sub(done);
         pb.set_message(agg.format_eta(remaining));
