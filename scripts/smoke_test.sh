@@ -11,7 +11,7 @@
 #   SGLANG_URL=http://localhost:30000 ./scripts/smoke_test.sh
 #
 # Prerequisites:
-#   - SGLang server running (./scripts/start_sglang.sh)
+#   - Inference server running (./scripts/start_inference_server.sh)
 #   - Pantograph built (./scripts/setup_pantograph.sh)
 #   - cargo build --release -p prover-core
 

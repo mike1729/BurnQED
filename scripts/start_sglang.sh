@@ -47,5 +47,4 @@ python -m sglang.launch_server \
     --trust-remote-code \
     --mem-fraction-static "$MEM_FRACTION" \
     --enable-return-hidden-states \
-    --chunked-prefill-size -1 \
     $EXTRA_ARGS

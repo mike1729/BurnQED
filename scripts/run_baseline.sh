@@ -13,7 +13,7 @@
 #   NUM_WORKERS=30 CONCURRENCY=16 ./scripts/run_baseline.sh
 #
 # Prerequisites:
-#   - SGLang server running (./scripts/start_sglang.sh)
+#   - Inference server running (./scripts/start_inference_server.sh)
 #   - Rust prover-core built (cargo build --release -p prover-core)
 #   - Pantograph built (./scripts/setup_pantograph.sh)
 #   - Data prepared (test_theorems.json, minif2f_test.json, theorem_index.json)

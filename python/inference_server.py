@@ -61,7 +61,9 @@ app = FastAPI(title="BurnQED Inference Server")
 
 # Global state set during startup
 _engine = None
-# Semaphore to serialize encode requests (SGLang Issue #8066: BS>1 corrupts hidden states)
+# True if startup self-test confirms batch hidden states are correct
+_batch_encode_ok: bool = False
+# Semaphore(1) fallback when batch encode is broken (SGLang Issue #8066)
 _encode_semaphore: asyncio.Semaphore = None
 
 
@@ -141,6 +143,121 @@ def _format_generate_response(output: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Encode helpers
+# ---------------------------------------------------------------------------
+
+
+async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float]]:
+    """Encode all prompts in a single async_generate call (true GPU batching)."""
+    outputs = await _engine.async_generate(
+        prompts,
+        sampling_params={"max_new_tokens": 1, "temperature": 0},
+        return_hidden_states=True,
+    )
+    embeddings = []
+    for i, output in enumerate(outputs):
+        hs = output.get("meta_info", {}).get("hidden_states")
+        if hs is None:
+            raise ValueError(
+                f"Prompt {i}: Engine did not return hidden_states. "
+                "Ensure enable_return_hidden_states=True in Engine constructor."
+            )
+        embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+    return embeddings
+
+
+async def _encode_sequential(prompts: list[str], hidden_size: int) -> list[list[float]]:
+    """Encode prompts one at a time under Semaphore(1) (safe fallback)."""
+    embeddings = []
+    for prompt in prompts:
+        async with _encode_semaphore:
+            outputs = await _engine.async_generate(
+                [prompt],
+                sampling_params={"max_new_tokens": 1, "temperature": 0},
+                return_hidden_states=True,
+            )
+        output = outputs[0]
+        hs = output.get("meta_info", {}).get("hidden_states")
+        if hs is None:
+            raise ValueError(
+                "Engine did not return hidden_states. "
+                "Ensure enable_return_hidden_states=True in Engine constructor."
+            )
+        embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+    return embeddings
+
+
+def _run_batch_selftest(engine, hidden_size: int = 4096) -> bool:
+    """Test whether batch hidden states match individual results.
+
+    Runs synchronously at startup (before the event loop is serving requests).
+    Returns True if batch encoding is safe to use.
+    """
+    import asyncio as _asyncio
+
+    test_prompts = [
+        "n : Nat\n⊢ n + 0 = n",
+        "p q : Prop\nhp : p\n⊢ p ∧ q",
+    ]
+
+    async def _test():
+        # Individual encodes
+        individual = []
+        for prompt in test_prompts:
+            outputs = await engine.async_generate(
+                [prompt],
+                sampling_params={"max_new_tokens": 1, "temperature": 0},
+                return_hidden_states=True,
+            )
+            hs = outputs[0].get("meta_info", {}).get("hidden_states")
+            if hs is None:
+                logger.warning("Self-test: no hidden_states returned for individual encode")
+                return False
+            individual.append(np.array(_mean_pool_hidden_states(hs, hidden_size)))
+
+        # Batch encode
+        outputs = await engine.async_generate(
+            test_prompts,
+            sampling_params={"max_new_tokens": 1, "temperature": 0},
+            return_hidden_states=True,
+        )
+        batch = []
+        for i, output in enumerate(outputs):
+            hs = output.get("meta_info", {}).get("hidden_states")
+            if hs is None:
+                logger.warning("Self-test: no hidden_states in batch output[%d]", i)
+                return False
+            batch.append(np.array(_mean_pool_hidden_states(hs, hidden_size)))
+
+        # Compare cosine similarity
+        for i in range(len(test_prompts)):
+            dot = np.dot(individual[i], batch[i])
+            norm_a = np.linalg.norm(individual[i])
+            norm_b = np.linalg.norm(batch[i])
+            if norm_a < 1e-8 or norm_b < 1e-8:
+                logger.warning("Self-test: near-zero norm for prompt %d", i)
+                return False
+            cos_sim = dot / (norm_a * norm_b)
+            logger.info("Self-test prompt %d: cosine_sim=%.6f", i, cos_sim)
+            if cos_sim < 0.99:
+                logger.warning(
+                    "Self-test FAILED: prompt %d cosine_sim=%.6f < 0.99", i, cos_sim
+                )
+                return False
+
+        return True
+
+    try:
+        loop = _asyncio.new_event_loop()
+        result = loop.run_until_complete(_test())
+        loop.close()
+        return result
+    except Exception:
+        logger.exception("Self-test raised an exception")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -199,34 +316,16 @@ async def encode(request: EncodeRequest):
     Hidden states are mean-pooled in-process (as PyTorch/numpy tensors)
     before JSON serialization, reducing response from ~10MB to ~16KB.
 
-    Serialized with asyncio.Semaphore(1) to work around SGLang Issue #8066
-    where BS>1 produces incorrect hidden states.
+    Uses true batch encoding if the startup self-test passed, otherwise
+    falls back to sequential Semaphore(1) processing (SGLang Issue #8066).
     """
     is_batch = isinstance(request.text, list)
     prompts = request.text if is_batch else [request.text]
 
-    # Sequential processing: SGLang Issue #8066 reports incorrect hidden states
-    # when BS>1. When the upstream fix lands, replace this loop with a single
-    # engine.async_generate(prompts, ...) call for true batch encoding (~3-5x faster).
-    embeddings = []
-    for prompt in prompts:
-        async with _encode_semaphore:
-            outputs = await _engine.async_generate(
-                [prompt],
-                sampling_params={"max_new_tokens": 1, "temperature": 0},
-                return_hidden_states=True,
-            )
-
-        output = outputs[0]
-        hs = output.get("meta_info", {}).get("hidden_states")
-        if hs is None:
-            raise ValueError(
-                "Engine did not return hidden_states. "
-                "Ensure enable_return_hidden_states=True in Engine constructor."
-            )
-
-        embedding = _mean_pool_hidden_states(hs, request.hidden_size)
-        embeddings.append(embedding)
+    if _batch_encode_ok:
+        embeddings = await _encode_batch(prompts, request.hidden_size)
+    else:
+        embeddings = await _encode_sequential(prompts, request.hidden_size)
 
     if is_batch:
         return {"embeddings": embeddings}
@@ -287,9 +386,20 @@ def main():
     tp = int(os.environ.get("TP", args.tp))
     mem_fraction = float(os.environ.get("MEM_FRACTION", args.mem_fraction))
 
-    global _engine, _encode_semaphore
+    global _engine, _batch_encode_ok, _encode_semaphore
     _engine = _build_engine(args.model_path, tp=tp, mem_fraction=mem_fraction)
     _encode_semaphore = asyncio.Semaphore(1)
+
+    # Self-test: check if batch hidden states match individual results
+    logger.info("Running batch encode self-test...")
+    _batch_encode_ok = _run_batch_selftest(_engine)
+    if _batch_encode_ok:
+        logger.info("Batch encode self-test PASSED — using true GPU batching for /encode")
+    else:
+        logger.warning(
+            "Batch encode self-test FAILED — falling back to sequential Semaphore(1) "
+            "encoding (SGLang Issue #8066)"
+        )
 
     logger.info("Starting server on %s:%d", args.host, port)
     uvicorn.run(app, host=args.host, port=port, log_level="info")

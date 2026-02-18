@@ -1,8 +1,8 @@
 """
-Test SGLang batch /encode vs individual /encode.
+Test batch /encode vs individual /encode.
 
 Usage:
-  1. Start SGLang with: --is-embedding --chunked-prefill-size -1
+  1. Start inference server: ./scripts/start_inference_server.sh
   2. python scripts/test_batch_encode.py [--url http://localhost:30000]
 """
 import argparse
@@ -12,19 +12,21 @@ import numpy as np
 import time
 
 def encode_single(url, text, hidden_size=4096):
-    resp = requests.post(f"{url}/encode", json={"text": text}, timeout=30)
+    resp = requests.post(f"{url}/encode", json={"text": text, "hidden_size": hidden_size}, timeout=30)
     resp.raise_for_status()
     body = resp.json()
-    # SGLang --is-embedding returns {"embedding": [f32...]}
     if "embedding" in body:
         return np.array(body["embedding"], dtype=np.float32)
     raise ValueError(f"Unexpected response: {str(body)[:200]}")
 
 def encode_batch(url, texts, hidden_size=4096):
-    resp = requests.post(f"{url}/encode", json={"text": texts}, timeout=60)
+    resp = requests.post(f"{url}/encode", json={"text": texts, "hidden_size": hidden_size}, timeout=60)
     resp.raise_for_status()
     body = resp.json()
-    # Batch: top-level array [{"embedding": [...]}, ...]
+    # Custom server: {"embeddings": [[f32...], ...]}
+    if isinstance(body, dict) and "embeddings" in body:
+        return [np.array(e, dtype=np.float32) for e in body["embeddings"]]
+    # SGLang fallback: top-level array [{"embedding": [...]}, ...]
     if isinstance(body, list):
         results = []
         for i, item in enumerate(body):
@@ -34,7 +36,7 @@ def encode_batch(url, texts, hidden_size=4096):
                 results.append(None)
                 print(f"  [FAIL] Item {i}: no 'embedding' key. Keys: {list(item.keys())}")
         return results
-    raise ValueError(f"Expected array, got: {str(body)[:200]}")
+    raise ValueError(f"Unexpected response format: {str(body)[:200]}")
 
 def main():
     parser = argparse.ArgumentParser()

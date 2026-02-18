@@ -68,8 +68,8 @@ PROVER="cargo run --release -p prover-core --"
 
 # Search
 echo "=== Running search (3 theorems, budget=20) ==="
-echo "NOTE: This script requires an SGLang server running."
-echo "Start with: SGLANG_URL=http://localhost:30000 ./scripts/start_sglang.sh $MODEL_PATH"
+echo "NOTE: This script requires an inference server running."
+echo "Start with: SGLANG_URL=http://localhost:30000 ./scripts/start_inference_server.sh $MODEL_PATH"
 echo ""
 SGLANG_URL="${SGLANG_URL:?SGLANG_URL must be set (e.g. http://localhost:30000)}"
 

@@ -14,7 +14,7 @@
 #   MIN_STEPS=3 CANDIDATES=8 ./scripts/harvest_siblings.sh
 #
 # Prerequisites:
-#   - SGLang inference server running (./scripts/start_sglang.sh)
+#   - Inference server running (./scripts/start_inference_server.sh)
 #   - Pantograph built (./scripts/setup_pantograph.sh)
 #   - cargo build --release -p prover-core
 #   - At least one trajectory Parquet file with proved theorems
