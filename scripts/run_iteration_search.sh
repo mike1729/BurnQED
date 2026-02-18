@@ -45,7 +45,8 @@ SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
 mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$EBM_DIR"
-mkdir -p "${REPO_ROOT}/logs"
+LOG_DIR="${REPO_ROOT}/logs"
+mkdir -p "$LOG_DIR"
 
 echo "================================================================"
 echo "  Expert Iteration ${ITER} — Search & Eval"
@@ -165,6 +166,8 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
 
     echo ""
     echo "=== Step 2b: EBM Training ==="
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_2_ebm.log"
+    echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
     $PROVER train-ebm \
@@ -178,7 +181,8 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
         $EMBEDDINGS_CACHE_FLAG \
         $RESUME_FLAG \
         --encode-batch-size "$ENCODE_BATCH_SIZE" \
-        --encode-concurrency "$ENCODE_CONCURRENCY"
+        --encode-concurrency "$ENCODE_CONCURRENCY" \
+        2>&1 | tee "$STEP_LOG"
 else
     echo ""
     echo "=== Step 2: Skipping EBM training (iteration 0) ==="
@@ -200,6 +204,8 @@ if [ "$START_STEP" -gt 3 ]; then
 else
     echo ""
     echo "=== Step 3: Proof Search ==="
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_3_search.log"
+    echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
     $PROVER search \
@@ -211,7 +217,8 @@ else
         --num-workers "$NUM_WORKERS" \
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
-        --imports Mathlib
+        --imports Mathlib \
+        2>&1 | tee "$STEP_LOG"
 
     # ── Step 3b: Noise injection search (iteration 0 only) ────────────────
     if [ "$ITER" -eq 0 ]; then
@@ -219,6 +226,8 @@ else
         echo "=== Step 3b: Noise Injection Search (temperature=1.2) ==="
 
         NOISY_OUTPUT="${TRAJ_DIR}/iter_0_noisy.parquet"
+        STEP_LOG="${LOG_DIR}/iter_0_step_3b_noisy.log"
+        echo "  Logging to: ${STEP_LOG}"
 
         $PROVER search \
             --config "$SEARCH_CONFIG" \
@@ -229,7 +238,8 @@ else
             --num-workers "$NUM_WORKERS" \
             --concurrency "$CONCURRENCY" \
             --max-theorems "$MAX_THEOREMS" \
-            --imports Mathlib
+            --imports Mathlib \
+            2>&1 | tee "$STEP_LOG"
     fi
 fi
 
@@ -249,6 +259,9 @@ else
     fi
 
     # Eval WITH EBM (if available)
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_4_eval.log"
+    echo "  Logging to: ${STEP_LOG}"
+
     # shellcheck disable=SC2086
     $PROVER eval \
         --config "$SEARCH_CONFIG" \
@@ -261,12 +274,15 @@ else
         --concurrency "$CONCURRENCY" \
         --max-theorems "$EVAL_MAX_THEOREMS" \
         --num-candidates 16 \
-        --imports Mathlib
+        --imports Mathlib \
+        2>&1 | tee "$STEP_LOG"
 
     # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────
     if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         echo ""
         echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
+        STEP_LOG="${LOG_DIR}/iter_${ITER}_step_4b_ablation.log"
+        echo "  Logging to: ${STEP_LOG}"
 
         $PROVER eval \
             --config "$SEARCH_CONFIG" \
@@ -278,7 +294,8 @@ else
             --concurrency "$CONCURRENCY" \
             --max-theorems "$EVAL_MAX_THEOREMS" \
             --num-candidates 16 \
-            --imports Mathlib
+            --imports Mathlib \
+            2>&1 | tee "$STEP_LOG"
     fi
 fi
 

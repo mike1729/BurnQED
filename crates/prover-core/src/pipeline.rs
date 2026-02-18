@@ -168,6 +168,7 @@ async fn load_policy_and_ebm(
     temperature: Option<f64>,
     max_tactic_tokens: Option<usize>,
     imports: Option<&[String]>,
+    concurrency: usize,
 ) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
     let toml = load_search_toml(config_path)?;
@@ -195,9 +196,10 @@ async fn load_policy_and_ebm(
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
     let exp = toml.search.batch_expansion_size;
     let n_cands = toml.search.num_candidates;
+    let max_batch = exp * concurrency.max(1); // coalesce across concurrent searches
     let batcher = GlobalBatcher::new(
         Arc::new(raw_policy),
-        exp,                             // flush when one thread's expansion arrives
+        max_batch,
         Duration::from_millis(5),        // linger
     );
     let policy = CachedPolicy::new(batcher, 10_000);
@@ -414,6 +416,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         temperature,
         args.max_tactic_tokens,
         args.imports.as_deref(),
+        concurrency,
     )
     .await?;
 
@@ -1409,6 +1412,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         temperature,
         args.max_tactic_tokens,
         args.imports.as_deref(),
+        concurrency,
     )
     .await?;
 

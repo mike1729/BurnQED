@@ -53,7 +53,8 @@ PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 START_STEP="${START_STEP:-0}"
 
 mkdir -p "$CKPT_DIR" "$LLM_DIR" "$EVAL_DIR"
-mkdir -p "${REPO_ROOT}/logs"
+LOG_DIR="${REPO_ROOT}/logs"
+mkdir -p "$LOG_DIR"
 
 echo "================================================================"
 echo "  Expert Iteration ${ITER} — Training"
@@ -79,6 +80,8 @@ else
     ensure_server "$SGLANG_URL" "$PRE_MODEL"
 
     PRE_EVAL="${EVAL_DIR}/iter_${ITER}_pre_train.json"
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_0_pre_eval.log"
+    echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
     $PROVER eval \
@@ -91,7 +94,8 @@ else
         --concurrency "$CONCURRENCY" \
         --max-theorems "$EVAL_MAX_THEOREMS_TRAIN" \
         --num-candidates 8 \
-        --imports Mathlib
+        --imports Mathlib \
+        2>&1 | tee "$STEP_LOG"
 
     echo "Pre-training eval saved to: $PRE_EVAL"
 fi
@@ -112,6 +116,9 @@ else
         VAL_DATA_FLAG="--val-data ${VAL_DATA}"
     fi
 
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_1_train.log"
+    echo "  Logging to: ${STEP_LOG}"
+
     if [ "$ITER" -eq 0 ]; then
         echo "Iteration 0: training on base Mathlib tactic pairs only"
         # shellcheck disable=SC2086
@@ -121,7 +128,8 @@ else
             $VAL_DATA_FLAG \
             --output "${CKPT_DIR}/iter_0" \
             --max-steps 1500 \
-            --lr "$LR"
+            --lr "$LR" \
+            2>&1 | tee "$STEP_LOG"
     else
         echo "Iteration ${ITER}: training with trajectory data from previous iterations"
 
@@ -161,7 +169,8 @@ else
             --base-subsample "$BASE_SUBSAMPLE" \
             --batch-size "$BATCH_SIZE" \
             --gradient-accumulation "$GRAD_ACCUM" \
-            --lr "$LR"
+            --lr "$LR" \
+            2>&1 | tee "$STEP_LOG"
     fi
 fi
 
@@ -169,11 +178,14 @@ fi
 if [ "$START_STEP" -le 1 ]; then
     echo ""
     echo "=== Step 1b: Export LLM to safetensors ==="
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_1b_export.log"
+    echo "  Logging to: ${STEP_LOG}"
     python3 "${REPO_ROOT}/python/training/export_llm.py" \
         --checkpoint "${CKPT_DIR}/iter_${ITER}" \
         --base-model "$LLM_BASE" \
         --output "$LLM_DIR" \
-        --verify
+        --verify \
+        2>&1 | tee "$STEP_LOG"
 fi
 
 # ── Step 2: Restart Server with New Model ──────────────────────────────────
@@ -197,6 +209,8 @@ else
     ensure_server "$SGLANG_URL" "$LLM_DIR"
 
     POST_EVAL="${EVAL_DIR}/iter_${ITER}_post_train.json"
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_3_post_eval.log"
+    echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
     $PROVER eval \
@@ -209,7 +223,8 @@ else
         --concurrency "$CONCURRENCY" \
         --max-theorems "$EVAL_MAX_THEOREMS_TRAIN" \
         --num-candidates 8 \
-        --imports Mathlib
+        --imports Mathlib \
+        2>&1 | tee "$STEP_LOG"
 
     echo "Post-training eval saved to: $POST_EVAL"
 
