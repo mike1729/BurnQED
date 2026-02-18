@@ -385,6 +385,8 @@ struct SearchAggregator {
     ebm_latencies_us: Vec<u64>,
     /// Ring buffer of recent completion timestamps for moving-average ETA.
     completion_times: VecDeque<Instant>,
+    /// Recent error samples: (theorem_name, error_message). Keeps last N for display.
+    recent_errors: VecDeque<(String, String)>,
 }
 
 impl SearchAggregator {
@@ -454,19 +456,21 @@ impl SearchAggregator {
 
         // Print via println inside pb.suspend() — must go to stdout
         // so indicatif can manage the output correctly.
+        let done = searched + self.error_count;
         println!(
-            "\n── Progress @ {} theorems ({:.0}s) ──\n\
-             \x20 Proved {}/{} ({:.1}%), errors {}\n\
+            "\n── Progress @ {} done ({:.0}s) ──\n\
+             \x20 Proved {}/{} ({:.1}%), failed {}, errors {}\n\
              \x20 Avg nodes/thm: {:.1}\n\
              \x20 Time: gen {:.1}% | lean(llm) {:.1}% | lean(probe) {:.1}% | ebm {:.1}% | harvest {:.1}%\n\
              \x20 Cache: {:.1}% hit ({}/{})\n\
              \x20 Throughput: {:.1} thm/min, {:.1} traj/s\n\
              \x20 EBM calls: {}",
-            searched,
+            done,
             secs,
             self.proved_count,
             searched,
             prove_pct,
+            self.failed_count,
             self.error_count,
             avg_nodes,
             pct(gen_s, secs),
@@ -481,6 +485,16 @@ impl SearchAggregator {
             traj_per_sec,
             self.total_ebm_calls,
         );
+
+        // Show recent error examples if any
+        if !self.recent_errors.is_empty() {
+            println!(" Errors (last {}):", self.recent_errors.len());
+            for (name, err) in &self.recent_errors {
+                // Truncate long error messages
+                let short: String = err.chars().take(120).collect();
+                println!("   {name}: {short}");
+            }
+        }
 
         // Also log structured stats for the log file
         tracing::info!(
@@ -711,7 +725,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             }
             Err(e) => {
                 agg.error_count += 1;
-                tracing::warn!(theorem = outcome.name, error = %e, "Search error, skipping");
+                agg.recent_errors.push_back((outcome.name.clone(), e.to_string()));
+                if agg.recent_errors.len() > 10 {
+                    agg.recent_errors.pop_front();
+                }
+                tracing::debug!(theorem = outcome.name, error = %e, "Search error, skipping");
             }
         }
         agg.record_completion();
