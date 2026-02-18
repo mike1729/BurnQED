@@ -160,7 +160,7 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
         --hidden-size "${HIDDEN_SIZE:-4096}" \
         --output-dir "$EBM_DIR" \
         --steps "$EBM_STEPS" \
-        --batch-size 128 \
+        --batch-size 256 \
         --save-embeddings "$EMBEDDINGS_SAVE" \
         $EMBEDDINGS_CACHE_FLAG \
         $RESUME_FLAG \

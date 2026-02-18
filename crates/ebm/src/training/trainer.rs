@@ -25,7 +25,7 @@ use crate::training::metrics::{EBMMetrics, MetricsHistory};
 #[derive(Config, Debug)]
 pub struct EBMTrainingConfig {
     /// Base learning rate for AdamW.
-    #[config(default = 1e-4)]
+    #[config(default = 3e-5)]
     pub lr: f64,
     /// Weight decay for AdamW.
     #[config(default = 0.01)]
@@ -52,7 +52,7 @@ pub struct EBMTrainingConfig {
     #[config(default = 7)]
     pub k_negatives: usize,
     /// Batch size (number of contrastive samples per step).
-    #[config(default = 32)]
+    #[config(default = 256)]
     pub batch_size: usize,
     /// Directory for saving checkpoints.
     #[config(default = "String::from(\"checkpoints/ebm\")")]
@@ -149,6 +149,66 @@ fn eval_batch<B: Backend>(
     ))
 }
 
+/// Running average accumulator for training metrics over a logging interval.
+struct RunningAvg {
+    loss: f64,
+    gap: f64,
+    rank: f64,
+    pos_e: f64,
+    neg_e: f64,
+    std: f64,
+    count: usize,
+}
+
+impl RunningAvg {
+    fn new() -> Self {
+        Self { loss: 0.0, gap: 0.0, rank: 0.0, pos_e: 0.0, neg_e: 0.0, std: 0.0, count: 0 }
+    }
+
+    fn update(&mut self, m: &EBMMetrics) {
+        self.loss += m.loss;
+        self.gap += m.energy_gap;
+        self.rank += m.rank_accuracy;
+        self.pos_e += m.pos_energy_mean;
+        self.neg_e += m.neg_energy_mean;
+        self.std += m.energy_std;
+        self.count += 1;
+    }
+
+    fn display(&self) -> String {
+        if self.count == 0 {
+            return "no data".to_string();
+        }
+        let n = self.count as f64;
+        format!(
+            "loss={:.4} gap={:.2} rank={:.2} pos_e={:.2} neg_e={:.2} std={:.2}",
+            self.loss / n, self.gap / n, self.rank / n,
+            self.pos_e / n, self.neg_e / n, self.std / n,
+        )
+    }
+
+    fn avg_metrics(&self) -> Option<EBMMetrics> {
+        if self.count == 0 {
+            return None;
+        }
+        let n = self.count as f64;
+        Some(EBMMetrics {
+            loss: self.loss / n,
+            contrastive_loss: 0.0,
+            depth_loss: 0.0,
+            energy_gap: self.gap / n,
+            rank_accuracy: self.rank / n,
+            pos_energy_mean: self.pos_e / n,
+            neg_energy_mean: self.neg_e / n,
+            energy_std: self.std / n,
+        })
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+}
+
 /// Run the EBM training loop.
 ///
 /// Trains the energy head using contrastive (InfoNCE) + depth regression loss.
@@ -187,6 +247,7 @@ pub fn train<B: AutodiffBackend>(
     let mut rng = rand::rngs::StdRng::from_entropy();
     let mut val_rng = rand::rngs::StdRng::from_entropy();
     let mut _history = MetricsHistory::new();
+    let mut running_avg = RunningAvg::new();
     let train_start = Instant::now();
     let mut trained_steps: u64 = 0;
     let mut skipped_steps: u64 = 0;
@@ -290,17 +351,22 @@ pub fn train<B: AutodiffBackend>(
         let grads = GradientsParams::from_grads(total_loss.backward(), &model);
         model = optimizer.step(lr.into(), model, grads);
 
-        // Log metrics at intervals
-        if config.log_interval > 0 && step % config.log_interval == 0 {
-            let metrics = EBMMetrics::compute(
+        // Accumulate running average metrics every step
+        {
+            let step_metrics = EBMMetrics::compute(
                 &pos_energy_metrics,
                 &neg_energies_metrics,
                 contrastive_val,
                 depth_val,
                 total_val,
             );
+            running_avg.update(&step_metrics);
+        }
 
-            let warnings = metrics.health_check();
+        // Log metrics at intervals
+        if config.log_interval > 0 && step % config.log_interval == 0 {
+            let avg_metrics = running_avg.avg_metrics();
+            let warnings = avg_metrics.as_ref().map(|m| m.health_check()).unwrap_or_default();
             if !warnings.is_empty() {
                 tracing::warn!(step, "Health check warnings: {:?}", warnings);
             }
@@ -343,8 +409,12 @@ pub fn train<B: AutodiffBackend>(
                 String::new()
             };
 
-            tracing::info!(step, lr, eta, "{}{}", metrics.display(), val_str);
-            _history.push(step, metrics);
+            let avg_display = running_avg.display();
+            tracing::info!(step, lr, eta, "avg({}) {}{}", running_avg.count, avg_display, val_str);
+            if let Some(m) = avg_metrics {
+                _history.push(step, m);
+            }
+            running_avg.reset();
         }
 
         // Save checkpoint at intervals

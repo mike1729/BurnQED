@@ -224,10 +224,10 @@ enum Command {
         #[arg(long, default_value_t = 50_000)]
         steps: usize,
         /// Learning rate.
-        #[arg(long, default_value_t = 1e-4)]
+        #[arg(long, default_value_t = 3e-5)]
         lr: f64,
         /// Batch size.
-        #[arg(long, default_value_t = 32)]
+        #[arg(long, default_value_t = 256)]
         batch_size: usize,
         /// Number of negative samples per positive.
         #[arg(long, default_value_t = 7)]
