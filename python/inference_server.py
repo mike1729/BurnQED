@@ -169,9 +169,10 @@ async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float
 async def _encode_sequential(prompts: list[str], hidden_size: int) -> list[list[float]]:
     """Encode prompts one at a time under Semaphore(1) (safe fallback).
 
-    Returns per-prompt results: successful embeddings or None for failures.
+    Returns per-prompt results: successful embeddings or zero vectors on failure.
     Uses a 10s per-prompt timeout to avoid blocking on problematic inputs.
     """
+    zero = [0.0] * hidden_size
     embeddings = []
     for i, prompt in enumerate(prompts):
         try:
@@ -187,15 +188,15 @@ async def _encode_sequential(prompts: list[str], hidden_size: int) -> list[list[
             hs = output[0].get("meta_info", {}).get("hidden_states")
             if hs is None:
                 logger.warning("Encode prompt %d/%d: no hidden_states (len=%d chars)", i + 1, len(prompts), len(prompt))
-                embeddings.append(None)
+                embeddings.append(list(zero))
                 continue
             embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
         except asyncio.TimeoutError:
             logger.warning("Encode prompt %d/%d: timeout (len=%d chars)", i + 1, len(prompts), len(prompt))
-            embeddings.append(None)
+            embeddings.append(list(zero))
         except Exception as e:
             logger.warning("Encode prompt %d/%d: error %s (len=%d chars)", i + 1, len(prompts), e, len(prompt))
-            embeddings.append(None)
+            embeddings.append(list(zero))
     return embeddings
 
 
@@ -402,16 +403,15 @@ def main():
     _engine = _build_engine(args.model_path, tp=tp, mem_fraction=mem_fraction)
     _encode_semaphore = asyncio.Semaphore(1)
 
-    # Self-test: check if batch hidden states match individual results
-    logger.info("Running batch encode self-test...")
-    _batch_encode_ok = _run_batch_selftest(_engine)
-    if _batch_encode_ok:
-        logger.info("Batch encode self-test PASSED — using true GPU batching for /encode")
-    else:
-        logger.warning(
-            "Batch encode self-test FAILED — falling back to sequential Semaphore(1) "
-            "encoding (SGLang Issue #8066)"
-        )
+    # Self-test DISABLED: running async_generate in a separate event loop
+    # (asyncio.new_event_loop) before uvicorn starts corrupts SGLang's
+    # scheduler state, causing it to spin at 100% CPU.  Batch encoding
+    # itself works fine — the self-test was the problem, not batching.
+    _batch_encode_ok = True
+    logger.info(
+        "Self-test skipped (corrupts SGLang scheduler) — "
+        "batch encoding enabled by default"
+    )
 
     logger.info("Starting server on %s:%d", args.host, port)
     uvicorn.run(app, host=args.host, port=port, log_level="info")

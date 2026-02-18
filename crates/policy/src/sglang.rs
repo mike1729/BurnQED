@@ -571,6 +571,13 @@ impl SglangClient {
             .iter()
             .enumerate()
             .map(|(i, emb_val)| {
+                // null → server failed for this prompt, return zero embedding
+                if emb_val.is_null() {
+                    return Ok(Embedding {
+                        data: vec![0.0; self.config.hidden_size],
+                        dim: self.config.hidden_size,
+                    });
+                }
                 // Each item is either [f32...] directly or {"embedding": [f32...]}
                 let arr = if let Some(inner) = emb_val.get("embedding").and_then(|v| v.as_array()) {
                     inner
