@@ -38,10 +38,14 @@ echo "  TP:         ${TP}"
 echo "  Mem frac:   ${MEM_FRACTION}"
 echo "================================================================"
 
+EXTRA_ARGS="${EXTRA_ARGS:-}"
+
 python -m sglang.launch_server \
     --model-path "$MODEL_PATH" \
     --port "$PORT" \
     --tp "$TP" \
     --trust-remote-code \
     --mem-fraction-static "$MEM_FRACTION" \
-    --enable-return-hidden-states
+    --enable-return-hidden-states \
+    --chunked-prefill-size -1 \
+    $EXTRA_ARGS
