@@ -2,7 +2,7 @@ use burn::module::Param;
 use burn::prelude::*;
 use burn::tensor::Distribution;
 
-/// Configuration for a spectral-normalized linear layer.
+/// Configuration for a linear layer with optional spectral normalization.
 #[derive(Config, Debug)]
 pub struct SpectralNormLinearConfig {
     /// Input dimension.
@@ -18,13 +18,20 @@ pub struct SpectralNormLinearConfig {
     /// Whether to include a bias term.
     #[config(default = true)]
     pub bias: bool,
+    /// Whether to apply spectral normalization. When false, acts as a plain linear layer
+    /// (Kaiming init, no power iteration). Checkpoint-compatible: same weight/bias params.
+    #[config(default = true)]
+    pub spectral_norm: bool,
 }
 
-/// Linear layer with spectral normalization (Option C: random reinit per forward).
+/// Linear layer with optional spectral normalization.
 ///
-/// Weight is normalized by its spectral norm (largest singular value)
-/// at each forward pass using power iteration from fresh random vectors.
-/// This constrains the layer's Lipschitz constant to 1.
+/// When spectral_norm=true (default): weight is normalized by its spectral norm
+/// (largest singular value) at each forward pass using power iteration from fresh
+/// random vectors. This constrains the layer's Lipschitz constant to 1.
+///
+/// When spectral_norm=false: acts as a plain linear layer with Kaiming init.
+/// Same stored params (weight, bias) so checkpoints are compatible.
 #[derive(Module, Debug)]
 pub struct SpectralNormLinear<B: Backend> {
     /// Weight matrix, shape (d_output, d_input). Kaiming initialized.
@@ -35,6 +42,8 @@ pub struct SpectralNormLinear<B: Backend> {
     n_power_iterations: usize,
     /// Epsilon for numerical stability.
     eps: f64,
+    /// Whether to apply spectral normalization in forward pass.
+    spectral_norm: bool,
 }
 
 impl SpectralNormLinearConfig {
@@ -61,6 +70,7 @@ impl SpectralNormLinearConfig {
             bias,
             n_power_iterations: self.n_power_iterations,
             eps: self.eps,
+            spectral_norm: self.spectral_norm,
         }
     }
 }
@@ -73,54 +83,50 @@ impl<B: Backend> SpectralNormLinear<B> {
     /// 3. Computes output = input @ W_normed^T + bias
     pub fn forward(&self, input: Tensor<B, 2>) -> Tensor<B, 2> {
         let weight = self.weight.val(); // (d_out, d_in), on autodiff graph
-        let [d_out, d_in] = weight.dims();
-        let device = input.device();
 
-        // Fresh random vectors each forward (Option C: random reinit)
-        let mut u: Tensor<B, 1> =
-            Tensor::random([d_out], Distribution::Normal(0.0, 1.0), &device);
-        let mut v: Tensor<B, 1> =
-            Tensor::random([d_in], Distribution::Normal(0.0, 1.0), &device);
+        let effective_weight = if self.spectral_norm {
+            let [d_out, d_in] = weight.dims();
+            let device = input.device();
 
-        // Power iteration to estimate largest singular value
-        for _ in 0..self.n_power_iterations {
-            // v = W^T @ u / ||W^T @ u||
-            // (d_in, d_out) @ (d_out, 1) = (d_in, 1) -> squeeze -> (d_in,)
-            let wt_u: Tensor<B, 1> = weight
-                .clone()
-                .transpose()
-                .matmul(u.clone().unsqueeze_dim::<2>(1))
-                .squeeze::<1>(1);
-            let wt_u_norm = wt_u.clone().powf_scalar(2.0).sum().sqrt() + self.eps;
-            v = wt_u / wt_u_norm;
+            // Fresh random vectors each forward (Option C: random reinit)
+            let mut u: Tensor<B, 1> =
+                Tensor::random([d_out], Distribution::Normal(0.0, 1.0), &device);
+            let mut v: Tensor<B, 1> =
+                Tensor::random([d_in], Distribution::Normal(0.0, 1.0), &device);
 
-            // u = W @ v / ||W @ v||
-            // (d_out, d_in) @ (d_in, 1) = (d_out, 1) -> squeeze -> (d_out,)
-            let w_v: Tensor<B, 1> = weight
-                .clone()
-                .matmul(v.clone().unsqueeze_dim::<2>(1))
-                .squeeze::<1>(1);
-            let w_v_norm = w_v.clone().powf_scalar(2.0).sum().sqrt() + self.eps;
-            u = w_v / w_v_norm;
-        }
-
-        // sigma = u^T @ W @ v (scalar)
-        // (1, d_out) @ (d_out, d_in) @ (d_in, 1) = (1, 1) -> reshape to (1,)
-        let sigma: Tensor<B, 1> = u
-            .unsqueeze_dim::<2>(0) // (1, d_out)
-            .matmul(
-                weight
+            // Power iteration to estimate largest singular value
+            for _ in 0..self.n_power_iterations {
+                let wt_u: Tensor<B, 1> = weight
                     .clone()
-                    .matmul(v.unsqueeze_dim::<2>(1)), // W @ v: (d_out, 1)
-            ) // (1, 1)
-            .squeeze::<1>(1) // (1,)
-            .abs(); // ensure positive
+                    .transpose()
+                    .matmul(u.clone().unsqueeze_dim::<2>(1))
+                    .squeeze::<1>(1);
+                let wt_u_norm = wt_u.clone().powf_scalar(2.0).sum().sqrt() + self.eps;
+                v = wt_u / wt_u_norm;
 
-        // W_normed = W / sigma  (division is on autodiff graph)
-        let w_normed = weight / sigma.unsqueeze_dim::<2>(1); // broadcast (1,1) over (d_out, d_in)
+                let w_v: Tensor<B, 1> = weight
+                    .clone()
+                    .matmul(v.clone().unsqueeze_dim::<2>(1))
+                    .squeeze::<1>(1);
+                let w_v_norm = w_v.clone().powf_scalar(2.0).sum().sqrt() + self.eps;
+                u = w_v / w_v_norm;
+            }
 
-        // output = input @ W_normed^T + bias
-        let output = input.matmul(w_normed.transpose());
+            let sigma: Tensor<B, 1> = u
+                .unsqueeze_dim::<2>(0)
+                .matmul(weight.clone().matmul(v.unsqueeze_dim::<2>(1)))
+                .squeeze::<1>(1)
+                .abs();
+
+            // W_normed = W / sigma
+            weight / sigma.unsqueeze_dim::<2>(1)
+        } else {
+            // Plain linear: use weight as-is
+            weight
+        };
+
+        // output = input @ W^T + bias
+        let output = input.matmul(effective_weight.transpose());
         match &self.bias {
             Some(b) => {
                 let bias_val: Tensor<B, 1> = b.val();

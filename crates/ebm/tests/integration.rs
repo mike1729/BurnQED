@@ -488,11 +488,12 @@ fn test_multi_file_parquet_loading() {
 fn test_spectral_norm_lipschitz_during_training() {
     let device = Default::default();
 
-    // Create a small EnergyHead (which stacks 3 SpectralNormLinear layers)
+    // Create a small EnergyHead with spectral norm enabled
     let model = EnergyHeadConfig::new(32)
         .with_d_hidden1(16)
         .with_d_hidden2(8)
         .with_dropout(0.0)
+        .with_spectral_norm(true)
         .init::<TestAutodiffBackend>(&device);
     let mut optim = AdamConfig::new().init();
     let mut current_model = model;

@@ -33,6 +33,14 @@ pub struct EnergyHeadConfig {
     /// Dropout probability applied after each SiLU activation.
     #[config(default = 0.1)]
     pub dropout: f64,
+    /// Apply spectral normalization to linear layers. When false, uses plain
+    /// linear layers (more capacity, less regularization). Default: false.
+    #[config(default = false)]
+    pub spectral_norm: bool,
+    /// Initial value for log_temperature. Default: -2.3 (temperature ≈ 0.1,
+    /// effectively 10x energy amplification in InfoNCE).
+    #[config(default = -2.3)]
+    pub init_log_temperature: f64,
 }
 
 /// Energy head: spectral-normed MLP mapping encoder output to scalar energy.
@@ -63,17 +71,28 @@ pub struct EnergyHead<B: Backend> {
 impl EnergyHeadConfig {
     /// Initialize an EnergyHead with the given configuration.
     pub fn init<B: Backend>(&self, device: &B::Device) -> EnergyHead<B> {
+        let sn = self.spectral_norm;
         EnergyHead {
-            sn_linear1: SpectralNormLinearConfig::new(self.d_encoder, self.d_hidden1).init(device),
-            sn_linear2: SpectralNormLinearConfig::new(self.d_hidden1, self.d_hidden2).init(device),
-            sn_linear3: SpectralNormLinearConfig::new(self.d_hidden2, self.d_hidden3).init(device),
+            sn_linear1: SpectralNormLinearConfig::new(self.d_encoder, self.d_hidden1)
+                .with_spectral_norm(sn)
+                .init(device),
+            sn_linear2: SpectralNormLinearConfig::new(self.d_hidden1, self.d_hidden2)
+                .with_spectral_norm(sn)
+                .init(device),
+            sn_linear3: SpectralNormLinearConfig::new(self.d_hidden2, self.d_hidden3)
+                .with_spectral_norm(sn)
+                .init(device),
             sn_linear4: SpectralNormLinearConfig::new(self.d_hidden3, 1)
                 .with_bias(false)
+                .with_spectral_norm(sn)
                 .init(device),
             dropout1: burn::nn::DropoutConfig::new(self.dropout).init(),
             dropout2: burn::nn::DropoutConfig::new(self.dropout).init(),
             dropout3: burn::nn::DropoutConfig::new(self.dropout).init(),
-            log_temperature: Param::from_tensor(Tensor::zeros([1], device)),
+            log_temperature: Param::from_tensor(Tensor::from_floats(
+                [self.init_log_temperature as f32],
+                device,
+            )),
         }
     }
 }
