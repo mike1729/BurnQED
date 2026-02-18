@@ -84,18 +84,17 @@ else
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
-    $PROVER eval \
-        --config "$SEARCH_CONFIG" \
-        --server-url "$SGLANG_URL" \
-        --theorems "$TRAIN_EVAL_THEOREMS" \
-        --budgets "$EVAL_BUDGET" \
-        --output "$PRE_EVAL" \
-        --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY" \
-        --max-theorems "$EVAL_MAX_THEOREMS_TRAIN" \
+    run_logged "$STEP_LOG" $PROVER eval \
+        --config $SEARCH_CONFIG \
+        --server-url $SGLANG_URL \
+        --theorems $TRAIN_EVAL_THEOREMS \
+        --budgets $EVAL_BUDGET \
+        --output $PRE_EVAL \
+        --num-workers $NUM_WORKERS \
+        --concurrency $CONCURRENCY \
+        --max-theorems $EVAL_MAX_THEOREMS_TRAIN \
         --num-candidates 8 \
-        --imports Mathlib \
-        2>&1 | tee "$STEP_LOG"
+        --imports Mathlib
 
     echo "Pre-training eval saved to: $PRE_EVAL"
 fi
@@ -122,14 +121,14 @@ else
     if [ "$ITER" -eq 0 ]; then
         echo "Iteration 0: training on base Mathlib tactic pairs only"
         # shellcheck disable=SC2086
-        accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
-            --model-name "$LLM_BASE" \
-            --data "$TRAIN_DATA" \
+        run_logged "$STEP_LOG" accelerate launch \
+            ${REPO_ROOT}/python/training/train_llm.py \
+            --model-name $LLM_BASE \
+            --data $TRAIN_DATA \
             $VAL_DATA_FLAG \
-            --output "${CKPT_DIR}/iter_0" \
+            --output ${CKPT_DIR}/iter_0 \
             --max-steps 1500 \
-            --lr "$LR" \
-            2>&1 | tee "$STEP_LOG"
+            --lr $LR
     else
         echo "Iteration ${ITER}: training with trajectory data from previous iterations"
 
@@ -158,19 +157,19 @@ else
         GRAD_ACCUM="${GRAD_ACCUM:-2}"
 
         # shellcheck disable=SC2086
-        accelerate launch "${REPO_ROOT}/python/training/train_llm.py" \
-            --model-name "$LLM_BASE" \
-            --data "$TRAIN_DATA" \
+        run_logged "$STEP_LOG" accelerate launch \
+            ${REPO_ROOT}/python/training/train_llm.py \
+            --model-name $LLM_BASE \
+            --data $TRAIN_DATA \
             $VAL_DATA_FLAG \
-            "${EXTRA_DATA_ARGS[@]}" \
-            --output "${CKPT_DIR}/iter_${ITER}" \
-            --base "$BASE_CKPT" \
-            --max-steps "$MAX_TRAIN_STEPS" \
-            --base-subsample "$BASE_SUBSAMPLE" \
-            --batch-size "$BATCH_SIZE" \
-            --gradient-accumulation "$GRAD_ACCUM" \
-            --lr "$LR" \
-            2>&1 | tee "$STEP_LOG"
+            ${EXTRA_DATA_ARGS[*]} \
+            --output ${CKPT_DIR}/iter_${ITER} \
+            --base $BASE_CKPT \
+            --max-steps $MAX_TRAIN_STEPS \
+            --base-subsample $BASE_SUBSAMPLE \
+            --batch-size $BATCH_SIZE \
+            --gradient-accumulation $GRAD_ACCUM \
+            --lr $LR
     fi
 fi
 
@@ -180,12 +179,12 @@ if [ "$START_STEP" -le 1 ]; then
     echo "=== Step 1b: Export LLM to safetensors ==="
     STEP_LOG="${LOG_DIR}/iter_${ITER}_step_1b_export.log"
     echo "  Logging to: ${STEP_LOG}"
-    python3 "${REPO_ROOT}/python/training/export_llm.py" \
-        --checkpoint "${CKPT_DIR}/iter_${ITER}" \
-        --base-model "$LLM_BASE" \
-        --output "$LLM_DIR" \
-        --verify \
-        2>&1 | tee "$STEP_LOG"
+    run_logged "$STEP_LOG" python3 \
+        ${REPO_ROOT}/python/training/export_llm.py \
+        --checkpoint ${CKPT_DIR}/iter_${ITER} \
+        --base-model $LLM_BASE \
+        --output $LLM_DIR \
+        --verify
 fi
 
 # ── Step 2: Restart Server with New Model ──────────────────────────────────
@@ -213,18 +212,17 @@ else
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
-    $PROVER eval \
-        --config "$SEARCH_CONFIG" \
-        --server-url "$SGLANG_URL" \
-        --theorems "$TRAIN_EVAL_THEOREMS" \
-        --budgets "$EVAL_BUDGET" \
-        --output "$POST_EVAL" \
-        --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY" \
-        --max-theorems "$EVAL_MAX_THEOREMS_TRAIN" \
+    run_logged "$STEP_LOG" $PROVER eval \
+        --config $SEARCH_CONFIG \
+        --server-url $SGLANG_URL \
+        --theorems $TRAIN_EVAL_THEOREMS \
+        --budgets $EVAL_BUDGET \
+        --output $POST_EVAL \
+        --num-workers $NUM_WORKERS \
+        --concurrency $CONCURRENCY \
+        --max-theorems $EVAL_MAX_THEOREMS_TRAIN \
         --num-candidates 8 \
-        --imports Mathlib \
-        2>&1 | tee "$STEP_LOG"
+        --imports Mathlib
 
     echo "Post-training eval saved to: $POST_EVAL"
 

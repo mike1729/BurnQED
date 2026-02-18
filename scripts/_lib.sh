@@ -97,3 +97,14 @@ ensure_server() {
 
     restart_inference_server "$url" "$model"
 }
+
+# Run a command with output logged to a file, preserving TTY features
+# (progress bars, colors). Uses `script` to allocate a PTY so programs
+# that check isatty() still produce full output.
+#
+# Usage: run_logged LOGFILE COMMAND [ARGS...]
+run_logged() {
+    local logfile="$1"
+    shift
+    script -qefc "$*" "$logfile"
+}

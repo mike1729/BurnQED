@@ -559,7 +559,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 }
 
                 // Per-theorem structured profile log
-                tracing::info!(
+                tracing::debug!(
                     theorem = outcome.name,
                     proved,
                     wall_ms,

@@ -170,19 +170,18 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
-    $PROVER train-ebm \
-        --trajectories "${TRAJ_FILES[@]}" \
-        --server-url "$SGLANG_URL" \
-        --hidden-size "${HIDDEN_SIZE:-4096}" \
-        --output-dir "$EBM_DIR" \
-        --steps "$EBM_STEPS" \
+    run_logged "$STEP_LOG" $PROVER train-ebm \
+        --trajectories ${TRAJ_FILES[*]} \
+        --server-url $SGLANG_URL \
+        --hidden-size ${HIDDEN_SIZE:-4096} \
+        --output-dir $EBM_DIR \
+        --steps $EBM_STEPS \
         --batch-size 256 \
-        --save-embeddings "$EMBEDDINGS_SAVE" \
+        --save-embeddings $EMBEDDINGS_SAVE \
         $EMBEDDINGS_CACHE_FLAG \
         $RESUME_FLAG \
-        --encode-batch-size "$ENCODE_BATCH_SIZE" \
-        --encode-concurrency "$ENCODE_CONCURRENCY" \
-        2>&1 | tee "$STEP_LOG"
+        --encode-batch-size $ENCODE_BATCH_SIZE \
+        --encode-concurrency $ENCODE_CONCURRENCY
 else
     echo ""
     echo "=== Step 2: Skipping EBM training (iteration 0) ==="
@@ -208,17 +207,16 @@ else
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
-    $PROVER search \
-        --config "$SEARCH_CONFIG" \
-        --server-url "$SGLANG_URL" \
+    run_logged "$STEP_LOG" $PROVER search \
+        --config $SEARCH_CONFIG \
+        --server-url $SGLANG_URL \
         $EBM_FLAG \
-        --theorems "$THEOREM_INDEX" \
-        --output "$TRAJ_OUTPUT" \
-        --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY" \
-        --max-theorems "$MAX_THEOREMS" \
-        --imports Mathlib \
-        2>&1 | tee "$STEP_LOG"
+        --theorems $THEOREM_INDEX \
+        --output $TRAJ_OUTPUT \
+        --num-workers $NUM_WORKERS \
+        --concurrency $CONCURRENCY \
+        --max-theorems $MAX_THEOREMS \
+        --imports Mathlib
 
     # ── Step 3b: Noise injection search (iteration 0 only) ────────────────
     if [ "$ITER" -eq 0 ]; then
@@ -229,17 +227,17 @@ else
         STEP_LOG="${LOG_DIR}/iter_0_step_3b_noisy.log"
         echo "  Logging to: ${STEP_LOG}"
 
-        $PROVER search \
-            --config "$SEARCH_CONFIG" \
-            --server-url "$SGLANG_URL" \
+        # shellcheck disable=SC2086
+        run_logged "$STEP_LOG" $PROVER search \
+            --config $SEARCH_CONFIG \
+            --server-url $SGLANG_URL \
             --temperature 1.2 \
-            --theorems "$THEOREM_INDEX" \
-            --output "$NOISY_OUTPUT" \
-            --num-workers "$NUM_WORKERS" \
-            --concurrency "$CONCURRENCY" \
-            --max-theorems "$MAX_THEOREMS" \
-            --imports Mathlib \
-            2>&1 | tee "$STEP_LOG"
+            --theorems $THEOREM_INDEX \
+            --output $NOISY_OUTPUT \
+            --num-workers $NUM_WORKERS \
+            --concurrency $CONCURRENCY \
+            --max-theorems $MAX_THEOREMS \
+            --imports Mathlib
     fi
 fi
 
@@ -263,19 +261,18 @@ else
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
-    $PROVER eval \
-        --config "$SEARCH_CONFIG" \
-        --server-url "$SGLANG_URL" \
+    run_logged "$STEP_LOG" $PROVER eval \
+        --config $SEARCH_CONFIG \
+        --server-url $SGLANG_URL \
         $EBM_FLAG \
-        --theorems "$EVAL_THEOREMS" \
+        --theorems $EVAL_THEOREMS \
         --budgets 600 \
-        --output "${EVAL_DIR}/iter_${ITER}.json" \
-        --num-workers "$NUM_WORKERS" \
-        --concurrency "$CONCURRENCY" \
-        --max-theorems "$EVAL_MAX_THEOREMS" \
+        --output ${EVAL_DIR}/iter_${ITER}.json \
+        --num-workers $NUM_WORKERS \
+        --concurrency $CONCURRENCY \
+        --max-theorems $EVAL_MAX_THEOREMS \
         --num-candidates 16 \
-        --imports Mathlib \
-        2>&1 | tee "$STEP_LOG"
+        --imports Mathlib
 
     # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────
     if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
@@ -284,18 +281,18 @@ else
         STEP_LOG="${LOG_DIR}/iter_${ITER}_step_4b_ablation.log"
         echo "  Logging to: ${STEP_LOG}"
 
-        $PROVER eval \
-            --config "$SEARCH_CONFIG" \
-            --server-url "$SGLANG_URL" \
-            --theorems "$EVAL_THEOREMS" \
+        # shellcheck disable=SC2086
+        run_logged "$STEP_LOG" $PROVER eval \
+            --config $SEARCH_CONFIG \
+            --server-url $SGLANG_URL \
+            --theorems $EVAL_THEOREMS \
             --budgets 600 \
-            --output "${EVAL_DIR}/iter_${ITER}_no_ebm.json" \
-            --num-workers "$NUM_WORKERS" \
-            --concurrency "$CONCURRENCY" \
-            --max-theorems "$EVAL_MAX_THEOREMS" \
+            --output ${EVAL_DIR}/iter_${ITER}_no_ebm.json \
+            --num-workers $NUM_WORKERS \
+            --concurrency $CONCURRENCY \
+            --max-theorems $EVAL_MAX_THEOREMS \
             --num-candidates 16 \
-            --imports Mathlib \
-            2>&1 | tee "$STEP_LOG"
+            --imports Mathlib
     fi
 fi
 
