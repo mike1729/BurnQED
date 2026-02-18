@@ -410,7 +410,8 @@ pub fn train<B: AutodiffBackend>(
             };
 
             let avg_display = running_avg.display();
-            tracing::info!(step, lr, eta, "avg({}) {}{}", running_avg.count, avg_display, val_str);
+            let lr_str = format!("{:.2e}", lr);
+            tracing::info!(step, lr = %lr_str, eta, "avg({}) {}{}", running_avg.count, avg_display, val_str);
             if let Some(m) = avg_metrics {
                 _history.push(step, m);
             }
