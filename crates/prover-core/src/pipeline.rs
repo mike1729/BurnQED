@@ -547,7 +547,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
                 if proved {
                     agg.proved_count += 1;
-                    tracing::info!(
+                    tracing::debug!(
                         theorem = outcome.name,
                         tactics = ?result.proof_tactics,
                         nodes = result.nodes_expanded,
