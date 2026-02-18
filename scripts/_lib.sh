@@ -85,11 +85,18 @@ ensure_server() {
     local model="${2:?Usage: ensure_server <url> <model_path>}"
 
     if curl -sf "${url}/health" > /dev/null 2>&1; then
-        if [ -f "$SERVER_MODEL_MARKER" ] && [ "$(cat "$SERVER_MODEL_MARKER")" = "$model" ]; then
-            echo "Inference server running with correct model: $model"
+        if [ -f "$SERVER_MODEL_MARKER" ]; then
+            if [ "$(cat "$SERVER_MODEL_MARKER")" = "$model" ]; then
+                echo "Inference server running with correct model: $model"
+                return 0
+            fi
+            echo "Server running but wrong model (want: $model, have: $(cat "$SERVER_MODEL_MARKER"))"
+        else
+            # No marker — server was started manually, assume correct model
+            echo "$model" > "$SERVER_MODEL_MARKER"
+            echo "Inference server running (assuming correct model: $model)"
             return 0
         fi
-        echo "Server running but wrong model (want: $model)"
     fi
 
     restart_inference_server "$url" "$model"
