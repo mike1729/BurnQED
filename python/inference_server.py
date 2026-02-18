@@ -167,21 +167,36 @@ async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float
 
 
 async def _encode_sequential(prompts: list[str], hidden_size: int) -> list[list[float]]:
-    """Encode prompts one at a time under Semaphore(1) (safe fallback)."""
+    """Encode prompts one at a time under Semaphore(1) (safe fallback).
+
+    Returns per-prompt results: successful embeddings or None for failures.
+    Uses a 10s per-prompt timeout to avoid blocking on problematic inputs.
+    """
     embeddings = []
-    for prompt in prompts:
-        async with _encode_semaphore:
-            outputs = await _engine.async_generate(
-                [prompt],
-                sampling_params={"max_new_tokens": 1, "temperature": 0},
-                return_hidden_states=True,
-            )
-        output = outputs[0]
-        hs = output.get("meta_info", {}).get("hidden_states")
-        if hs is None:
-            raise ValueError(
-                "Engine did not return hidden_states. "
-                "Ensure enable_return_hidden_states=True in Engine constructor."
+    for i, prompt in enumerate(prompts):
+        try:
+            async with _encode_semaphore:
+                output = await asyncio.wait_for(
+                    _engine.async_generate(
+                        [prompt],
+                        sampling_params={"max_new_tokens": 1, "temperature": 0},
+                        return_hidden_states=True,
+                    ),
+                    timeout=10.0,
+                )
+            hs = output[0].get("meta_info", {}).get("hidden_states")
+            if hs is None:
+                logger.warning("Encode prompt %d/%d: no hidden_states (len=%d chars)", i + 1, len(prompts), len(prompt))
+                embeddings.append(None)
+                continue
+            embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+        except asyncio.TimeoutError:
+            logger.warning("Encode prompt %d/%d: timeout (len=%d chars)", i + 1, len(prompts), len(prompt))
+            embeddings.append(None)
+        except Exception as e:
+            logger.warning("Encode prompt %d/%d: error %s (len=%d chars)", i + 1, len(prompts), e, len(prompt))
+            embeddings.append(None)
+    return embeddings
             )
         embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
     return embeddings
