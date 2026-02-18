@@ -619,59 +619,23 @@ impl SglangClient {
         self.parse_hidden_states(&body)
     }
 
-    /// Batch encode via legacy `/generate` + `return_hidden_states`.
+    /// Batch encode via concurrent individual `/generate` + `return_hidden_states` requests.
+    ///
+    /// Uses bounded concurrency with `futures::stream::buffered` to preserve input ordering
+    /// while avoiding SGLang's buggy batch hidden_states responses.
     async fn encode_legacy_batch(&self, texts: &[String]) -> anyhow::Result<Vec<anyhow::Result<Embedding>>> {
+        use futures::stream::{self, StreamExt};
+
         if texts.is_empty() {
             return Ok(vec![]);
         }
 
-        let prompts: Vec<String> = texts.iter().map(|t| self.format_prompt(t)).collect();
-
-        let request = BatchGenerateRequest {
-            text: prompts,
-            sampling_params: SamplingParams {
-                max_new_tokens: 1,
-                temperature: Some(0.0),
-                top_p: None,
-                n: None,
-            },
-            return_logprob: false,
-            return_hidden_states: true,
-        };
-
-        let url = self.base_url.join("/generate")?;
-        // 300s timeout: batch responses can be ~50MB JSON for batch_size=8
-        let resp = self
-            .post_with_retry(&url, &request, Some(Duration::from_secs(300)))
-            .await?;
-        let body: serde_json::Value = resp.json().await.map_err(|e| {
-            anyhow::anyhow!("Failed to decode SGLang batch encode response: {e}")
-        })?;
-
-        // SGLang returns a JSON array when text is a list
-        let items = body.as_array().ok_or_else(|| {
-            let preview: String = body.to_string().chars().take(200).collect();
-            anyhow::anyhow!(
-                "Expected JSON array for batch response, got: {preview}"
-            )
-        })?;
-
-        if items.len() != texts.len() {
-            anyhow::bail!(
-                "Batch response length mismatch: expected {}, got {}",
-                texts.len(),
-                items.len()
-            );
-        }
-
-        let results: Vec<anyhow::Result<Embedding>> = items
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                self.parse_hidden_states(item)
-                    .map_err(|e| anyhow::anyhow!("Batch item {i}: {e}"))
-            })
-            .collect();
+        let concurrency = 16;
+        let results: Vec<anyhow::Result<Embedding>> = stream::iter(texts.to_vec())
+            .map(|text| async move { self.encode_legacy(&text).await })
+            .buffered(concurrency)
+            .collect()
+            .await;
 
         Ok(results)
     }

@@ -4042,6 +4042,7 @@ name = "policy"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",

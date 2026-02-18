@@ -188,6 +188,8 @@ pub fn train<B: AutodiffBackend>(
     let mut val_rng = rand::rngs::StdRng::from_entropy();
     let mut _history = MetricsHistory::new();
     let train_start = Instant::now();
+    let mut trained_steps: u64 = 0;
+    let mut skipped_steps: u64 = 0;
 
     for step in 0..config.total_steps {
         let lr = lr_schedule(config.lr, config.warmup_steps, config.total_steps, step);
@@ -207,13 +209,18 @@ pub fn train<B: AutodiffBackend>(
                     remaining_depths.push(sample.remaining_depth as f32);
                 }
                 Err(e) => {
-                    tracing::debug!("Failed to encode positive state: {e}");
+                    tracing::debug!(step, "Failed to encode positive state: {e}");
                     encode_failed = true;
                     break;
                 }
             }
         }
         if encode_failed || pos_embeddings.is_empty() {
+            skipped_steps += 1;
+            if config.log_interval > 0 && step % config.log_interval == 0 {
+                let skip_rate = skipped_steps as f64 / (step + 1) as f64 * 100.0;
+                tracing::warn!(step, skipped_steps, skip_rate = format!("{skip_rate:.1}%"), "Step skipped (encode failure)");
+            }
             continue;
         }
 
@@ -224,7 +231,7 @@ pub fn train<B: AutodiffBackend>(
                 match encode_fn(&neg.state_pp) {
                     Ok(emb) => neg_embeddings.push(emb),
                     Err(e) => {
-                        tracing::debug!("Failed to encode negative state: {e}");
+                        tracing::debug!(step, "Failed to encode negative state: {e}");
                         encode_failed = true;
                         break;
                     }
@@ -238,8 +245,15 @@ pub fn train<B: AutodiffBackend>(
             }
         }
         if encode_failed {
+            skipped_steps += 1;
+            if config.log_interval > 0 && step % config.log_interval == 0 {
+                let skip_rate = skipped_steps as f64 / (step + 1) as f64 * 100.0;
+                tracing::warn!(step, skipped_steps, skip_rate = format!("{skip_rate:.1}%"), "Step skipped (encode failure)");
+            }
             continue;
         }
+
+        trained_steps += 1;
 
         let batch_size = pos_embeddings.len();
         let k = config.k_negatives;
@@ -342,6 +356,29 @@ pub fn train<B: AutodiffBackend>(
                 .map_err(|e| anyhow::anyhow!("Failed to save checkpoint at step {step}: {e}"))?;
             tracing::info!(step, "Checkpoint saved");
         }
+    }
+
+    // Training summary
+    let total_time = train_start.elapsed();
+    let skip_rate = if config.total_steps > 0 {
+        skipped_steps as f64 / config.total_steps as f64 * 100.0
+    } else {
+        0.0
+    };
+    tracing::info!(
+        trained_steps,
+        skipped_steps,
+        total_steps = config.total_steps,
+        skip_rate = format!("{skip_rate:.1}%"),
+        elapsed_secs = format!("{:.1}", total_time.as_secs_f64()),
+        "Training loop finished"
+    );
+    if skip_rate > 50.0 {
+        tracing::warn!(
+            skip_rate = format!("{skip_rate:.1}%"),
+            "Over 50% of training steps were skipped due to encode failures — \
+             check embedding cache coverage"
+        );
     }
 
     // Save final model

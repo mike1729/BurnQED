@@ -1863,47 +1863,23 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let num_train = train_records.len();
     let num_val = val_records.len();
 
-    let sampler = match ContrastiveSampler::from_trajectory_records(train_records, args.k_negatives) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = %e, "Cannot train EBM — not enough contrastive data");
-            println!();
-            println!("══════════════════════════════════════════");
-            println!(" EBM Training Skipped");
-            println!("──────────────────────────────────────────");
-            println!(" Reason: {e}");
-            println!(" Hint:   Need proved theorems with dead-end");
-            println!("         branches to create contrastive pairs.");
-            println!("══════════════════════════════════════════");
-            return Ok(());
+    // 3. Collect unique states from records (before building samplers)
+    let all_state_strings: Vec<String> = {
+        let mut seen = HashSet::new();
+        for r in train_records.iter().chain(val_records.iter()) {
+            seen.insert(r.state_pp.clone());
         }
+        seen.into_iter().collect()
     };
-    let val_sampler = if !val_records.is_empty() {
-        match ContrastiveSampler::from_trajectory_records(val_records, args.k_negatives) {
-            Ok(s) => {
-                tracing::info!(
-                    val_records = num_val,
-                    val_eligible = s.num_eligible_theorems(),
-                    "Validation sampler initialized"
-                );
-                Some(s)
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "No validation set — val split has insufficient data");
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let unique_states: HashSet<&str> = all_state_strings.iter().map(|s| s.as_str()).collect();
     tracing::info!(
         train_records = num_train,
         val_records = num_val,
-        train_eligible = sampler.num_eligible_theorems(),
+        unique_states = unique_states.len(),
         "Trajectory data loaded (train/val split)"
     );
 
-    // 3. Build embedding cache (warm from disk or start empty)
+    // 4. Build embedding cache (warm from disk or start empty)
     let mut cache = if let Some(ref cache_path) = args.embeddings_cache {
         tracing::info!(path = %cache_path.display(), "Loading embedding cache from disk (warm start)");
         EmbeddingCache::load(cache_path)?
@@ -1911,7 +1887,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         EmbeddingCache::new(hidden_size)
     };
 
-    // 4. Connect to SGLang and precompute all unique embeddings concurrently
+    // 5. Connect to SGLang and precompute all unique embeddings concurrently
     let config = SglangConfig {
         server_url: args.server_url.clone(),
         temperature: 0.0,
@@ -1922,7 +1898,6 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let client = SglangClient::new(config).await?;
     let handle = InferenceHandle::new(client);
 
-    let unique_states = sampler.unique_states();
     let encode_concurrency = args.encode_concurrency;
     let encode_batch_size = args.encode_batch_size;
 
@@ -1974,7 +1949,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         tracing::warn!(
             encode_errors,
             newly_encoded,
-            "Some states failed to encode — training will skip batches containing them"
+            "Some states failed to encode"
         );
     }
 
@@ -1982,21 +1957,83 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         newly_encoded,
         encode_errors,
         cached_entries = cache.len(),
-        "Embedding precomputation complete — training will use cached lookups"
+        "Embedding precomputation complete"
     );
 
-    // 5. Save embedding cache before training (so it's not lost if training is killed)
+    // 6. Save embedding cache before training (so it's not lost if training is killed)
     if let Some(ref save_path) = args.save_embeddings {
         cache.save(save_path)?;
         tracing::info!(path = %save_path.display(), "Saved embedding cache before training");
     }
 
-    // 6. Create cache-only encode_fn (no network calls during training)
+    // 7. Filter records to only those with cached embeddings
+    let train_before = train_records.len();
+    let val_before = val_records.len();
+    let train_records: Vec<_> = train_records
+        .into_iter()
+        .filter(|r| cache.get(&r.state_pp).is_some())
+        .collect();
+    let val_records: Vec<_> = val_records
+        .into_iter()
+        .filter(|r| cache.get(&r.state_pp).is_some())
+        .collect();
+    let train_dropped = train_before - train_records.len();
+    let val_dropped = val_before - val_records.len();
+    if train_dropped > 0 || val_dropped > 0 {
+        tracing::warn!(
+            train_dropped,
+            val_dropped,
+            train_remaining = train_records.len(),
+            val_remaining = val_records.len(),
+            "Filtered out records with uncached embeddings"
+        );
+    }
+
+    // 8. Build samplers from filtered records
+    let sampler = match ContrastiveSampler::from_trajectory_records(train_records, args.k_negatives) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "Cannot train EBM — not enough contrastive data after filtering");
+            println!();
+            println!("══════════════════════════════════════════");
+            println!(" EBM Training Skipped");
+            println!("──────────────────────────────────────────");
+            println!(" Reason: {e}");
+            println!(" Hint:   Need proved theorems with dead-end");
+            println!("         branches to create contrastive pairs.");
+            println!("══════════════════════════════════════════");
+            return Ok(());
+        }
+    };
+    let val_sampler = if !val_records.is_empty() {
+        match ContrastiveSampler::from_trajectory_records(val_records, args.k_negatives) {
+            Ok(s) => {
+                tracing::info!(
+                    val_records = num_val,
+                    val_eligible = s.num_eligible_theorems(),
+                    "Validation sampler initialized"
+                );
+                Some(s)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "No validation set — val split has insufficient data");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    tracing::info!(
+        train_eligible = sampler.num_eligible_theorems(),
+        "Samplers built from cache-filtered records"
+    );
+
+    // 9. Create cache-only encode_fn (no network calls during training)
     let encode_fn = |state: &str| -> anyhow::Result<Vec<f32>> {
         cache.get_or_err(state)
     };
 
-    // 8. Build training config
+    // 10. Build training config
     let output_dir_str = args.output_dir.to_string_lossy().to_string();
     let training_config = EBMTrainingConfig::new()
         .with_lr(args.lr)
@@ -2005,7 +2042,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .with_k_negatives(args.k_negatives)
         .with_checkpoint_dir(output_dir_str.clone());
 
-    // 9. Train
+    // 11. Train
     let _trained = ebm::train(
         &training_config,
         model,
