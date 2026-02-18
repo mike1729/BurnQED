@@ -12,8 +12,8 @@
 //!     --port 30000
 //! ```
 
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::Client;
 use serde::Serialize;
@@ -42,6 +42,68 @@ pub struct SglangConfig {
     pub hidden_size: usize,
 }
 
+/// Circuit breaker for SGLang transport-level failures.
+///
+/// Trips after `THRESHOLD` consecutive transport errors (connection refused, timeout).
+/// Once open, all requests fail immediately until `COOLDOWN` elapses, then half-open
+/// allows one probe request through.
+#[derive(Debug, Clone)]
+struct CircuitBreaker {
+    consecutive_failures: std::sync::Arc<AtomicU32>,
+    last_failure_epoch_ms: std::sync::Arc<AtomicU64>,
+}
+
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self {
+            consecutive_failures: std::sync::Arc::new(AtomicU32::new(0)),
+            last_failure_epoch_ms: std::sync::Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
+impl CircuitBreaker {
+    const THRESHOLD: u32 = 3;
+    const COOLDOWN_MS: u64 = 60_000;
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    /// Check if the circuit is open. Returns Err if requests should be rejected.
+    fn check(&self) -> anyhow::Result<()> {
+        let failures = self.consecutive_failures.load(Ordering::Relaxed);
+        if failures < Self::THRESHOLD {
+            return Ok(());
+        }
+        // Auto-reset after cooldown
+        let last = self.last_failure_epoch_ms.load(Ordering::Relaxed);
+        if Self::now_ms().saturating_sub(last) > Self::COOLDOWN_MS {
+            self.consecutive_failures.store(0, Ordering::Relaxed);
+            tracing::info!("SGLang circuit breaker reset after cooldown");
+            return Ok(());
+        }
+        anyhow::bail!(
+            "SGLang circuit breaker open ({failures} consecutive transport failures). \
+             Will auto-reset after {}s cooldown.",
+            Self::COOLDOWN_MS / 1000
+        )
+    }
+
+    fn record_success(&self) {
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+    }
+
+    fn record_failure(&self) {
+        self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        self.last_failure_epoch_ms
+            .store(Self::now_ms(), Ordering::Relaxed);
+    }
+}
+
 /// HTTP client for SGLang inference server.
 ///
 /// Supports two encoding paths:
@@ -60,6 +122,8 @@ pub struct SglangClient {
     config: SglangConfig,
     /// Cached encode capability: 0=unknown, 1=pooled (/encode), 2=legacy (/generate).
     encode_capability: std::sync::Arc<AtomicU8>,
+    /// Circuit breaker for transport-level failures.
+    circuit: CircuitBreaker,
 }
 
 // -- SGLang native API request/response types --
@@ -105,7 +169,7 @@ impl SglangClient {
 
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(30))
             .build()?;
 
         let this = Self {
@@ -113,6 +177,7 @@ impl SglangClient {
             base_url,
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         this.health_check().await?;
@@ -338,7 +403,7 @@ impl SglangClient {
 
         let url = self.base_url.join("/generate")?;
         let resp = self
-            .post_with_retry(&url, &request, Some(Duration::from_secs(300)))
+            .post_with_retry(&url, &request, Some(Duration::from_secs(30)))
             .await?;
         let body: serde_json::Value = resp.json().await.map_err(|e| {
             anyhow::anyhow!("Failed to decode SGLang batch generate response: {e}")
@@ -539,8 +604,8 @@ impl SglangClient {
         });
 
         let url = self.base_url.join("/encode")?;
-        // 10s per item, min 15s, max 120s — no retries for encode
-        let timeout_secs = (10 * texts.len() as u64).clamp(15, 120);
+        // Scale timeout with batch size, cap at 30s
+        let timeout_secs = (5 * texts.len() as u64).clamp(10, 30);
         let resp = self.post_once(&url, &request, Some(Duration::from_secs(timeout_secs))).await?;
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode /encode batch response: {e}"))?;
@@ -778,6 +843,8 @@ impl SglangClient {
         timeout: Option<Duration>,
         max_attempts: usize,
     ) -> anyhow::Result<reqwest::Response> {
+        self.circuit.check()?;
+
         let mut last_err = None;
         for attempt in 0..max_attempts {
             if attempt > 0 {
@@ -793,6 +860,7 @@ impl SglangClient {
 
             match req.send().await {
                 Ok(resp) if resp.status().is_server_error() => {
+                    // 5xx: retry (transient server issue)
                     let status = resp.status();
                     let body_text = resp.text().await.unwrap_or_default();
                     last_err = Some(anyhow::anyhow!(
@@ -800,13 +868,20 @@ impl SglangClient {
                     ));
                 }
                 Ok(resp) if resp.status().is_client_error() => {
+                    self.circuit.record_success();
                     let status = resp.status();
                     let body_text = resp.text().await.unwrap_or_default();
                     anyhow::bail!("SGLang client error {status}: {body_text}");
                 }
-                Ok(resp) => return Ok(resp),
+                Ok(resp) => {
+                    self.circuit.record_success();
+                    return Ok(resp);
+                }
                 Err(e) => {
-                    last_err = Some(anyhow::anyhow!("SGLang request failed: {e}"));
+                    // Transport error (connection refused, timeout): don't retry,
+                    // record failure for circuit breaker.
+                    self.circuit.record_failure();
+                    anyhow::bail!("SGLang request failed: {e}");
                 }
             }
         }
@@ -855,6 +930,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         let prompt = client.format_prompt("n : Nat\n\u{22a2} n + 0 = n");
@@ -949,6 +1025,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         // Simulated response: 2 tokens × 3 dims
@@ -980,6 +1057,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         let body = serde_json::json!({
@@ -1024,6 +1102,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         let body = serde_json::json!({
@@ -1051,6 +1130,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         let body = serde_json::json!({
@@ -1075,6 +1155,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         let body = serde_json::json!({"embeddings": [[1.0, 2.0, 3.0]]});
@@ -1138,6 +1219,7 @@ mod tests {
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
+            circuit: CircuitBreaker::default(),
         };
 
         let result = client.generate_candidates_batch(&[], 8).await.unwrap();
