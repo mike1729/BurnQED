@@ -29,10 +29,6 @@ ensure_sglang() {
     echo "Inference server not reachable at ${url}, starting..."
     _LIB_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
     bash "${_LIB_REPO_ROOT}/scripts/start_inference_server.sh" "${model}" &
-    SGLANG_PID=$!
-
-    # Clean up server on script exit
-    trap "kill $SGLANG_PID 2>/dev/null" EXIT
 
     # Wait for server to become ready (up to 5 minutes)
     for i in $(seq 1 60); do
