@@ -35,6 +35,7 @@ These were decided after two external review rounds. Do not revisit without expl
 9. **ProofHandle pattern.** `stateId` is process-local — hold worker for proof lifetime. Use `ProofHandleOwned` for `tokio::spawn`.
 10. **Batch EBM scoring.** Deferred scoring: collect child states per expansion, then `score_batch()` once. Uses `EBMValueFn::with_batch_encode()` for single HTTP batch call. Falls back to `0.0` on error.
 11. **Server-side batch generation.** `generate_candidates_batch()` sends all `states × n` prompts in one `BatchGenerateRequest`. SGLang RadixAttention caches shared prefixes. No per-state sequential HTTP calls.
+12. **SGLang circuit breaker.** `CircuitBreaker` trips after 3 consecutive transport failures, auto-resets after 60s. Transport errors (timeout, connection refused) fail immediately — only 5xx retries. Timeouts: 30s default, 30s batch generate, encode batch capped at 30s.
 
 ## Code Conventions
 
@@ -96,7 +97,7 @@ cargo run -p prover-core -- generate-negatives --tactic-pairs FILE --server-url 
 
 # Evaluation
 cargo run -p prover-core -- eval --server-url URL --theorems FILE --budgets 50,100,200
-cargo run -p prover-core -- summary --trajectories FILE
+cargo run -p prover-core -- summary --input FILE
 cargo run -p prover-core -- compare --baseline FILE --experiment FILE
 ```
 
