@@ -197,9 +197,6 @@ async def _encode_sequential(prompts: list[str], hidden_size: int) -> list[list[
             logger.warning("Encode prompt %d/%d: error %s (len=%d chars)", i + 1, len(prompts), e, len(prompt))
             embeddings.append(None)
     return embeddings
-            )
-        embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
-    return embeddings
 
 
 def _run_batch_selftest(engine, hidden_size: int = 4096) -> bool:
