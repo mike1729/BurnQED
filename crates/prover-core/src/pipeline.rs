@@ -1,6 +1,6 @@
 //! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -383,9 +383,38 @@ struct SearchAggregator {
     lean_latencies_us: Vec<u64>,
     gen_latencies_us: Vec<u64>,
     ebm_latencies_us: Vec<u64>,
+    /// Ring buffer of recent completion timestamps for moving-average ETA.
+    completion_times: VecDeque<Instant>,
 }
 
 impl SearchAggregator {
+    const ETA_WINDOW: usize = 200;
+
+    /// Record a theorem completion for moving-average ETA.
+    fn record_completion(&mut self) {
+        self.completion_times.push_back(Instant::now());
+        if self.completion_times.len() > Self::ETA_WINDOW {
+            self.completion_times.pop_front();
+        }
+    }
+
+    /// Compute ETA string from recent throughput (moving window).
+    fn format_eta(&self, remaining: u32) -> String {
+        if self.completion_times.len() < 2 {
+            return "?".to_string();
+        }
+        let first = *self.completion_times.front().unwrap();
+        let last = *self.completion_times.back().unwrap();
+        let span = last.duration_since(first);
+        let intervals = self.completion_times.len() - 1;
+        if intervals == 0 || span.is_zero() {
+            return "?".to_string();
+        }
+        let secs_per_thm = span.as_secs_f64() / intervals as f64;
+        let eta_secs = (remaining as f64 * secs_per_thm) as u64;
+        format_duration_short(eta_secs)
+    }
+
     /// Print a compact progress block every N theorems during long runs.
     fn print_progress(&self, elapsed: Duration, records_written: usize) {
         let secs = elapsed.as_secs_f64();
@@ -469,6 +498,19 @@ impl SearchAggregator {
             ebm_calls = self.total_ebm_calls,
             "progress_stats"
         );
+    }
+}
+
+/// Format seconds as compact human-readable duration (e.g., "2h30m", "45m12s", "30s").
+fn format_duration_short(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        format!("{h}h{m:02}m")
     }
 }
 
@@ -575,11 +617,12 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) proved={prefix} {msg}")
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) proved={prefix}")
             .expect("valid progress bar template")
             .progress_chars("=> "),
     );
     pb.set_prefix("0");
+    pb.set_message("?");
     pb.enable_steady_tick(Duration::from_secs(1));
 
     // CTRL-C via AtomicBool — shared across spawned tasks
@@ -606,6 +649,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         agg: &mut SearchAggregator,
         writer: &mut TrajectoryWriter,
         pb: &ProgressBar,
+        total: u32,
     ) {
         match outcome.result {
             Ok(result) => {
@@ -670,8 +714,12 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 tracing::debug!(theorem = outcome.name, error = %e, "Search failed, skipping");
             }
         }
+        agg.record_completion();
         pb.inc(1);
         pb.set_prefix(format!("{}", agg.proved_count));
+        let done = agg.searched_count + agg.error_count;
+        let remaining = total.saturating_sub(done);
+        pb.set_message(agg.format_eta(remaining));
     }
 
     for task in &theorems_to_search {
@@ -683,7 +731,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         while let Some(join_result) = join_set.try_join_next() {
             match join_result {
                 Ok(outcome) => {
-                    collect_search(outcome, &mut agg, &mut writer, &pb);
+                    collect_search(outcome, &mut agg, &mut writer, &pb, total);
                     // Periodic auto-save
                     const AUTOSAVE_INTERVAL: u32 = 50;
                     if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
@@ -704,8 +752,6 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         if interrupted.load(Ordering::Relaxed) {
             break;
         }
-
-        pb.set_message(task.name.clone());
 
         let pool = Arc::clone(&pool);
         let policy = Arc::clone(&policy);
@@ -736,7 +782,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     while let Some(join_result) = join_set.join_next().await {
         match join_result {
             Ok(outcome) => {
-                collect_search(outcome, &mut agg, &mut writer, &pb);
+                collect_search(outcome, &mut agg, &mut writer, &pb, total);
                 const AUTOSAVE_INTERVAL: u32 = 50;
                 if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
                     writer.flush_partial()?;
