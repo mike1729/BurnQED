@@ -1,7 +1,8 @@
 #!/bin/bash
 # Steps 2-5 of an expert iteration: EBM training, proof search, eval, summary.
 #
-# Run this after run_iteration_train.sh and restarting SGLang with the new model.
+# Run this after run_iteration_train.sh. The server is auto-managed — if it's
+# running with the wrong model (or not running), it will be restarted.
 #
 # Usage:
 #   ./scripts/run_iteration_search.sh <iteration_number>
@@ -29,7 +30,7 @@ EVAL_DIR="${REPO_ROOT}/eval_results"
 THEOREM_INDEX="${THEOREM_INDEX:-${REPO_ROOT}/data/theorem_index.json}"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
-ensure_sglang "$SGLANG_URL"
+ensure_server "$SGLANG_URL" "$LLM_DIR"
 CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"

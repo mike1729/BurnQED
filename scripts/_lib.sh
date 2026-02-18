@@ -27,8 +27,8 @@ ensure_sglang() {
     fi
 
     echo "Inference server not reachable at ${url}, starting..."
-    REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    "${REPO_ROOT}/scripts/start_inference_server.sh" "${model}" &
+    _LIB_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    "${_LIB_REPO_ROOT}/scripts/start_inference_server.sh" "${model}" &
     SGLANG_PID=$!
 
     # Clean up server on script exit
@@ -45,4 +45,52 @@ ensure_sglang() {
 
     echo "ERROR: Inference server failed to start within 5 minutes"
     exit 1
+}
+
+# Marker file tracking which model the inference server currently has loaded.
+SERVER_MODEL_MARKER="/tmp/burnqed_server_model"
+
+# Kill the running inference server, start a new one with the given model,
+# and wait for it to become healthy.
+#
+# Usage:
+#   restart_inference_server "$SGLANG_URL" "$MODEL_PATH"
+restart_inference_server() {
+    local url="${1:?Usage: restart_inference_server <url> <model_path>}"
+    local model="${2:?Usage: restart_inference_server <url> <model_path>}"
+
+    echo "Stopping inference server..."
+    pkill -f "inference_server.py" 2>/dev/null || true
+    sleep 3
+    pkill -9 -f "inference_server.py" 2>/dev/null || true
+    sleep 2
+
+    rm -f "$SERVER_MODEL_MARKER"
+
+    # Start server with new model and wait for health
+    ensure_sglang "$url" "$model"
+
+    echo "$model" > "$SERVER_MODEL_MARKER"
+    echo "Server restarted with model: $model"
+}
+
+# Ensure the inference server is running with the correct model.
+# If the server is healthy and already has the right model loaded, this is a no-op.
+# Otherwise it restarts with the requested model.
+#
+# Usage:
+#   ensure_server "$SGLANG_URL" "$MODEL_PATH"
+ensure_server() {
+    local url="${1:?Usage: ensure_server <url> <model_path>}"
+    local model="${2:?Usage: ensure_server <url> <model_path>}"
+
+    if curl -sf "${url}/health" > /dev/null 2>&1; then
+        if [ -f "$SERVER_MODEL_MARKER" ] && [ "$(cat "$SERVER_MODEL_MARKER")" = "$model" ]; then
+            echo "Inference server running with correct model: $model"
+            return 0
+        fi
+        echo "Server running but wrong model (want: $model)"
+    fi
+
+    restart_inference_server "$url" "$model"
 }
