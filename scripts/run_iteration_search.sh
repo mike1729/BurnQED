@@ -129,16 +129,28 @@ print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
 " "${TRAJ_FILES[@]}"
 
     # EBM resume logic
+    # EBM_RESUME=auto (default): resume from previous iteration's checkpoint if it exists
+    # EBM_RESUME=none: start from scratch
+    # EBM_RESUME=/path/to/dir: resume from a specific checkpoint directory
     RESUME_FLAG=""
     PREV_EBM="${REPO_ROOT}/checkpoints/ebm/iter_${PREV}"
     if [ "$EBM_RESUME" = "none" ]; then
         RESUME_FLAG=""
         echo "  Resume: disabled (EBM_RESUME=none)"
-    elif [ "$EBM_RESUME" = "auto" ] && [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
-        RESUME_FLAG="--resume-from ${PREV_EBM}"
-        echo "  Resume: from ${PREV_EBM}"
+    elif [ "$EBM_RESUME" = "auto" ]; then
+        if [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
+            RESUME_FLAG="--resume-from ${PREV_EBM}"
+            echo "  Resume: from ${PREV_EBM} (auto)"
+        else
+            echo "  Resume: none (auto — no previous checkpoint at ${PREV_EBM})"
+        fi
+    elif [ -d "$EBM_RESUME" ] && [ -f "${EBM_RESUME}/final.mpk" ]; then
+        RESUME_FLAG="--resume-from ${EBM_RESUME}"
+        echo "  Resume: from ${EBM_RESUME} (custom path)"
     else
-        echo "  Resume: none (no previous checkpoint or EBM_RESUME=${EBM_RESUME})"
+        echo "  ERROR: EBM_RESUME=${EBM_RESUME} but no final.mpk found in that directory"
+        ls -la "$EBM_RESUME" 2>/dev/null || echo "    (directory does not exist)"
+        exit 1
     fi
 
     EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"

@@ -160,6 +160,7 @@ impl EmbeddingCache {
 
         let mut encoded = 0usize;
         let mut errors = 0usize;
+        let mut failed_states: Vec<(String, String)> = Vec::new();
         let start = Instant::now();
         let mut done = 0usize;
         let mut last_checkpoint = 0usize;
@@ -185,6 +186,8 @@ impl EmbeddingCache {
                 }
                 Err(e) => {
                     errors += 1;
+                    let preview: String = state.chars().take(120).collect();
+                    failed_states.push((preview, e.to_string()));
                     tracing::debug!(state = %state, error = %e, "Failed to encode state");
                 }
             }
@@ -231,10 +234,11 @@ impl EmbeddingCache {
         pb.finish_with_message("done");
 
         if errors > 0 {
-            tracing::warn!(
-                errors,
-                "Some states failed to encode (use RUST_LOG=debug for details)"
-            );
+            tracing::warn!(errors, "Some states failed to encode:");
+            for (i, (preview, err)) in failed_states.iter().enumerate() {
+                let err_short: String = err.chars().take(100).collect();
+                tracing::warn!("  [{}/{}] error=\"{}\" state=\"{}\"", i + 1, errors, err_short, preview);
+            }
         }
 
         tracing::info!(
@@ -326,6 +330,7 @@ impl EmbeddingCache {
 
         let mut encoded = 0usize;
         let mut errors = 0usize;
+        let mut failed_states: Vec<(String, String)> = Vec::new(); // (state_preview, error)
         let start = Instant::now();
         let mut done = 0usize;
         let mut last_checkpoint = 0usize;
@@ -359,6 +364,8 @@ impl EmbeddingCache {
                             }
                             Err(e) => {
                                 errors += 1;
+                                let preview: String = state.chars().take(120).collect();
+                                failed_states.push((preview, e.to_string()));
                                 tracing::debug!(state = %state, error = %e, "Failed to encode state in batch");
                             }
                         }
@@ -368,6 +375,11 @@ impl EmbeddingCache {
                 }
                 Err(e) => {
                     // Whole batch failed — count all states as errors
+                    let err_str = e.to_string();
+                    for state in &chunk {
+                        let preview: String = state.chars().take(120).collect();
+                        failed_states.push((preview, err_str.clone()));
+                    }
                     errors += chunk.len();
                     done += chunk.len();
                     tracing::warn!(
@@ -417,10 +429,11 @@ impl EmbeddingCache {
         pb.finish_with_message("done");
 
         if errors > 0 {
-            tracing::warn!(
-                errors,
-                "Some states failed to encode (use RUST_LOG=debug for details)"
-            );
+            tracing::warn!(errors, "Some states failed to encode:");
+            for (i, (preview, err)) in failed_states.iter().enumerate() {
+                let err_short: String = err.chars().take(100).collect();
+                tracing::warn!("  [{}/{}] error=\"{}\" state=\"{}\"", i + 1, errors, err_short, preview);
+            }
         }
 
         tracing::info!(
