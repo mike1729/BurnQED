@@ -386,22 +386,30 @@ pub fn train<B: AutodiffBackend>(
             };
 
             // Compute validation metrics if val sampler is available
+            // Average over multiple batches for stable estimates
             let val_str = if let Some(val_s) = val_sampler {
                 let inner_device = device.clone();
                 let val_model = model.valid();
-                match eval_batch(
-                    &val_model,
-                    encode_fn,
-                    val_s,
-                    config.batch_size,
-                    config.k_negatives,
-                    config.depth_loss_weight,
-                    &mut val_rng,
-                    &inner_device,
-                ) {
+                let n_val_batches = 8;
+                let mut val_avg = RunningAvg::new();
+                for _ in 0..n_val_batches {
+                    if let Some(vm) = eval_batch(
+                        &val_model,
+                        encode_fn,
+                        val_s,
+                        config.batch_size,
+                        config.k_negatives,
+                        config.depth_loss_weight,
+                        &mut val_rng,
+                        &inner_device,
+                    ) {
+                        val_avg.update(&vm);
+                    }
+                }
+                match val_avg.avg_metrics() {
                     Some(vm) => format!(
-                        " | val: loss={:.4} gap={:.2} rank={:.2}",
-                        vm.loss, vm.energy_gap, vm.rank_accuracy
+                        " | val({}): loss={:.4} gap={:.2} rank={:.2}",
+                        val_avg.count, vm.loss, vm.energy_gap, vm.rank_accuracy
                     ),
                     None => String::new(),
                 }
