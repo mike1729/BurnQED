@@ -761,9 +761,10 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                         writer.flush_partial()?;
                         tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
                     }
-                    // Periodic progress stats
+                    // Periodic progress stats (count errors too)
                     const PROGRESS_INTERVAL: u32 = 500;
-                    if agg.searched_count % PROGRESS_INTERVAL == 0 && agg.searched_count > 0 {
+                    let done = agg.searched_count + agg.error_count;
+                    if done % PROGRESS_INTERVAL == 0 && done > 0 {
                         pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
                     }
                 }
@@ -812,7 +813,8 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                     tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
                 }
                 const PROGRESS_INTERVAL: u32 = 500;
-                if agg.searched_count % PROGRESS_INTERVAL == 0 && agg.searched_count > 0 {
+                let done = agg.searched_count + agg.error_count;
+                if done % PROGRESS_INTERVAL == 0 && done > 0 {
                     pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
                 }
             }
