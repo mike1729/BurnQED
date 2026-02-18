@@ -518,7 +518,7 @@ impl SglangClient {
         });
 
         let url = self.base_url.join("/encode")?;
-        let resp = self.post_with_retry(&url, &request, Some(Duration::from_secs(30))).await?;
+        let resp = self.post_once(&url, &request, Some(Duration::from_secs(10))).await?;
 
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode /encode response: {e}"))?;
@@ -539,7 +539,9 @@ impl SglangClient {
         });
 
         let url = self.base_url.join("/encode")?;
-        let resp = self.post_with_retry(&url, &request, Some(Duration::from_secs(300))).await?;
+        // 10s per item, min 15s, max 120s — no retries for encode
+        let timeout_secs = (10 * texts.len() as u64).clamp(15, 120);
+        let resp = self.post_once(&url, &request, Some(Duration::from_secs(timeout_secs))).await?;
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode /encode batch response: {e}"))?;
 
@@ -749,8 +751,28 @@ impl SglangClient {
         body: &T,
         timeout: Option<Duration>,
     ) -> anyhow::Result<reqwest::Response> {
+        self.post_with_attempts(url, body, timeout, 3).await
+    }
+
+    /// POST without retrying — fails immediately on server error or timeout.
+    async fn post_once<T: Serialize>(
+        &self,
+        url: &Url,
+        body: &T,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<reqwest::Response> {
+        self.post_with_attempts(url, body, timeout, 1).await
+    }
+
+    async fn post_with_attempts<T: Serialize>(
+        &self,
+        url: &Url,
+        body: &T,
+        timeout: Option<Duration>,
+        max_attempts: usize,
+    ) -> anyhow::Result<reqwest::Response> {
         let mut last_err = None;
-        for attempt in 0..3 {
+        for attempt in 0..max_attempts {
             if attempt > 0 {
                 let delay = Duration::from_millis(500 * (1 << attempt));
                 tracing::debug!(attempt, delay_ms = delay.as_millis() as u64, "Retrying SGLang request");
