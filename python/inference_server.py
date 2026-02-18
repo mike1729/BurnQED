@@ -148,7 +148,12 @@ def _format_generate_response(output: dict) -> dict:
 
 
 async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float]]:
-    """Encode all prompts in a single async_generate call (true GPU batching)."""
+    """Encode all prompts in a single async_generate call (true GPU batching).
+
+    Returns zero vectors for individual prompts that fail (missing hidden_states
+    or shape mismatch) instead of failing the whole batch.
+    """
+    zero = [0.0] * hidden_size
     outputs = await _engine.async_generate(
         prompts,
         sampling_params={"max_new_tokens": 1, "temperature": 0},
@@ -158,11 +163,14 @@ async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float
     for i, output in enumerate(outputs):
         hs = output.get("meta_info", {}).get("hidden_states")
         if hs is None:
-            raise ValueError(
-                f"Prompt {i}: Engine did not return hidden_states. "
-                "Ensure enable_return_hidden_states=True in Engine constructor."
-            )
-        embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+            logger.warning("Batch encode prompt %d/%d: no hidden_states", i + 1, len(prompts))
+            embeddings.append(list(zero))
+            continue
+        try:
+            embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+        except Exception as e:
+            logger.warning("Batch encode prompt %d/%d: %s", i + 1, len(prompts), e)
+            embeddings.append(list(zero))
     return embeddings
 
 
