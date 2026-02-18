@@ -385,6 +385,75 @@ struct SearchAggregator {
     ebm_latencies_us: Vec<u64>,
 }
 
+impl SearchAggregator {
+    /// Print a compact progress block every N theorems during long runs.
+    fn print_progress(&self, elapsed: Duration, records_written: usize) {
+        let secs = elapsed.as_secs_f64();
+        let searched = self.searched_count;
+        let prove_pct = if searched > 0 {
+            self.proved_count as f64 / searched as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        let avg_nodes = if searched > 0 {
+            self.total_nodes as f64 / searched as f64
+        } else {
+            0.0
+        };
+
+        // Timing breakdown as % of wall time
+        let gen_s = self.total_gen_ms as f64 / 1000.0;
+        let llm_lean_s = self.total_llm_lean_ms as f64 / 1000.0;
+        let probe_lean_s = self.total_probe_lean_ms as f64 / 1000.0;
+        let ebm_s = self.total_ebm_ms as f64 / 1000.0;
+        let harvest_s = self.total_harvest_ms as f64 / 1000.0;
+
+        fn pct(part: f64, total: f64) -> f64 {
+            if total > 0.0 { part / total * 100.0 } else { 0.0 }
+        }
+
+        let cache_total = self.total_cache_hits + self.total_cache_misses;
+        let cache_hit_pct = if cache_total > 0 {
+            self.total_cache_hits as f64 / cache_total as f64 * 100.0
+        } else {
+            0.0
+        };
+
+        let thm_per_min = if secs > 0.0 { searched as f64 / secs * 60.0 } else { 0.0 };
+        let traj_per_sec = if secs > 0.0 { records_written as f64 / secs } else { 0.0 };
+
+        // Use eprintln so it doesn't interfere with progress bar on stdout
+        eprintln!(
+            "\n── Progress @ {} theorems ({:.0}s) ──\n\
+             \x20 Proved {}/{} ({:.1}%), errors {}\n\
+             \x20 Avg nodes/thm: {:.1}\n\
+             \x20 Time: gen {:.1}% | lean(llm) {:.1}% | lean(probe) {:.1}% | ebm {:.1}% | harvest {:.1}%\n\
+             \x20 Cache: {:.1}% hit ({}/{})\n\
+             \x20 Throughput: {:.1} thm/min, {:.1} traj/s\n\
+             \x20 EBM calls: {}",
+            searched,
+            secs,
+            self.proved_count,
+            searched,
+            prove_pct,
+            self.error_count,
+            avg_nodes,
+            pct(gen_s, secs),
+            pct(llm_lean_s, secs),
+            pct(probe_lean_s, secs),
+            pct(ebm_s, secs),
+            pct(harvest_s, secs),
+            cache_hit_pct,
+            self.total_cache_hits,
+            cache_total,
+            thm_per_min,
+            traj_per_sec,
+            self.total_ebm_calls,
+        );
+    }
+}
+
 /// Outcome of a single theorem search task, returned from spawned tasks.
 struct SearchOutcome {
     name: String,
@@ -603,6 +672,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                         writer.flush_partial()?;
                         tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
                     }
+                    // Periodic progress stats
+                    const PROGRESS_INTERVAL: u32 = 500;
+                    if agg.searched_count % PROGRESS_INTERVAL == 0 && agg.searched_count > 0 {
+                        pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
+                    }
                 }
                 Err(e) => tracing::error!(error = %e, "Search task panicked"),
             }
@@ -649,6 +723,10 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
                     writer.flush_partial()?;
                     tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
+                }
+                const PROGRESS_INTERVAL: u32 = 500;
+                if agg.searched_count % PROGRESS_INTERVAL == 0 && agg.searched_count > 0 {
+                    pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
                 }
             }
             Err(e) => tracing::error!(error = %e, "Search task panicked"),
