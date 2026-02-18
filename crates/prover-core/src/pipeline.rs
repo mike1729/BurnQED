@@ -464,7 +464,7 @@ impl SearchAggregator {
              \x20 Time: gen {:.1}% | lean(llm) {:.1}% | lean(probe) {:.1}% | ebm {:.1}% | harvest {:.1}%\n\
              \x20 Cache: {:.1}% hit ({}/{})\n\
              \x20 Throughput: {:.1} thm/min, {:.1} traj/s\n\
-             \x20 EBM calls: {}",
+             \x20 Trajectories: {}, EBM calls: {}",
             done,
             secs,
             self.proved_count,
@@ -483,6 +483,7 @@ impl SearchAggregator {
             cache_total,
             thm_per_min,
             traj_per_sec,
+            records_written,
             self.total_ebm_calls,
         );
 
