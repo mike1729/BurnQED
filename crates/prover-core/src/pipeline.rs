@@ -423,8 +423,9 @@ impl SearchAggregator {
         let thm_per_min = if secs > 0.0 { searched as f64 / secs * 60.0 } else { 0.0 };
         let traj_per_sec = if secs > 0.0 { records_written as f64 / secs } else { 0.0 };
 
-        // Use eprintln so it doesn't interfere with progress bar on stdout
-        eprintln!(
+        // Print via println inside pb.suspend() — must go to stdout
+        // so indicatif can manage the output correctly.
+        println!(
             "\n── Progress @ {} theorems ({:.0}s) ──\n\
              \x20 Proved {}/{} ({:.1}%), errors {}\n\
              \x20 Avg nodes/thm: {:.1}\n\
@@ -450,6 +451,23 @@ impl SearchAggregator {
             thm_per_min,
             traj_per_sec,
             self.total_ebm_calls,
+        );
+
+        // Also log structured stats for the log file
+        tracing::info!(
+            searched,
+            proved = self.proved_count,
+            errors = self.error_count,
+            prove_pct = format!("{:.1}", prove_pct),
+            thm_per_min = format!("{:.1}", thm_per_min),
+            avg_nodes = format!("{:.1}", avg_nodes),
+            gen_pct = format!("{:.1}", pct(gen_s, secs)),
+            lean_llm_pct = format!("{:.1}", pct(llm_lean_s, secs)),
+            lean_probe_pct = format!("{:.1}", pct(probe_lean_s, secs)),
+            ebm_pct = format!("{:.1}", pct(ebm_s, secs)),
+            cache_hit_pct = format!("{:.1}", cache_hit_pct),
+            ebm_calls = self.total_ebm_calls,
+            "progress_stats"
         );
     }
 }
