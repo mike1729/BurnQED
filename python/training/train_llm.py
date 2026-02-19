@@ -192,113 +192,6 @@ def pack_sequences(dataset, eos_token_id: int, max_seq_len: int):
     return packed_dataset
 
 
-class SeparationProbeCallback:
-    """Monitors embedding separation between positive/negative proof states during training.
-
-    Computes centroid distance, cosine similarity gap, and norm statistics
-    every `probe_interval` steps. Saves the checkpoint with best centroid L2
-    separation to `{output_dir}/best_separation/`.
-
-    Implements TrainerCallback interface (on_step_end). The actual base class
-    import is deferred to train() to avoid top-level transformers dependency.
-    """
-
-    def __init__(self, probe_path: str, tokenizer, max_seq_len: int, output_dir: str,
-                 probe_interval: int = 500, batch_size: int = 8):
-        probe_data = json.load(open(probe_path))
-        pos_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "positive"]
-        neg_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "negative"]
-        self.n_pos = len(pos_texts)
-        self.n_neg = len(neg_texts)
-        logger.info("Separation probe: %d positive, %d negative states from %s",
-                     self.n_pos, self.n_neg, probe_path)
-
-        all_texts = pos_texts + neg_texts
-        self.tokens = tokenizer(
-            all_texts, padding=True, truncation=True,
-            max_length=max_seq_len, return_tensors="pt",
-        )
-        self.output_dir = output_dir
-        self.probe_interval = probe_interval
-        self.batch_size = batch_size
-        self.best_centroid_l2 = 0.0
-        self.trainer = None  # Set after Trainer creation
-
-    def on_step_end(self, args, state, control, **kwargs):
-        if state.global_step == 0 or state.global_step % self.probe_interval != 0:
-            return
-
-        model = kwargs.get("model") or self.trainer.model
-        model.eval()
-
-        all_embs = []
-        input_ids = self.tokens["input_ids"]
-        attention_mask = self.tokens["attention_mask"]
-        n_total = input_ids.shape[0]
-
-        with torch.no_grad():
-            for i in range(0, n_total, self.batch_size):
-                batch_ids = input_ids[i:i + self.batch_size].to(model.device)
-                batch_mask = attention_mask[i:i + self.batch_size].to(model.device)
-
-                outputs = model(batch_ids, attention_mask=batch_mask, output_hidden_states=True)
-                hidden = outputs.hidden_states[-1].float()  # [B, seq_len, hidden_dim]
-
-                # Mean-pool using attention mask
-                mask_expanded = batch_mask.unsqueeze(-1).float()  # [B, seq_len, 1]
-                pooled = (hidden * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1e-9)
-                all_embs.append(pooled.cpu())
-
-        model.train()
-
-        all_embs = torch.cat(all_embs, dim=0)  # [n_total, hidden_dim]
-        pos_embs = all_embs[:self.n_pos]
-        neg_embs = all_embs[self.n_pos:]
-
-        # Centroid L2 distance
-        pos_centroid = pos_embs.mean(dim=0)
-        neg_centroid = neg_embs.mean(dim=0)
-        centroid_l2 = (pos_centroid - neg_centroid).norm().item()
-
-        # Norms
-        pos_norms = pos_embs.norm(dim=1)
-        neg_norms = neg_embs.norm(dim=1)
-        pos_norm_mean = pos_norms.mean().item()
-        neg_norm_mean = neg_norms.mean().item()
-        norm_gap = neg_norm_mean - pos_norm_mean
-
-        # Cosine similarities
-        pos_normed = pos_embs / pos_norms.unsqueeze(1).clamp(min=1e-9)
-        neg_normed = neg_embs / neg_norms.unsqueeze(1).clamp(min=1e-9)
-        # Within-positive cosine (sample pairs to avoid O(n^2))
-        n_sample = min(100, self.n_pos)
-        idx = torch.randperm(self.n_pos)[:n_sample]
-        within_pos_cos = (pos_normed[idx] @ pos_normed[idx].T).fill_diagonal_(0).sum() / (n_sample * (n_sample - 1))
-        # Cross-class cosine
-        n_cross = min(100, self.n_pos, self.n_neg)
-        cross_cos = (pos_normed[:n_cross] @ neg_normed[:n_cross].T).mean()
-        delta_cosine = (within_pos_cos - cross_cos).item()
-
-        metrics = {
-            "sep_centroid_l2": round(centroid_l2, 4),
-            "sep_delta_cosine": round(delta_cosine, 4),
-            "sep_norm_gap": round(norm_gap, 4),
-            "sep_pos_norm": round(pos_norm_mean, 4),
-            "sep_neg_norm": round(neg_norm_mean, 4),
-        }
-
-        logger.info("Step %d separation probe: %s", state.global_step, metrics)
-        if self.trainer:
-            self.trainer.log(metrics)
-
-        # Save best separation checkpoint
-        if centroid_l2 > self.best_centroid_l2:
-            self.best_centroid_l2 = centroid_l2
-            save_dir = os.path.join(self.output_dir, "best_separation")
-            logger.info("New best centroid L2: %.4f — saving to %s", centroid_l2, save_dir)
-            model.save_pretrained(save_dir)
-
-
 def train(args):
     """Run QLoRA fine-tuning."""
     from peft import LoraConfig, get_peft_model, PeftModel
@@ -312,6 +205,110 @@ def train(args):
         TrainingArguments,
         default_data_collator,
     )
+
+    class SeparationProbeCallback(TrainerCallback):
+        """Monitors embedding separation between positive/negative proof states.
+
+        Computes centroid distance, cosine similarity gap, and norm statistics
+        every `probe_interval` steps. Saves the checkpoint with best centroid L2
+        separation to `{output_dir}/best_separation/`.
+        """
+
+        def __init__(self, probe_path: str, tokenizer, max_seq_len: int, output_dir: str,
+                     probe_interval: int = 500, batch_size: int = 8):
+            super().__init__()
+            probe_data = json.load(open(probe_path))
+            pos_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "positive"]
+            neg_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "negative"]
+            self.n_pos = len(pos_texts)
+            self.n_neg = len(neg_texts)
+            logger.info("Separation probe: %d positive, %d negative states from %s",
+                         self.n_pos, self.n_neg, probe_path)
+
+            all_texts = pos_texts + neg_texts
+            self.tokens = tokenizer(
+                all_texts, padding=True, truncation=True,
+                max_length=max_seq_len, return_tensors="pt",
+            )
+            self.output_dir = output_dir
+            self.probe_interval = probe_interval
+            self.batch_size = batch_size
+            self.best_centroid_l2 = 0.0
+            self.trainer = None  # Set after Trainer creation
+
+        def on_step_end(self, args, state, control, **kwargs):
+            if state.global_step == 0 or state.global_step % self.probe_interval != 0:
+                return
+
+            model = kwargs.get("model") or self.trainer.model
+            model.eval()
+
+            all_embs = []
+            input_ids = self.tokens["input_ids"]
+            attention_mask = self.tokens["attention_mask"]
+            n_total = input_ids.shape[0]
+
+            with torch.no_grad():
+                for i in range(0, n_total, self.batch_size):
+                    batch_ids = input_ids[i:i + self.batch_size].to(model.device)
+                    batch_mask = attention_mask[i:i + self.batch_size].to(model.device)
+
+                    outputs = model(batch_ids, attention_mask=batch_mask, output_hidden_states=True)
+                    hidden = outputs.hidden_states[-1].float()  # [B, seq_len, hidden_dim]
+
+                    # Mean-pool using attention mask
+                    mask_expanded = batch_mask.unsqueeze(-1).float()  # [B, seq_len, 1]
+                    pooled = (hidden * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1e-9)
+                    all_embs.append(pooled.cpu())
+
+            model.train()
+
+            all_embs = torch.cat(all_embs, dim=0)  # [n_total, hidden_dim]
+            pos_embs = all_embs[:self.n_pos]
+            neg_embs = all_embs[self.n_pos:]
+
+            # Centroid L2 distance
+            pos_centroid = pos_embs.mean(dim=0)
+            neg_centroid = neg_embs.mean(dim=0)
+            centroid_l2 = (pos_centroid - neg_centroid).norm().item()
+
+            # Norms
+            pos_norms = pos_embs.norm(dim=1)
+            neg_norms = neg_embs.norm(dim=1)
+            pos_norm_mean = pos_norms.mean().item()
+            neg_norm_mean = neg_norms.mean().item()
+            norm_gap = neg_norm_mean - pos_norm_mean
+
+            # Cosine similarities
+            pos_normed = pos_embs / pos_norms.unsqueeze(1).clamp(min=1e-9)
+            neg_normed = neg_embs / neg_norms.unsqueeze(1).clamp(min=1e-9)
+            # Within-positive cosine (sample pairs to avoid O(n^2))
+            n_sample = min(100, self.n_pos)
+            idx = torch.randperm(self.n_pos)[:n_sample]
+            within_pos_cos = (pos_normed[idx] @ pos_normed[idx].T).fill_diagonal_(0).sum() / (n_sample * (n_sample - 1))
+            # Cross-class cosine
+            n_cross = min(100, self.n_pos, self.n_neg)
+            cross_cos = (pos_normed[:n_cross] @ neg_normed[:n_cross].T).mean()
+            delta_cosine = (within_pos_cos - cross_cos).item()
+
+            metrics = {
+                "sep_centroid_l2": round(centroid_l2, 4),
+                "sep_delta_cosine": round(delta_cosine, 4),
+                "sep_norm_gap": round(norm_gap, 4),
+                "sep_pos_norm": round(pos_norm_mean, 4),
+                "sep_neg_norm": round(neg_norm_mean, 4),
+            }
+
+            logger.info("Step %d separation probe: %s", state.global_step, metrics)
+            if self.trainer:
+                self.trainer.log(metrics)
+
+            # Save best separation checkpoint
+            if centroid_l2 > self.best_centroid_l2:
+                self.best_centroid_l2 = centroid_l2
+                save_dir = os.path.join(self.output_dir, "best_separation")
+                logger.info("New best centroid L2: %.4f — saving to %s", centroid_l2, save_dir)
+                model.save_pretrained(save_dir)
 
     # Quantization config for QLoRA
     bnb_config = BitsAndBytesConfig(
