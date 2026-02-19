@@ -29,6 +29,7 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `scripts/resume_search.sh N` | Resume interrupted search from partial Parquet file | Yes |
 | `scripts/smoke_test.sh` | Smoke test: 6 theorems, 4-node budget, 4 candidates, EBM train+search | Yes |
 | `scripts/generate_ebm_training_data.sh` | Generate contrastive EBM training data from tactic pairs | Yes |
+| `scripts/great_reset.sh` | Reset to base model: baseline EBM → LoRA → re-encode + retrain EBM → search → eval | Yes |
 
 ## Throughput Tuning
 
