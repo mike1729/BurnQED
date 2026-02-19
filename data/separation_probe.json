@@ -1,0 +1,1602 @@
+[
+  {
+    "state_pp": "case refine_1\n\u03b1 : Type u_1\nE : Type u_2\nF : Type u_3\n\ud835\udd5c : Type u_4\ninst\u271d\u2077 : NormedAddCommGroup E\ninst\u271d\u2076 : NormedAddCommGroup F\nm : MeasurableSpace \u03b1\n\u03bc : Measure \u03b1\ninst\u271d\u2075 : NormedSpace \u211d E\ninst\u271d\u2074 : NontriviallyNormedField \ud835\udd5c\ninst\u271d\u00b3 : NormedSpace \ud835\udd5c E\ninst\u271d\u00b2 : SMulCommClass \u211d \ud835\udd5c E\ninst\u271d\u00b9 : NormedSpace \u211d F\ninst\u271d : CompleteSpace E\nf : \u21a5(Lp \u211d 1 \u03bc)\n\u22a2 Continuous \u21d1integralCLM",
+    "label": "positive"
+  },
+  {
+    "state_pp": "X : Type u\u2081\nY : CategoryTheory.Category.{v\u2081, u\u2081} X\np : Type u\u2082\n\u22a2 \u2200 [inst : CategoryTheory.Category.{v\u2082, u\u2082} p] (F : CategoryTheory.Functor X p) {X_1 Y_1 : X} (p_1 : X_1 = Y_1),\n  F.mapIso (CategoryTheory.eqToIso p_1) = CategoryTheory.eqToIso \u22ef",
+    "label": "negative"
+  },
+  {
+    "state_pp": "C\u271d : Type u_1\n\u22a2 \u2200 {D : Type u_2} [inst : CategoryTheory.Category.{u_3, u_1} C\u271d] [inst_1 : CategoryTheory.Category.{u_4, u_2} D]\n  {F : CategoryTheory.Functor C\u271d D} {F' : CategoryTheory.Functor D C\u271d} {A B : C\u271d} (adj : F \u22a3 F') (f : A \u27f6 B)\n  [F'.PreservesMonomorphisms] [F.PreservesEpimorphisms] [CategoryTheory.StrongEpi f], CategoryTheory.StrongEpi (F.map f)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "X\u271d : Type u\nY\u271d : Type v\ninst\u271d\u00b9 : TopologicalSpace X\u271d\ninst\u271d : TopologicalSpace Y\u271d\n\u22a2 \u2200 {s : Set X\u271d} {t : Set Y\u271d}, IsCompact s \u2192 IsCompact t \u2192 IsCompact (s \u00d7\u02e2 t)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case inr\n\u03b1 : Type u_1\n\u03b2 : Type u_2\ninst\u271d : LinearOrder \u03b1\na a\u2081 a\u2082 b b\u2081 b\u2082 c d : \u03b1\nhab : b \u2264 a\nh : c \u2264 a\n\u22a2 Ico a b \u222a Ici c = Ici (min a c)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "s : \u2102\nhX : 0 < s.re\nX\u271d : \u211d\nhX\u2080 : s = 0\n\u22a2 0 \u2264 X\u271d \u2192 (1 + s).partialGamma X\u271d = s * s.partialGamma X\u271d - Complex.exp (-\u2191X\u271d) * \u2191X\u271d ^ s\n\ns : \u2102\nhX : 0 < s.re\nX\u271d : \u211d\nhX\u2080 : \u00acs = 0\n\u22a2 0 \u2264 X\u271d \u2192 (1 + s).partialGamma X\u271d = s * s.partialGamma X\u271d - \u2191(Real.exp (-X\u271d)) * \u2191X\u271d ^ s",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {C\u2081 : Type u_1} {C\u2082 : Type u_2} {D : Type u_3} [inst : CategoryTheory.Category.{u_5, u_1} C\u2081]\n  [inst_1 : CategoryTheory.Category.{u_6, u_2} C\u2082] [inst_2 : CategoryTheory.Category.{u_4, u_3} D]\n  [inst_3 : CategoryTheory.Preadditive C\u2081] [inst_4 : CategoryTheory.Preadditive C\u2082]\n  [inst_5 : CategoryTheory.Preadditive D] (K\u2081 : CochainComplex C\u2081 \u2124) (K\u2082 : CochainComplex C\u2082 \u2124)\n  (F : CategoryTheory.Functor C\u2081 (CategoryTheory.Functor C\u2082 D)) [inst_6 : F.Additive]\n  [inst_7 : \u2200 (X\u2081 : C\u2081), (F.obj X\u2081).Additive] (x y : \u2124) [inst_8 : K\u2081.HasMapBifunctor K\u2082 F],\n  K\u2081.mapBifunctorShift\u2081Iso ((CategoryTheory.shiftFunctor (CochainComplex C\u2082 \u2124) y).obj K\u2082) F x \u226a\u226b\n      (CategoryTheory.shiftFunctor (CochainComplex D \u2124) x).mapIso (K\u2081.mapBifunctorShift\u2082Iso K\u2082 F y) =\n    (x * y).negOnePow \u2022\n      ((CategoryTheory.shiftFunctor (CochainComplex C\u2081 \u2124) x).obj K\u2081).mapBifunctorShift\u2082Iso K\u2082 F y \u226a\u226b\n        (CategoryTheory.shiftFunctor (CochainComplex D \u2124) y).mapIso (K\u2081.mapBifunctorShift\u2081Iso K\u2082 F x) \u226a\u226b\n          (CategoryTheory.shiftFunctorComm (CochainComplex D \u2124) x y).app (K\u2081.mapBifunctor K\u2082 F)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_2\ninst\u271d\u00b9 : DecidableEq \u03b1\ninst\u271d : Fintype \u03b1\nx : Equiv.Perm \u03b1\ny : Equiv.Perm \u03b1\nhxy : x.cycleFactorsFinset = y.cycleFactorsFinset\n\u22a2 x = y",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u\nE\u271d : Type v\nF\u271d : Type w\ninst\u271d\u2074 : NormedAddCommGroup E\u271d\ninst\u271d\u00b3 : NormedSpace \u211d E\u271d\ninst\u271d\u00b2 : NormedAddCommGroup F\u271d\ninst\u271d\u00b9 : NormedSpace \u211d F\u271d\nI\u271d : BoxIntegral.Box \u03b9\u271d\n\u03c0\u271d : BoxIntegral.TaggedPrepartition I\u271d\ninst\u271d : Fintype \u03b9\u271d\nl\u271d : BoxIntegral.IntegrationParams\nf\u271d : (\u03b9\u271d \u2192 \u211d) \u2192 E\u271d\nvol\u271d : BoxIntegral.BoxAdditiveMap \u03b9\u271d (E\u271d \u2192L[\u211d] F\u271d) \u22a4\nc\u271d : NNReal\n\u22a2 \u2200 {\u03b5 : \u211d} [CompleteSpace F\u271d] (h : BoxIntegral.Integrable I\u271d l\u271d f\u271d vol\u271d),\n  0 < \u03b5 \u2192\n    l\u271d.MemBaseSet I\u271d c\u271d (h.convergenceR \u03b5 c\u271d) \u03c0\u271d \u2192\n      \u2200 {\u03c0\u2080 : BoxIntegral.Prepartition I\u271d},\n        \u03c0\u271d.iUnion = \u03c0\u2080.iUnion \u2192\n          dist (BoxIntegral.integralSum f\u271d vol\u271d \u03c0\u271d) (\u2211 J \u2208 \u03c0\u2080.boxes, BoxIntegral.integral J l\u271d f\u271d vol\u271d) \u2264 \u03b5",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\nA\u271d : Type u_2\nB\u271d : Type u_3\ninst\u271d\u2076 : CommSemiring R\u271d\ninst\u271d\u2075 : StarRing R\u271d\ninst\u271d\u2074 : TopologicalSpace A\u271d\ninst\u271d\u00b3 : Semiring A\u271d\ninst\u271d\u00b2 : Algebra R\u271d A\u271d\ninst\u271d\u00b9 : StarRing A\u271d\ninst\u271d : StarModule R\u271d A\u271d\n\u22a2 \u2200 [inst : IsTopologicalSemiring A\u271d] [inst_1 : ContinuousStar A\u271d] [inst_2 : TopologicalSpace B\u271d] [inst_3 : Semiring B\u271d]\n  [inst_4 : Algebra R\u271d B\u271d] [inst_5 : StarRing B\u271d] [T2Space B\u271d] {S : StarSubalgebra R\u271d A\u271d}\n  {\u03c6 \u03c8 : \u21a5S.topologicalClosure \u2192\u22c6\u2090[R\u271d] B\u271d},\n  Continuous \u21d1\u03c6 \u2192 Continuous \u21d1\u03c8 \u2192 \u03c6.comp (StarSubalgebra.inclusion \u22ef) = \u03c8.comp (StarSubalgebra.inclusion \u22ef) \u2192 \u03c6 = \u03c8",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d\nh\u2081 : 0 \u2264 x\nh\u2082 : x \u2264 1\n\u22a2 x \u2264 Real.sin (Real.pi * x * (1 / 2))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "L\u271d : Type u\n\u22a2 \u2200 [inst : CommRing L\u271d] [inst_1 : IsDomain L\u271d] (n : \u2115) [inst_2 : NeZero n],\n  modularCyclotomicCharacter.toFun n (RingEquiv.refl L\u271d) = 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_2\ninst\u271d : Mul \u03b1\ns : Set \u03b1\nt : Set \u03b1\nx\u271d : \u03b1\nhx : x\u271d \u2208 MulOpposite.op '' s \u2022 t\n\u22a2 False\n\n\u03b1 : Type u_2\ninst\u271d : Mul \u03b1\ns : Set \u03b1\nt : Set \u03b1\nx\u271d : \u03b1\nhx : x\u271d \u2208 MulOpposite.op '' s \u2022 t\n\u22a2 \u2203 b \u2208 s, (fun x1 x2 => x1 * x2) ?h.mp.w b = x\u271d\n\n\u03b1 : Type u_2\ninst\u271d : Mul \u03b1\ns : Set \u03b1\nt : Set \u03b1\nx\u271d : \u03b1\nhx : x\u271d \u2208 MulOpposite.op '' s \u2022 t\n\u22a2 \u03b1\n\n\u03b1 : Type u_2\ninst\u271d : Mul \u03b1\ns : Set \u03b1\nt : Set \u03b1\nx\u271d : \u03b1\n\u22a2 x\u271d \u2208 t * s \u2192 x\u271d \u2208 MulOpposite.op '' s \u2022 t",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\ninst\u271d : CommRing R\u271d\n\u22a2 \u2200 {I : Ideal R\u271d} {M : Type u_2} [inst : AddCommGroup M] [inst_1 : Module R\u271d M] [Subsingleton M], \u00acIsAssociatedPrime I M",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\n\u03b2 : Type u_2\nf : Option \u03b1 \u2192 \u03b2\n\u22a2 Function.Injective (f \u2218 some) \u2192 (\u2200 (x : \u03b1), \u00acf (some x) = f none) \u2192 Function.Injective f\n\n\u03b1 : Type u_1\n\u03b2 : Type u_2\nf : Option \u03b1 \u2192 \u03b2\n\u22a2 Function.Injective f \u2192 Function.Injective (f \u2218 some) \u2227 \u2200 (x : \u03b1), \u00acf (some x) = f none",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case h\n\u03b1 : Type u_1\n\u03b2 : Type u_2\n\u03b3 : Type u_3\n\u03b4 : Type u_4\nm : MeasurableSpace \u03b1\n\u03bc \u03bd : Measure \u03b1\ninst\u271d\u00b9 : MeasurableSpace \u03b1\ninst\u271d : MeasurableSingletonClass \u03b1\na : \u03b1 \u2192 \u211d\u22650\na_mble : Measurable a\na_summable : Summable a\nc : \u211d\u22650\ntsum_le_c : \u2211' (i : \u03b1), a i \u2264 c\n\u03b5 : \u211d\u22650\n\u03b5_ne_zero : \u03b5 \u2260 0\ni : \u03b1\n\u22a2 (\u03b5 \u2264 a i) = (\u2191\u03b5 \u2264 (ofNNReal \u2218 a) i)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u_1\ninst\u271d : CommSemiring R\np\u271d : \u2115\nm\u271d : \u2115\nn\u271d : \u2115\nx\u271d : ExpChar R p\u271d\nx : R\n\u22a2 (iterateFrobenius R p\u271d (m\u271d + n\u271d)) x = (iterateFrobenius R p\u271d m\u271d) ((iterateFrobenius R p\u271d n\u271d) x)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u0393\u271d : Type u_1\nR\u271d : Type u_3\ninst\u271d\u00b2 : PartialOrder \u0393\u271d\ninst\u271d\u00b9 : Zero R\u271d\ninst\u271d : Zero \u0393\u271d\nx\u271d : HahnSeries \u0393\u271d R\u271d\ni\u271d : \u0393\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_2\nf\u271d : Equiv.Perm \u03b1\u271d\n\u22a2 \u2200 {x y : \u03b1\u271d} [inst : DecidableRel f\u271d.SameCycle], f\u271d.SameCycle x y \u2192 f\u271d.cycleOf x = f\u271d.cycleOf y",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : ENNReal\ny : \u211d\nhy : 0 \u2264 y\nhx : \u00acx = 0\nh : \u00acy < 0\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case pos\nR : Type u_1\ninst\u271d : Semiring R\nk : \u2115\nf : R[X]\nn : \u2115\nr : R\ni : \u2115\nhnik : n = i + k\n\u22a2 (\u2191((i + k).choose k) * if n = i + k then r else 0) = if n - k = i then \u2191(n.choose k) * r else 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ncut\u271d : \u03b1\u271d \u2192 Ordering\nx\u271d : \u03b1\u271d\nt\u271d : Batteries.RBNode \u03b1\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type ua\ninst\u271d\u00b9 : UniformSpace \u03b1\u271d\ninst\u271d : CompactSpace \u03b1\u271d\nU\u271d : Set (\u03b1\u271d \u00d7 \u03b1\u271d)\na\u271d : U\u271d \u2208 nhdsSet (Set.diagonal \u03b1\u271d)\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "E : Type u_1\ninst\u271d : NormedAddCommGroup E\nN : \u2115\n\u03c4 : \u211d\na : Besicovitch.SatelliteConfig E N \u03c4\nhr : a.r (Fin.last N) = 1\nh\u03c4 : 1 \u2264 \u03c4\n\u03b4 : \u211d\nh\u03c4\u03b4 : \u03c4 \u2264 1 + \u03b4 * 4\u207b\u00b9\nh\u03b4 : \u03b4 \u2264 1\ni : Fin (N + 1)\nj : Fin (N + 1)\nhij : i \u2260 j\n\u22a2 1 \u2264 \u2016a.c i - a.c j\u2016 + \u03b4",
+    "label": "negative"
+  },
+  {
+    "state_pp": "p : \u2115\na : \u2115\nb : \u2115\nh1 : \u00acp = 1\nn : \u2115\nh2 : n \u2264 multiplicity p b\nh3 : a.Coprime b\nh : multiplicity p a = n\n\u22a2 False\n\np : \u2115\na : \u2115\nb : \u2115\nh1 : \u00acp = 1\nh2 : multiplicity p a \u2264 multiplicity p b\nh3 : a.Coprime b\nn : \u2115\nh\u271d\u00b9 : multiplicity p a = n\nh\u271d : multiplicity p a = n\nh : multiplicity p a = n\n\u22a2 n = 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u\ninst\u271d : CommSemiring R\u271d\nt\u271d : Set (PrimeSpectrum R\u271d)\n\u22a2 \u2191(PrimeSpectrum.vanishingIdeal t\u271d) = {f | \u2200 x \u2208 t\u271d, f \u2208 x.asIdeal}",
+    "label": "positive"
+  },
+  {
+    "state_pp": "X\u271d : Type u_1\n\ud835\udd5c\u271d : Type u_2\ninst\u271d\u00b3 : TopologicalSpace X\u271d\ninst\u271d\u00b2 : CompactSpace X\u271d\ninst\u271d\u00b9 : T2Space X\u271d\ninst\u271d : RCLike \ud835\udd5c\u271d\na\u2081\u271d : X\u271d\n\u22a2 \u2200 \u2983a\u2082 : X\u271d\u2984,\n  (WeakDual.CharacterSpace.continuousMapEval X\u271d \ud835\udd5c\u271d) a\u2081\u271d = (WeakDual.CharacterSpace.continuousMapEval X\u271d \ud835\udd5c\u271d) a\u2082 \u2192\n    a\u2081\u271d = a\u2082",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\nS\u271d : Type u_2\ninst\u271d : CommRing R\u271d\n\u22a2 \u2200 [inst : CommRing S\u271d] (M : Submonoid R\u271d) (R' : Type u_3) [inst_1 : CommRing R'] [inst_2 : Algebra R\u271d R']\n  [inst_3 : Algebra R' S\u271d] [inst_4 : Algebra R\u271d S\u271d] [IsScalarTower R\u271d R' S\u271d] [IsLocalization M R'] (s : Set S\u271d),\n  \u2200 x \u2208 Algebra.adjoin R' s, \u2203 a \u2208 M, a \u2022 x \u2208 Algebra.adjoin R\u271d s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\ninst\u271d : NontriviallyNormedField \ud835\udd5c\u271d\n\u22a2 \u2200 {F : Type u_2} [inst : NormedAddCommGroup F] [inst_1 : NormedSpace \ud835\udd5c\u271d F] (n : \u2115) (f : \ud835\udd5c\u271d \u2192 F) (a : \ud835\udd5c\u271d),\n  iteratedDeriv n (fun x => f (-x)) a = (-1) ^ n \u2022 iteratedDeriv n f (-a)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\n\u03b1\u271d : Fin (p + 1) \u2192 Type u_1\ninst\u271d : (i : Fin (p + 1)) \u2192 Preorder (\u03b1\u271d i)\ni\u271d : Fin (p + 1)\nx\u271d : \u03b1\u271d i\u271d\nq\u2081\u271d : (j : Fin (p + 1)) \u2192 \u03b1\u271d j\nq\u2082\u271d : (j : Fin (p + 1)) \u2192 \u03b1\u271d j\nh : True\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\nr : R\ninst\u271d : Semiring R\nn : \u2115\nh : IsNilpotent r\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "i : \u2115\nn : \u2115\nh\u2081 : 2 \u2264 i\nh\u2082 : 1 \u2264 n\nh\u2083\u271d : \u2200 k \u2265 1, (i + k).succ = i + k.succ\nh\u2083 : \u2200 k \u2265 1, (i + k).succ = i + k.succ\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "C : Type u_1\ninst\u271d\u00b9 : CategoryTheory.Category.{u_3, u_1} C\ninst\u271d : CategoryTheory.Preadditive C\nX\u2081\u271d : C\nX\u2082\u271d : C\nX\u2083\u271d : C\nf\u271d : X\u2081\u271d \u27f6 X\u2082\u271d\ng\u271d : X\u2082\u271d \u27f6 X\u2083\u271d\nzero\u271d : CategoryTheory.CategoryStruct.comp f\u271d g\u271d = 0\ns : { X\u2081 := X\u2081\u271d, X\u2082 := X\u2082\u271d, X\u2083 := X\u2083\u271d, f := f\u271d, g := g\u271d, zero := zero\u271d }.Splitting\ns' : { X\u2081 := X\u2081\u271d, X\u2082 := X\u2082\u271d, X\u2083 := X\u2083\u271d, f := f\u271d, g := g\u271d, zero := zero\u271d }.Splitting\nh : s.s = s'.s\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "p' : \u2115\nhp' : lucasLehmerResidue (p' + 2) = 0\n\u22a2 LucasLehmer.X.\u03c9 ^ (2 ^ p' * 2) = -1 + LucasLehmer.X.\u03c9 ^ 2 ^ p' * \u2191(Int.ofNat p'.succ.succ.succ) * \u2191(mersenne (2 + p'))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "cd\u271d : Fin 2 \u2192 \u2124\nhcd\u271d : IsCoprime (cd\u271d 0) (cd\u271d 1)\ncd : Set \u211d\nhcd : (\u2203 a, \u2200 b \u2264 a, b \u2208 cd) \u2227 \u2203 a, \u2200 (b : \u211d), a \u2264 b \u2192 b \u2208 cd\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\nA\u271d : Type u_3\n\u22a2 \u2200 {T : Type u_4} [inst : SemilatticeInf T] [inst_1 : OrderTop T] [inst_2 : Semiring R\u271d] [inst_3 : AddMonoid A\u271d]\n  [inst_4 : AddMonoid T] [AddLeftMono T] [AddRightMono T] {degt : A\u271d \u2192 T},\n  0 \u2264 degt 0 \u2192\n    (\u2200 (a b : A\u271d), degt a + degt b \u2264 degt (a + b)) \u2192\n      \u2200 (n : \u2115) (f : AddMonoidAlgebra R\u271d A\u271d) (b : A\u271d), \u00ac(f ^ n) b = 0 \u2192 n \u2022 f.support.inf degt \u2264 degt b",
+    "label": "positive"
+  },
+  {
+    "state_pp": "n\u271d : \u2115\nhl : \u2124\nh : hl.natAbs \u2264 n\u271d / 2\na\u271d : \u2115\nhy : \u2191hl = \u2191a\u271d\n\u22a2 False\n\nn\u271d : \u2115\nhl : \u2124\nh : hl.natAbs \u2264 n\u271d / 2\na\u271d : \u2115\nhy : \u2191hl = \u2191(Int.negSucc a\u271d)\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u\n\u03c3\u271d : Type u_1\ninst\u271d : CommSemiring R\u271d\n\u03b9\u271d : Type u_3\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\ns : Set \u03b1\nt : Set \u03b1\na : \u03b1\nhat : a \u2208 t\n\u22a2 insert a s \u2229 t = insert a (s \u2229 t)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : EReal\ny : EReal\nz : EReal\nt : EReal\nhxy : x < y\nhzt : z \u2264 t\nhbot : t \u2260 \u22a5\nhf : t = \u22a4 \u2192 z = \u22a4 \u2192 x = \u22a5\n\u22a2 x + z < y + t",
+    "label": "negative"
+  },
+  {
+    "state_pp": "k\u271d : Type u_1\nG\u271d : Type u_2\ninst\u271d\u00b9 : CommRing k\u271d\ninst\u271d : Monoid G\u271d\n\u22a2 (UInt32.toNat ?this.val + 1).le 55286\n\nk\u271d : Type u_1\nG\u271d : Type u_2\ninst\u271d\u00b9 : CommRing k\u271d\ninst\u271d : Monoid G\u271d\n\u22a2 UInt32\n\nk\u271d : Type u_1\nG\u271d : Type u_2\ninst\u271d\u00b9 : CommRing k\u271d\ninst\u271d : Monoid G\u271d\nthis : Char\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u\ns\u271d : Finset \u03b9\u271d\nw\u271d : \u03b9\u271d \u2192 \u211d\nz\u271d : \u03b9\u271d \u2192 \u211d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "A : Set \u2115\nh : DecidablePred fun x => x \u2208 A\nhd : 0 \u2208 A\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\nM : Type u_2\ninst\u271d\u00b2 : Ring R\ninst\u271d\u00b9 : AddCommGroup M\ninst\u271d : Module R M\nN : Submodule R M\n_I : IsNoetherianRing R\nh : N.FG\ns : Submodule R \u21a5N\n\u22a2 s.FG",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\nM\u271d : Type u_2\ninst\u271d\u00b3 : Semiring R\u271d\ninst\u271d\u00b2 : AddCommMonoid M\u271d\ninst\u271d\u00b9 : Module R\u271d M\u271d\ninst\u271d : Nontrivial R\u271d\nh\u271d : IsArtinian R\u271d M\u271d\n\u22a2 \u2200 {s : Set M\u271d}, LinearIndependent R\u271d Subtype.val \u2192 s.Finite",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\ninst\u271d : CommMonoid R\u271d\nR'\u271d : Type u_2\n\u22a2 \u2200 [inst : CommRing R'\u271d] {R'' : Type u_3} [inst_1 : CommRing R''] {f : R'\u271d \u2192+* R''},\n  Function.Injective \u21d1f \u2192 \u2200 {\u03c7 : MulChar R\u271d R'\u271d}, \u03c7.ringHomComp f = 1 \u2194 \u03c7 = 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case zero\nR\u271d : Type u_1\nS : Type u_2\nx\u271d\u00b9 y : R\u271d\nR : Type u_3\nM : Type u_4\ninst\u271d\u2074 : MonoidWithZero R\ninst\u271d\u00b3 : Zero M\ninst\u271d\u00b2 : MulActionWithZero R M\ninst\u271d\u00b9 : Nontrivial M\ninst\u271d : NoZeroSMulDivisors R M\nx : R\nx\u271d : IsNilpotent x\nhk : x ^ 0 = 0\n\u22a2 x = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case cons.inr\n\u03b1 : Type u_1\n\u03b2 : Type v\n\u03b3 : Type u_2\n\u03b4 : Type u_3\nr\u271d : \u03b1 \u2192 \u03b2 \u2192 Prop\np : \u03b3 \u2192 \u03b4 \u2192 Prop\nr : \u03b1 \u2192 \u03b2 \u2192 Prop\ns\u271d : Multiset \u03b1\nt\u271d : Multiset \u03b2\nx : \u03b1\ny : \u03b2\ns : Multiset \u03b1\nt : Multiset \u03b2\nhxy : r x y\n_hst : Rel r s t\nih : \u2200 {a : \u03b1}, a \u2208 s \u2192 \u2203 b \u2208 t, r a b\na : \u03b1\nha\u271d : a \u2208 x ::\u2098 s\nha : a \u2208 s\n\u22a2 \u2203 b \u2208 y ::\u2098 t, r a b",
+    "label": "positive"
+  },
+  {
+    "state_pp": "a : SetTheory.PGame\ny : SetTheory.PGame\nthis : y.IsOption a\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case h\n\u03b1 : Type u_1\n\u03b2 : Type u_2\nE : Type u_3\nF : Type u_4\nG : Type u_5\nE' : Type u_6\nF' : Type u_7\nG' : Type u_8\nE'' : Type u_9\nF'' : Type u_10\nG'' : Type u_11\nE''' : Type u_12\nR : Type u_13\nR' : Type u_14\n\ud835\udd5c : Type u_15\n\ud835\udd5c' : Type u_16\ninst\u271d\u00b9\u2076 : Norm E\ninst\u271d\u00b9\u2075 : Norm F\ninst\u271d\u00b9\u2074 : Norm G\ninst\u271d\u00b9\u00b3 : SeminormedAddCommGroup E'\ninst\u271d\u00b9\u00b2 : SeminormedAddCommGroup F'\ninst\u271d\u00b9\u00b9 : SeminormedAddCommGroup G'\ninst\u271d\u00b9\u2070 : NormedAddCommGroup E''\ninst\u271d\u2079 : NormedAddCommGroup F''\ninst\u271d\u2078 : NormedAddCommGroup G''\ninst\u271d\u2077 : SeminormedRing R\ninst\u271d\u2076 : SeminormedAddGroup E'''\ninst\u271d\u2075 : SeminormedRing R'\ninst\u271d\u2074 : NormedDivisionRing \ud835\udd5c\ninst\u271d\u00b3 : NormedDivisionRing \ud835\udd5c'\nc\u271d c' c\u2081 c\u2082 : \u211d\nf : \u03b1 \u2192 E\ng : \u03b1 \u2192 F\nk : \u03b1 \u2192 G\nf' : \u03b1 \u2192 E'\ng' : \u03b1 \u2192 F'\nk' : \u03b1 \u2192 G'\nf'' : \u03b1 \u2192 E''\ng'' : \u03b1 \u2192 F''\nk'' : \u03b1 \u2192 G''\nl l' : Filter \u03b1\ninst\u271d\u00b2 : One F\ninst\u271d\u00b9 : NormOneClass F\ninst\u271d : TopologicalSpace \u03b1\na : \u03b1\nc : \u211d\nhc : \u2200\u1da0 (a : \u03b1) in \ud835\udcdd[\u2260] a, \u2016f a\u2016 \u2264 c\n\u22a2 \u2200\u1da0 (a_1 : \u03b1) in \ud835\udcdd a, \u2016f a_1\u2016 \u2264 max c \u2016f a\u2016",
+    "label": "positive"
+  },
+  {
+    "state_pp": "b : \u2115\nc : \u2115\nh\u2081 : \u2115\na : \u2200 (a b c : \u2124), \u00acc = 0 \u2192 \u00ac3 \u2223 a \u2192 \u00ac3 \u2223 b \u2192 3 \u2223 c \u2192 IsCoprime a b \u2192 \u00aca ^ 3 + b ^ 3 = c ^ 3\nh : \u00acb = 0 \u2227 \u00acc = 0 \u2227 \u2203 n, b ^ 3 + c ^ 3 = (n + 1) ^ 3\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\ninst\u271d : Group G\u271d\nH\u271d : Subgroup G\u271d\nR\u271d : Set G\u271d\nS\u271d : Set G\u271d\n\u22a2 \u2200 (hR : Subgroup.IsComplement (\u2191H\u271d) R\u271d),\n  1 \u2208 R\u271d \u2192 Subgroup.closure S\u271d = \u22a4 \u2192 Subgroup.closure ((fun g => g * (\u2191(hR.toRightFun g))\u207b\u00b9) '' (R\u271d * S\u271d)) = H\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\n\u22a2 \u2200 {E : Type u_2} [inst : RCLike \ud835\udd5c\u271d] [inst_1 : NormedAddCommGroup E] [inst_2 : NormedSpace \ud835\udd5c\u271d E] (f : E \u2192\u2097[\ud835\udd5c\u271d] E),\n  LipschitzWith 1 \u21d1f \u2192\n    \u2200 (g : E \u2192L[\ud835\udd5c\u271d] \u21a5(LinearMap.eqLocus f 1)),\n      (\u2200 (x : \u21a5(LinearMap.eqLocus f 1)), g \u2191x = x) \u2192\n        \u2191(LinearMap.ker g) \u2286 closure \u2191(LinearMap.range (f - 1)) \u2192\n          \u2200 (x : E), Filter.Tendsto (fun x_1 => birkhoffAverage \ud835\udd5c\u271d (\u21d1f) id x_1 x) Filter.atTop (nhds \u2191(g x))",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ns\u271d : Finset \u03b1\u271d\ninst\u271d : DecidableEq \u03b1\u271d\nm : Sym2 \u03b1\u271d\n\u22a2 (\u2200 a \u2208 m, a \u2208 s\u271d) \u2194 (\u2203 a \u2208 s\u271d, s(a, a) = m) \u2228 \u2203 a b, (a \u2208 s\u271d \u2227 b \u2208 s\u271d \u2227 \u00aca = b) \u2227 s(a, b) = m",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nt : Set \u03b1\np : Set \u03b1 \u2192 Prop\n\u22a2 (\u2203 s, p (Subtype.val '' s)) \u2194 \u2203 s \u2286 t, p s",
+    "label": "negative"
+  },
+  {
+    "state_pp": "hf : Type u_2\nr\u271d : LieRing hf\nr : hf\nh : hf\nh\u2082 : hf\nh\u2083 : hf\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : PartENat\ny : PartENat\nz : PartENat\nh : x < y\nhz : \u00acz = \u22a4\n\u22a2 x + z \u2264 y + z\n\nx : PartENat\ny : PartENat\nz : PartENat\nh : x < y\nhz : \u00acz = \u22a4\n\u22a2 \u00acy + z \u2264 x + z",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case hf\nK : Type u_1\nR : Type u_2\nL : Type u_3\nM : Type u_4\ninst\u271d\u00b9\u2074 : Field K\ninst\u271d\u00b9\u00b3 : CommRing R\ninst\u271d\u00b9\u00b2 : Nontrivial R\ninst\u271d\u00b9\u00b9 : LieRing L\ninst\u271d\u00b9\u2070 : LieAlgebra K L\ninst\u271d\u2079 : LieAlgebra R L\ninst\u271d\u2078 : AddCommGroup M\ninst\u271d\u2077 : Module R M\ninst\u271d\u2076 : LieRingModule L M\ninst\u271d\u2075 : LieModule R L M\ninst\u271d\u2074 : Module.Finite K L\ninst\u271d\u00b3 : Module.Finite R L\ninst\u271d\u00b2 : Module.Free R L\ninst\u271d\u00b9 : Module.Finite R M\ninst\u271d : Module.Free R M\nx y : L\ni j : \u2115\nhij : i + j = finrank R M\nk : ChooseBasisIndex R L\n\u22a2 (C (((chooseBasis R L).repr y) k) * X + C (((chooseBasis R L).repr x) k)).natDegree \u2264 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "F : Type u_1\ninst\u271d\u00b9 : Field F\n\u03b9 : Type u_2\ninst\u271d : DecidableEq \u03b9\ns : Finset \u03b9\nv : \u03b9 \u2192 F\nr : \u03b9 \u2192 F\nx : F\nhv : Set.InjOn v \u2191s\nhs : s.Nonempty\nhx : \u2200 i \u2208 s, \u00acx = v i\n\u22a2 \u2211 x_1 \u2208 s,\n    (\u2211 x_2 \u2208 s, (\u220f x \u2208 s.erase x_2, (v x_2 - v x))\u207b\u00b9 * (-v x_2 + x)\u207b\u00b9)\u207b\u00b9 * (\u220f x \u2208 s.erase x_1, (v x_1 - v x))\u207b\u00b9 *\n        (x - v x_1)\u207b\u00b9 *\n      r x_1 =\n  Polynomial.eval x (\u2211 x \u2208 s, Polynomial.C (r x) * Lagrange.basis s v x)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case succ.zero\nA : Type u_1\ninst\u271d\u00b9 : CommRing A\ninst\u271d : Algebra \u211a A\n\u22a2 \u2191((0 + 1).choose 0) * bernoulli 0 = if 0 + 1 = 1 then 1 else 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\nV\u271d : Type u_2\nP\u271d : Type u_3\ninst\u271d\u2074 : RCLike \ud835\udd5c\u271d\ninst\u271d\u00b3 : NormedAddCommGroup V\u271d\ninst\u271d\u00b2 : InnerProductSpace \ud835\udd5c\u271d V\u271d\ninst\u271d\u00b9 : PseudoMetricSpace P\u271d\ninst\u271d : NormedAddTorsor V\u271d P\u271d\ns\u271d : AffineSubspace \ud835\udd5c\u271d P\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 Cardinal.aleph0 \u2264 Cardinal.univ.{u, v}",
+    "label": "positive"
+  },
+  {
+    "state_pp": "a : EReal\nha : 0 < a\nh'\u271d : \u00aca = \u22a4\n\u22a2 0 < a\u207b\u00b9",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : \u211d\nh : \u211d\nh\u2081\u271d : x * 2\u207b\u00b9 = x / 2\nh\u2081 : x * 2\u207b\u00b9 = x / 2\n\u22a2 Real.exp (x / 2) = \u221a(Real.exp x)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {C : Type u\u2081} [inst : CategoryTheory.Category.{v\u2081, u\u2081} C] [inst_1 : CategoryTheory.Preadditive C] {X Y : C}\n  {P : CategoryTheory.Subobject Y} (f g : X \u27f6 Y), P.Factors (f + g) \u2192 P.Factors f \u2192 P.Factors g",
+    "label": "negative"
+  },
+  {
+    "state_pp": "d\u271d : \u2124\nb\u271d : \u2124\u221ad\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "h\u2080 : Type u_1\nh\u2081 : \u2115\nh\u2082 : \u2115\na\u271d\u00b2 : h\u2080\nl\u271d : List h\u2080\na\u271d\u00b9 : \u2200 a' \u2208 l\u271d, \u00aca\u271d\u00b2 = a'\na\u271d : List.Pairwise (fun x1 x2 => \u00acx1 = x2) l\u271d\nh\u2083 : h\u2081 < l\u271d.length + 1\nh\u2084 : a\u271d\u00b2 \u2209 l\u271d \u2227 l\u271d.Nodup\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\ninst\u271d\u00b9 : CommRing R\nP : Ideal R\nhP\u271d\u00b9 : P.IsPrime\ninst\u271d : IsDedekindDomain R\nx : R\nhx : x \u2208 P\nhx' : x \u2209 P ^ 2\nhP\u271d : \u2200 (Q : Ideal R), Q.IsPrime \u2192 \u00acQ = P \u2192 x \u2209 Q\nx\u271d : R\nhP : R\n\u22a2 False\n\nR : Type u_1\ninst\u271d\u00b9 : CommRing R\nP : Ideal R\nhP\u271d\u00b9 : P.IsPrime\ninst\u271d : IsDedekindDomain R\nx : R\nhx : x \u2208 P\nhx' : x \u2209 P ^ 2\nhP\u271d : \u2200 (Q : Ideal R), Q.IsPrime \u2192 \u00acQ = P \u2192 x \u2209 Q\nx\u271d : R\nhP : R\n\u22a2 x\u271d \u2208 Ideal.span {x} \u2192 x\u271d \u2208 P",
+    "label": "negative"
+  },
+  {
+    "state_pp": "n : \u2115\nj : Fin (n + 2)\nval\u271d : \u2115\nisLt\u271d : val\u271d < n + 1\nhj : j = \u27e8val\u271d + 1, \u22ef\u27e9\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "u : Type u\nhu : TopologicalSpace u\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\n_S : CommSemiring R\nM\u2080 : Submonoid R\nM\u2080' : Type u_6\nM\u2080'' : Type u_9\n_M\u2080 : AddCommMonoid M\u2080'\n_M\u2080' : AddCommMonoid M\u2080''\n_M\u2080'' : Module R M\u2080'\ninst\u271d\u2075 : Module R M\u2080''\nf\u2080\u271d : M\u2080' \u2192\u2097[R] M\u2080''\ninst\u271d\u2074 : IsLocalizedModule M\u2080 f\u2080\u271d\nM\u2081\u271d : Type u_7\nM\u2081'\u271d : Type u_8\ninst\u271d\u00b3 : AddCommMonoid M\u2081\u271d\ninst\u271d\u00b2 : AddCommMonoid M\u2081'\u271d\ninst\u271d\u00b9 : Module R M\u2081\u271d\nf\u2080 : Module R M\u2081'\u271d\nf\u2080' : M\u2081\u271d \u2192\u2097[R] M\u2081'\u271d\ninst\u271d : IsLocalizedModule M\u2080 f\u2080'\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_4\nf\u271d : \u03b9\u271d \u2192 Ordinal.{max u_5 u_4}\n\u22a2 iSup f\u271d = Ordinal.lsub f\u271d \u2194 \u2200 a < Ordinal.lsub f\u271d, Order.succ a < Ordinal.lsub f\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Sort u_1\n\u03b1\u271d : Type u_2\n\u03b2\u271d : Type u_3\n\u22a2 \u2200 [inst : MeasurableSpace \u03b1\u271d] [inst_1 : MeasurableSpace \u03b2\u271d] {f : \u03b9\u271d \u2192 \u03b1\u271d \u2192 \u03b2\u271d} {\u03bc : MeasureTheory.Measure \u03b1\u271d}\n  {p : \u03b1\u271d \u2192 (\u03b9\u271d \u2192 \u03b2\u271d) \u2192 Prop} [inst_2 : SupSet \u03b2\u271d] [Countable \u03b9\u271d] (hf : \u2200 (i : \u03b9\u271d), AEMeasurable (f i) \u03bc),\n  (\u2200\u1d50 (x : \u03b1\u271d) \u2202\u03bc, p x fun n => f n x) \u2192 \u2a06 n, aeSeq hf p n =\u1d50[\u03bc] \u2a06 n, f n",
+    "label": "positive"
+  },
+  {
+    "state_pp": "P : \u2115 \u2192 Prop\ninst\u271d : DecidablePred P\nh : P 0\nhy\u271d : (\u21910).Dom\n\u22a2 \u2203 m \u2264 0, P m\n\nP : \u2115 \u2192 Prop\ninst\u271d : DecidablePred P\nn\u271d : \u2115\nh : P (n\u271d + 1)\nhy\u271d : (\u2191(n\u271d + 1)).Dom\n\u22a2 \u2203 m \u2264 n\u271d + 1, P m\n\nP : \u2115 \u2192 Prop\ninst\u271d : DecidablePred P\nn : \u2115\nh : P n\n\u22a2 (\u2191n).Dom \u2192 (PartENat.find P).Dom",
+    "label": "negative"
+  },
+  {
+    "state_pp": "m n a : Nat\ncmn : m.Coprime n\ndvd : a \u2223 m\nhpos : a > 0\nk : Nat\nhk : m = a * k\n\u22a2 (m / a).Coprime n",
+    "label": "positive"
+  },
+  {
+    "state_pp": "this : True\n\u22a2 False\n\nthis\u271d : True\nthis : True\n\u22a2 False\n\nthis : True\n\u22a2 False\n\nthis\u271d : True\nthis : True\nh\u2081\u271d : True\nh\u2081 : False\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : \u211d*\nx_ne_zero : x \u2260 0\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\ns\u271d : Set (Set \u03b1)\nhs\u271d : Cardinal.mk \u2191s\u271d \u2264 Cardinal.continuum\ns : ULift.{?u.12, u} \u2191{t | MeasurableSpace.GenerateMeasurable s\u271d t}\nhs : ULift.{?u.12, u} \u2191{t | MeasurableSpace.GenerateMeasurable s\u271d t}\na\u271d : True\nx\u271d : \u03b1\n\u22a2 x\u271d \u2208 \u2191s.down \u2192 x\u271d \u2208 \u2191hs.down\n\n\u03b1 : Type u\ns\u271d : Set (Set \u03b1)\nhs\u271d : Cardinal.mk \u2191s\u271d \u2264 Cardinal.continuum\ns : ULift.{?u.12, u} \u2191{t | MeasurableSpace.GenerateMeasurable s\u271d t}\nhs : ULift.{?u.12, u} \u2191{t | MeasurableSpace.GenerateMeasurable s\u271d t}\na\u271d : True\nx\u271d : \u03b1\n\u22a2 x\u271d \u2208 \u2191hs.down \u2192 x\u271d \u2208 \u2191s.down",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_2\ninst\u271d : CommGroup \u03b1\u271d\n\u22a2 \u2200 [inst : PartialOrder \u03b1\u271d] [inst_1 : IsOrderedMonoid \u03b1\u271d] {s t : Interval \u03b1\u271d},\n  s * t = 1 \u2194 \u2203 a b, s = Interval.pure a \u2227 t = Interval.pure b \u2227 a * b = 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h : SetTheory.PGame\nx\u2082 : SetTheory.PGame\nx\u2083 : SetTheory.PGame\ny\u2081 : SetTheory.PGame\ny\u2082 : SetTheory.PGame\ny\u2083 : SetTheory.PGame\nh' : h \u2248 x\u2083\nh1 : Surreal.Multiplication.P2 h x\u2083 y\u2081\nh3 : Surreal.Multiplication.P2 h x\u2083 y\u2083\nh4 : Surreal.Multiplication.P3 h x\u2082 y\u2082 y\u2083\n\u22a2 h * y\u2081 + x\u2082 * y\u2082 + -(h * y\u2082) \u2264 x\u2083 * y\u2081 + x\u2082 * y\u2083 + -(x\u2083 * y\u2083)\n\nh : SetTheory.PGame\nx\u2082 : SetTheory.PGame\nx\u2083 : SetTheory.PGame\ny\u2081 : SetTheory.PGame\ny\u2082 : SetTheory.PGame\ny\u2083 : SetTheory.PGame\nh' : h \u2248 x\u2083\nh1 : Surreal.Multiplication.P2 h x\u2083 y\u2081\nh3 : Surreal.Multiplication.P2 h x\u2083 y\u2083\nh4\u271d\u00b9 : Surreal.Multiplication.P3 h x\u2082 y\u2082 y\u2083\nh4\u271d : Surreal.Multiplication.P3 h x\u2082 y\u2082 y\u2083\nh4 : Surreal.Multiplication.P3 h x\u2082 y\u2082 y\u2083\n\u22a2 (h * y\u2081 + x\u2082 * y\u2082 + -(h * y\u2082)).LF (x\u2083 * y\u2081 + x\u2082 * y\u2083 + -(x\u2083 * y\u2083))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "z\u271d : UpperHalfPlane\nx\u271d : Fin 2 \u2192 \u2124\nhx\u271d : \u00acx\u271d = 0\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "z\u271d\u00b2 : \u2102\nthis\u271d\u00b9 : True\nthis\u271d : True\nz\u271d\u00b9 : \u2102\nh\u2081\u271d\u00b2 : True\nh\u2081\u271d\u00b9 : True\nh\u2081\u271d : True\nh\u2081 : True\nz\u271d : \u2102\nthis : True\nz : \u2102\n\u22a2 True\n\nz\u271d\u00b2 : \u2102\nthis\u271d\u00b2 : True\nthis\u271d\u00b9 : True\nz\u271d\u00b9 : \u2102\nh\u2081\u271d\u00b2 : True\nh\u2081\u271d\u00b9 : True\nh\u2081\u271d : True\nh\u2081 : True\nz\u271d : \u2102\nthis\u271d : True\nz : \u2102\nthis : True\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\nm\u03b1\u271d : MeasurableSpace \u03b1\u271d\n\u03bc\u271d : MeasureTheory.Measure \u03b1\u271d\ninst\u271d : MeasureTheory.SFinite \u03bc\u271d\nf\u271d : \u03b1\u271d \u2192 \u211d\ng\u271d : \u03b1\u271d \u2192 ENNReal\n\u22a2 \u2200 (s : Set \u03b1\u271d),\n  \u222b\u207b (x : \u03b1\u271d) in s, g\u271d x \u2202\u03bc\u271d.tilted f\u271d =\n    \u222b\u207b (x : \u03b1\u271d) in s, ENNReal.ofReal (Real.exp (f\u271d x) * (\u222b (x : \u03b1\u271d), Real.exp (f\u271d x) \u2202\u03bc\u271d)\u207b\u00b9) * g\u271d x \u2202\u03bc\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case neg\n\u03c3 : Type u_1\nR : Type u_2\nk : Type u_3\ninst\u271d : Field k\n\u03c6 \u03c8 : MvPowerSeries \u03c3 k\nh : \u00ac(constantCoeff \u03c3 k) \u03c6 = 0 \u2227 \u00ac(constantCoeff \u03c3 k) \u03c8 = 0\n\u22a2 \u03c8\u207b\u00b9 * \u03c6\u207b\u00b9 * (\u03c6 * \u03c8) = 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03a9 : Type u_1\n\u03b9 : Type u_2\nm0 : MeasurableSpace \u03a9\n\u03bc : Measure \u03a9\na b : \u211d\nf\u271d : \u2115 \u2192 \u03a9 \u2192 \u211d\nN\u271d n m : \u2115\n\u03c9\u271d : \u03a9\nf : \u2115 \u2192 \u03a9 \u2192 \u211d\nN : \u2115\n\u03c9 : \u03a9\nhab : a < b\nh : \u2200 (n : \u2115), upperCrossingTime a b f N n \u03c9 \u2260 N\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ninst\u271d : DecidableEq \u03b1\u271d\nl\u271d : List \u03b1\u271d\nl'\u271d : List \u03b1\u271d\n\u22a2 \u2200 (h : l\u271d ~r l'\u271d), l\u271d.Nodup \u2192 \u2200 {x : \u03b1\u271d} (hx : x \u2208 l\u271d), l\u271d.next x hx = l'\u271d.next x \u22ef",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ninst\u271d : Preorder \u03b1\u271d\np\u271d : \u03b1\u271d \u2192 Prop\n\u22a2 \u2200 [inst : DecidablePred p\u271d] [inst_1 : LocallyFiniteOrder \u03b1\u271d] (a : \u03b1\u271d) (b : p\u271d a) (a_1 : \u03b1\u271d) (b_1 : p\u271d a_1),\n  (\u2200 \u2983a b x : \u03b1\u271d\u2984, a \u2264 x \u2192 x \u2264 b \u2192 p\u271d a \u2192 p\u271d b \u2192 p\u271d x) \u2192\n    Finset.map (Function.Embedding.subtype p\u271d) (Finset.Ioc \u27e8a, b\u27e9 \u27e8a_1, b_1\u27e9) = Finset.Ioc a a_1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "o\u2082 : ONote\no\u2081 : ONote\nh : o\u2081.cmp o\u2082 = Ordering.eq\n\u22a2 (Nat.succ ?a.a.m\u271d + 1 + 1).le ?a.a.m\u271d\n\no\u2082 : ONote\no\u2081 : ONote\nh : o\u2081.cmp o\u2082 = Ordering.eq\n\u22a2 \u2115",
+    "label": "negative"
+  },
+  {
+    "state_pp": "a : Cardinal.{u_1}\nha : a \u2264 Cardinal.aleph0\nb : Cardinal.{u_1}\nhb : b \u2264 Cardinal.aleph0\nh1 : a < b\nh3 : a < b\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "k\u271d : Type u\n\u22a2 \u2200 {G : Type u} [inst : CommRing k\u271d] [inst_1 : Group G] {n : \u2115} [inst_2 : DecidableEq (Fin n \u2192 G)] {A : Rep k\u271d G}\n  (f : (Fin n \u2192 G) \u2192 \u2191A.V) (x : Fin (n + 1) \u2192 G),\n  ((CategoryTheory.ConcreteCategory.hom ((Rep.diagonalHomEquiv n A).symm f).hom) fun\u2080 | x => 1) =\n    (A.\u03c1 (x 0)) (f fun i => (x i.castSucc)\u207b\u00b9 * x i.succ)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "m n : \u2115\nhc : m.Coprime n\nhm : IsSquare (-1)\nhn : IsSquare (-1)\n\u22a2 IsSquare (-1)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\nE\u271d : Type u_2\nF\u271d : Type u_3\ninst\u271d\u2074 : NontriviallyNormedField \ud835\udd5c\u271d\ninst\u271d\u00b3 : NormedAddCommGroup E\u271d\ninst\u271d\u00b2 : NormedSpace \ud835\udd5c\u271d E\u271d\ninst\u271d\u00b9 : NormedAddCommGroup F\u271d\ninst\u271d : NormedSpace \ud835\udd5c\u271d F\u271d\nf\u271d : E\u271d \u2192 F\u271d\np\u271d : FormalMultilinearSeries \ud835\udd5c\u271d E\u271d F\u271d\nr\u271d : ENNReal\nn\u271d : \u2115\nx\u271d : E\u271d\ny\u271d : E\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case inl\nB : Type u_1\nW : Type u_2\ninst\u271d : Group W\nM : CoxeterMatrix B\ncs : CoxeterSystem M W\n\u03c9 : List B\nj : \u2115\nhj : j < \u03c9.length\n\u22a2 (cs.wordProd (drop (j + 1) \u03c9))\u207b\u00b9 *\n      ((Option.map cs.simple (\u03c9.get? j)).getD 1 *\n        (cs.wordProd (drop (j + 1) \u03c9) *\n          ((cs.wordProd (drop (j + 1) \u03c9))\u207b\u00b9 *\n            ((Option.map cs.simple (\u03c9.get? j)).getD 1 * cs.wordProd (drop (j + 1) \u03c9))))) =\n    1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\nm : \u2115\nn : \u2115\nf : Fin (m * n) \u2192 \u03b1\ni\u271d : \u2115\na\u271d : \u03b1\n\u22a2 (List.ofFn f)[i\u271d]? = some a\u271d \u2192 (List.ofFn fun i => List.ofFn fun j => f \u27e8m * \u2191i + \u2191j, \u22ef\u27e9).flatten[i\u271d]? = some a\u271d\n\n\u03b1 : Type u\nm : \u2115\nn : \u2115\nf : Fin (m * n) \u2192 \u03b1\ni\u271d : \u2115\na\u271d : \u03b1\n\u22a2 (List.ofFn fun i => List.ofFn fun j => f \u27e8m * \u2191i + \u2191j, \u22ef\u27e9).flatten[i\u271d]? = some a\u271d \u2192 (List.ofFn f)[i\u271d]? = some a\u271d",
+    "label": "negative"
+  },
+  {
+    "state_pp": "n : \u2115\nhn : 2 \u2264 n\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nx : \u03b1\na : \u03b1\nas : List \u03b1\nmp\u271d : (List.permutations'Aux x as).Nodup \u2192 x \u2209 as\nmpr\u271d : x \u2209 as \u2192 (List.permutations'Aux x as).Nodup\n\u22a2 (a :: as \u2208 List.permutations'Aux x as \u2192 \u00aca = x) \u2192\n  (List.map (List.cons a) (List.permutations'Aux x as)).Nodup \u2192 \u00acx = a \u2227 x \u2209 as\n\n\u03b1 : Type u_1\nx : \u03b1\na : \u03b1\nas : List \u03b1\nih : (List.permutations'Aux x as).Nodup \u2194 x \u2209 as\n\u22a2 \u00acx = a \u2227 x \u2209 as \u2192\n  (a :: as \u2208 List.permutations'Aux x as \u2192 \u00aca = x) \u2227 (List.map (List.cons a) (List.permutations'Aux x as)).Nodup",
+    "label": "negative"
+  },
+  {
+    "state_pp": "K\u271d : Type u_1\nL\u271d : Type u_2\ninst\u271d\u00b2 : Field K\u271d\ninst\u271d\u00b9 : Field L\u271d\ninst\u271d : Algebra K\u271d L\u271d\nA\u271d : Subalgebra K\u271d L\u271d\nx\u271d : \u21a5A\u271d\n\u22a2 \u2200 {p : Polynomial K\u271d}, (Polynomial.aeval x\u271d) p = 0 \u2192 \u00acp.coeff 0 = 0 \u2192 (\u2191x\u271d)\u207b\u00b9 \u2208 A\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : Type u_1\nhx : Type u_6\nF\u271d : Type u_7\ninst\u271d\u00b3 : MeasurableSpace x\ninst\u271d\u00b2 : TopologicalSpace x\ninst\u271d\u00b9 : NormedAddCommGroup hx\ninst\u271d : NormedAddCommGroup F\u271d\n\u03bc\u271d : MeasureTheory.Measure x\ns\u271d : Set x\nf\u271d : x \u2192 hx\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "a : NNReal\nb : NNReal\nh : (\u2191a)\u207b\u00b9 \u2264 \u2191b\n\u22a2 False\n\na : ENNReal\nb : ENNReal\nh\u2081\u271d : b = \u22a4 \u2192 a \u2260 0\nh\u2082\u271d : a = \u22a4 \u2192 b \u2260 0\n\u22a2 1 \u2264 a * b \u2192 a\u207b\u00b9 \u2264 b",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type r\ninst\u271d : CommRing R\nW'\u271d : WeierstrassCurve.Affine R\nx\u2081 : R\nx\u2082 : R\ny\u2081 : R\n\u2113 : R\nh\u2081 : W'\u271d.Equation (\u2113 ^ 2 + W'\u271d.a\u2081 * \u2113 - W'\u271d.a\u2082 - x\u2081 - x\u2082) (\u2113 * (\u2113 ^ 2 + W'\u271d.a\u2081 * \u2113 - W'\u271d.a\u2082 - x\u2081 - x\u2082 - x\u2081) + y\u2081)\nh\u2082 : \u00acPolynomial.eval (\u2113 ^ 2 + W'\u271d.a\u2081 * \u2113 - W'\u271d.a\u2082 - x\u2081 - x\u2082) (Polynomial.derivative (W'\u271d.addPolynomial x\u2081 y\u2081 \u2113)) = 0\n\u22a2 False\n\nR : Type r\ninst\u271d : CommRing R\nW'\u271d : WeierstrassCurve.Affine R\nx\u2081 : R\nx\u2082 : R\ny\u2081 : R\n\u2113 : R\nh\u2081 : W'\u271d.Equation (\u2113 ^ 2 + W'\u271d.a\u2081 * \u2113 - W'\u271d.a\u2082 - x\u2081 - x\u2082) (\u2113 * (\u2113 ^ 2 + W'\u271d.a\u2081 * \u2113 - W'\u271d.a\u2082 - x\u2081 - x\u2082 - x\u2081) + y\u2081)\nh\u2082 : \u00acPolynomial.eval (\u2113 ^ 2 + W'\u271d.a\u2081 * \u2113 - W'\u271d.a\u2082 - x\u2081 - x\u2082) (Polynomial.derivative (W'\u271d.addPolynomial x\u2081 y\u2081 \u2113)) = 0\n\u22a2 Polynomial.evalEval (\u2113 * W'\u271d.a\u2081 + (\u2113 ^ 2 - W'\u271d.a\u2082) + (-x\u2081 - x\u2082))\n      (-(\u2113 * W'\u271d.a\u2082) + (-(\u2113 * x\u2081 * 2) - \u2113 * x\u2082) + \u2113 ^ 2 * W'\u271d.a\u2081 + \u2113 ^ 3 + y\u2081) W'\u271d.polynomialX \u2260\n    0 \u2228\n  Polynomial.evalEval (\u2113 * W'\u271d.a\u2081 + (\u2113 ^ 2 - W'\u271d.a\u2082) + (-x\u2081 - x\u2082))\n      (-(\u2113 * W'\u271d.a\u2082) + (-(\u2113 * x\u2081 * 2) - \u2113 * x\u2082) + \u2113 ^ 2 * W'\u271d.a\u2081 + \u2113 ^ 3 + y\u2081) W'\u271d.polynomialY \u2260\n    0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "H : \u2124 \u2192 Prop\ninst\u271d : DecidablePred H\nb\u271d : \u2124\nb'\u271d : \u2124\nHb : \u2200 (z : \u2124), H z \u2192 b\u271d \u2264 z\nHb' : \u2200 (z : \u2124), H z \u2192 b'\u271d \u2264 z\nn : \u2124\nHn : H n\n\u22a2 \u2191(b\u271d.leastOfBdd Hb \u22ef) = \u2191(b'\u271d.leastOfBdd Hb' \u22ef)\n\nH\u271d : \u2124 \u2192 Prop\ninst\u271d : DecidablePred H\u271d\nb\u271d : \u2124\nb'\u271d : \u2124\nH : \u00ac\u2203 z, H\u271d z\n\u22a2 \u2200 (Hb : \u2200 (z : \u2124), H\u271d z \u2192 b\u271d \u2264 z) (Hb' : \u2200 (z : \u2124), H\u271d z \u2192 b'\u271d \u2264 z) (Hinh : \u2203 z, H\u271d z),\n  \u2191(b\u271d.leastOfBdd Hb Hinh) = \u2191(b'\u271d.leastOfBdd Hb' Hinh)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case mp.intro.intro.intro.intro.intro.intro.intro.intro\n\u03b1 : Type u_1\n\u03b2 : Type v\n\u03b3 : Type u_2\n\u03b4 : Type u_3\nr : \u03b1 \u2192 \u03b2 \u2192 Prop\np : \u03b3 \u2192 \u03b4 \u2192 Prop\nas\u2080 as\u2081 : Multiset \u03b1\na : \u03b1\ns : Multiset \u03b1\nih : \u2200 {bs : Multiset \u03b2}, Rel r (s + as\u2081) bs \u2194 \u2203 bs\u2080 bs\u2081, Rel r s bs\u2080 \u2227 Rel r as\u2081 bs\u2081 \u2227 bs = bs\u2080 + bs\u2081\nb : \u03b2\nhab : r a b\nbs\u2080 bs\u2081 : Multiset \u03b2\nh\u2080 : Rel r s bs\u2080\nh\u2081 : Rel r as\u2081 bs\u2081\n\u22a2 \u2203 bs\u2080_1 bs\u2081_1,\n    (\u2203 b bs', r a b \u2227 Rel r s bs' \u2227 bs\u2080_1 = b ::\u2098 bs') \u2227 Rel r as\u2081 bs\u2081_1 \u2227 b ::\u2098 (bs\u2080 + bs\u2081) = bs\u2080_1 + bs\u2081_1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\n\u03b2 : Type u\n\u22a2 Cardinal.mk { f // Function.Surjective f } = 0 \u2192 Cardinal.mk \u03b1 < Cardinal.mk \u03b2 \u2228 Cardinal.mk \u03b1 \u2260 0 \u2227 Cardinal.mk \u03b2 = 0\n\n\u03b1 : Type u\n\u03b2 : Type u\n\u22a2 Cardinal.mk \u03b1 < Cardinal.mk \u03b2 \u2228 Cardinal.mk \u03b1 \u2260 0 \u2227 Cardinal.mk \u03b2 = 0 \u2192 Cardinal.mk { f // Function.Surjective f } = 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u\ns\u271d : Set \u03b1\u271d\nt\u271d : Set \u03b1\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "C\u271d : Type u\ninst\u271d : CategoryTheory.Category.{v, u} C\u271d\nA\u271d : CategoryTheory.Functor C\u271d\u1d52\u1d56 (Type v)\n\u22a2 \u2200 {F : CategoryTheory.Functor (CategoryTheory.CostructuredArrow CategoryTheory.yoneda A\u271d)\u1d52\u1d56 (Type v)} {X : C\u271d},\n  CategoryTheory.OverPresheafAux.YonedaCollection.map\u2082 F (CategoryTheory.CategoryStruct.id X) = id",
+    "label": "positive"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\n\u03b1\u271d : Type u_3\n\u22a2 \u2200 [inst : Group G\u271d] [inst_1 : MulAction G\u271d \u03b1\u271d] [inst_2 : MeasurableSpace \u03b1\u271d] {s : Set \u03b1\u271d} {\u03bc : MeasureTheory.Measure \u03b1\u271d}\n  [inst_3 : MeasurableSpace G\u271d] [MeasurableSMul G\u271d \u03b1\u271d] [MeasureTheory.SMulInvariantMeasure G\u271d \u03b1\u271d \u03bc] [Countable G\u271d],\n  MeasureTheory.IsFundamentalDomain G\u271d s \u03bc \u2192\n    \u2200 {f : \u03b1\u271d \u2192 ENNReal}, (\u2200 (\u03b3 : G\u271d) (x : \u03b1\u271d), f (\u03b3 \u2022 x) = f x) \u2192 essSup f (\u03bc.restrict s) = essSup f \u03bc",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type uR\nM : Type uM\nK : Type uK\nV : Type uV\n\u03b9 : Type u\u03b9\ninst\u271d\u2077 : CommRing R\ninst\u271d\u2076 : AddCommGroup M\ninst\u271d\u2075 : Module R M\ninst\u271d\u2074 : DecidableEq \u03b9\nb : Basis \u03b9 R M\ninst\u271d\u00b3 : _root_.Finite \u03b9\ninst\u271d\u00b2 : Field K\ninst\u271d\u00b9 : AddCommGroup V\ninst\u271d : Module K V\nx\u271d : Nonempty (V \u2243\u2097[K] Dual K V)\ne : V \u2243\u2097[K] Dual K V\n\u22a2 Module.rank K V < \u2135\u2080",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case inr\nF : Type u_1\n\u03b1\u271d : Type u_2\n\u03b2 : Type u_3\n\u03b3 : Type u_4\n\u03b9 : Type u_5\n\u03ba : Type u_6\ninst\u271d\u00b3 : LinearOrder \u03b1\u271d\ninst\u271d\u00b2 : OrderBot \u03b1\u271d\ns\u271d : Finset \u03b9\nf\u271d : \u03b9 \u2192 \u03b1\u271d\na : \u03b1\u271d\n\u03b1 : Type u_7\ninst\u271d\u00b9 : LinearOrder \u03b1\ninst\u271d : BoundedOrder \u03b1\ns : Finset \u03b9\nf : \u03b9 \u2192 \u03b1\nhs : s.Nonempty\nh\u271d : Nontrivial \u03b1\n\u22a2 s.sup f = \u22a4 \u2194 \u2203 b \u2208 s, f b = \u22a4",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\nG : Type u_1\ninst\u271d : Group G\ng : G\nP : Sylow p G\nh : G\nx\u271d : h \u2208 g \u2022 P\na : G\nb : a \u2208 \u2191\u2191P\nc : ((MulDistribMulAction.toMonoidEnd (MulAut G) G) (MulAut.conj g)) a = h\n\u22a2 g\u207b\u00b9 * ((MulDistribMulAction.toMonoidEnd (MulAut G) G) (MulAut.conj g)) a * g \u2208 \u2191P",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u1\ninst\u271d\u00b2 : CommRing R\nM : Type u2\ninst\u271d\u00b9 : AddCommGroup M\ninst\u271d : Module R M\nx\u271d\u00b9 : Submodule R (ExteriorAlgebra R M)\nh1 : x\u271d\u00b9 \u2264 LinearMap.range (ExteriorAlgebra.\u03b9 R)\nh2 : x\u271d\u00b9 \u2264 1\nx\u271d : ExteriorAlgebra R M\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case inr\nR : Type u\nM M\u2081 : Type v\nM' : Type v'\n\u03b9 : Type w\ninst\u271d\u2078 : Ring R\ninst\u271d\u2077 : AddCommGroup M\ninst\u271d\u2076 : AddCommGroup M'\ninst\u271d\u2075 : AddCommGroup M\u2081\ninst\u271d\u2074 : Module R M\ninst\u271d\u00b3 : Module R M'\ninst\u271d\u00b2 : Module R M\u2081\ninst\u271d\u00b9 : NoZeroSMulDivisors R M\ninst\u271d : StrongRankCondition R\nv : M\nh : \u2200 (w : M), \u2203 c, c \u2022 v = w\nthis : Nontrivial R\nhn : v \u2260 0\n\u22a2 finrank R M \u2264 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {\u03b1 : Type u_1} [inst : Preorder \u03b1] {o : Ordering} {a b : \u03b1}, o.Compares a b \u2192 (\u00aco = Ordering.lt \u2194 b \u2264 a)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_1\n\u03b2\u271d : \u03b9\u271d \u2192 Type u_2\nr\u271d : \u03b9\u271d \u2192 \u03b9\u271d \u2192 Prop\ns\u271d : {i : \u03b9\u271d} \u2192 \u03b2\u271d i \u2192 \u03b2\u271d i \u2192 Prop\ninst\u271d : \u2200 (i : \u03b9\u271d), IsTrichotomous (\u03b2\u271d i) s\u271d\nwf\u271d : WellFounded r\u271d\n\u22a2 \u2200 (a b : (i : \u03b9\u271d) \u2192 \u03b2\u271d i), Pi.Lex r\u271d s\u271d a b \u2228 a = b \u2228 Pi.Lex r\u271d s\u271d b a",
+    "label": "positive"
+  },
+  {
+    "state_pp": "y : \u2102\nh : 0 < y.re \u2228 0 \u2260 0\n\u22a2 ContinuousAt (fun p => p.1 ^ p.2) (0, y)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9 : Type u\nX : Type v\ninst\u271d\u2074 : TopologicalSpace X\nE : Type u_1\ninst\u271d\u00b3 : AddCommMonoid E\ninst\u271d\u00b2 : SMulWithZero \u211d E\ninst\u271d\u00b9 : TopologicalSpace E\ninst\u271d : ContinuousSMul \u211d E\ns\u271d : Set X\nf : PartitionOfUnity \u03b9 X s\u271d\ns : Set X\n\u03c1 : PartitionOfUnity \u03b9 X s\nx\u2080\u271d x\u2080 : X\nhx\u2080 : x\u2080 \u2208 s\nI : Finset \u03b9\nhI : \u03c1.finsupport x\u2080 \u2286 I\n\u22a2 \u2200 x \u2208 I \\ \u03c1.finsupport x\u2080, (\u03c1 x) x\u2080 = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\nm\u271d : MeasurableSpace \u03b1\u271d\n\u03bc\u271d : MeasureTheory.Measure \u03b1\u271d\ninst\u271d : MeasureTheory.SigmaFinite \u03bc\u271d\nf\u271d : \u03b1\u271d \u2192 NNReal\n\u22a2 \u2200 {L : ENNReal},\n  L < \u222b\u207b (x : \u03b1\u271d), \u2191(f\u271d x) \u2202\u03bc\u271d \u2192\n    \u2203 g, (\u2200 (x : \u03b1\u271d), g x \u2264 f\u271d x) \u2227 \u222b\u207b (x : \u03b1\u271d), \u2191(g x) \u2202\u03bc\u271d < \u22a4 \u2227 L < \u222b\u207b (x : \u03b1\u271d), \u2191(g x) \u2202\u03bc\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst : Inv \u03b1\na : Part \u03b1\nma : \u03b1\nh : ma \u2208 a\n\u22a2 ma\u207b\u00b9 \u2208 a\u207b\u00b9",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u\ninst\u271d\u00b9 : CommRing R\nW' : Jacobian R\nF : Type v\ninst\u271d : Field F\nW : Jacobian F\nP : Fin 3 \u2192 R\nu : R\nhu : IsUnit u\nthis : \u2200 (u : R) {P : Fin 3 \u2192 R}, W'.Equation P \u2192 W'.Equation (u \u2022 P)\nh : W'.Equation (u \u2022 P)\n\u22a2 W'.Equation P",
+    "label": "positive"
+  },
+  {
+    "state_pp": "step\u2081\u271d : True\nstep\u2081 : True\n\u22a2 \u2200 (n k : \u2115), n.ascFactorial k = k.factorial * (n + k - 1).choose k",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {R : Type u_1} [inst : CommRing R] [inst_1 : IsDomain R] [NormalizedGCDMonoid R] {p q : Polynomial R},\n  p.IsPrimitive \u2192 q.IsPrimitive \u2192 \u2203 r, r.IsPrimitive \u2227 \u2200 (s : Polynomial R), p \u2223 s \u2227 q \u2223 s \u2194 r \u2223 s",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d : Preorder \u03b1\no : Ordering\na\u271d : \u03b1\nb : \u03b1\nhab : o.Compares a\u271d b\n\u22a2 \u00aco = Ordering.lt \u2194 b \u2264 a\u271d",
+    "label": "negative"
+  },
+  {
+    "state_pp": "m : Type u_1\ne : m \u2192 Type u_2\nf : ((a : m) \u2192 Part (e a)) \u2192o (a : m) \u2192 Part (e a)\nx : (a : m) \u2192 Part (e a)\nh\u271d : x \u2208 Part.Fix.approxChain f\nh : m\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "a : \u2124\nm : \u2115\nn : \u2115\nh : \u00aca.gcd (\u2191m * \u2191n) = 1\n\u22a2 a.gcd \u2191m \u2260 1 \u2228 a.gcd \u2191n \u2260 1\n\na : \u2124\nm : \u2115\nn : \u2115\n\u22a2 \u00aca.gcd \u2191m = 1 \u2228 \u00aca.gcd \u2191n = 1 \u2192 \u00aca.gcd (\u2191m * \u2191n) = 1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {\u03b1 : Type u_1} (s : Set \u03b1) (x : \u03b1), s.encard \u2264 1 + (s \\ {x}).encard",
+    "label": "negative"
+  },
+  {
+    "state_pp": "K\u271d : Type u\n\u22a2 \u2200 {V : Type v} [inst : Ring K\u271d] [StrongRankCondition K\u271d] [inst_2 : AddCommGroup V] [inst_3 : Module K\u271d V]\n  (s : Submodule K\u271d V) [Module.Free K\u271d \u21a5s], Module.rank K\u271d \u21a5s = 1 \u2194 \u2203 v\u2080 \u2208 s, \u00acv\u2080 = 0 \u2227 s \u2264 K\u271d \u2219 v\u2080",
+    "label": "positive"
+  },
+  {
+    "state_pp": "V\u271d : Type u_1\ninst\u271d\u00b2 : NormedAddCommGroup V\u271d\ninst\u271d\u00b9 : InnerProductSpace \u211d V\u271d\ninst\u271d : Fact (Module.finrank \u211d V\u271d = 2)\no\u271d : Orientation \u211d V\u271d (Fin 2)\nx\u271d : V\u271d\ny\u271d : V\u271d\nz\u271d : V\u271d\nhx\u271d : x\u271d \u2260 0\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u03b2\u271d : Type u_2\ninst\u271d\u00b9 : Infinite \u03b1\u271d\ninst\u271d : Finite \u03b2\u271d\nf\u271d : \u03b1\u271d \u2192 \u03b2\u271d\n\u22a2 \u2203 y, Infinite \u2191(f\u271d \u207b\u00b9' {y})",
+    "label": "positive"
+  },
+  {
+    "state_pp": "hf : Type u_2\nr\u271d : LieRing hf\nr : hf\nh : hf\nh\u2082 : hf\nh\u2083 : IsSl2Triple r h h\u2082\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type r\n\u22a2 \u2200 [inst : CommRing R\u271d] {P Q : Fin 3 \u2192 R\u271d}, P \u2248 Q \u2192 P 0 * Q 2 ^ 2 = Q 0 * P 2 ^ 2",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case intro.intro\nF : Type u_1\ninst\u271d\u00b2 : NormedAddCommGroup F\ninst\u271d\u00b9 : NormedSpace \u211d F\nf : \u211d \u2192 F\nK : Set F\ninst\u271d : CompleteSpace F\nthis\u271d\u00b9 : MeasurableSpace F := borel F\nthis\u271d : BorelSpace F\nt : Set \u211d\nt_count : t.Countable\nht : Dense t\n\u22a2 (range fun x => derivWithin f (Ici x) x) \u2286 closure \u2191(Submodule.span \u211d (f '' t))",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u_1\nA : Type u_2\nK : Type u_3\ninst\u271d\u2076 : CommRing R\ninst\u271d\u2075 : CommRing A\ninst\u271d\u2074 : Field K\nR\u2081 : Type u_4\ninst\u271d\u00b3 : CommRing R\u2081\ninst\u271d\u00b2 : IsDomain R\u2081\ninst\u271d\u00b9 : Algebra R\u2081 K\ninst\u271d : IsFractionRing R\u2081 K\nI\u271d J\u271d I J : FractionalIdeal R\u2081\u2070 K\nh : I * J = 1\nhI : I \u2260 0\ny : K\nhy : y \u2208 J\nx : K\nhx : x \u2208 I\n\u22a2 x * y \u2208 I * J",
+    "label": "positive"
+  },
+  {
+    "state_pp": "C\u271d : Type u_1\ninst\u271d\u00b9 : CategoryTheory.Category.{u_3, u_1} C\u271d\ninst\u271d : CategoryTheory.Preadditive C\u271d\nS\u271d : CategoryTheory.ShortComplex C\u271d\n\u22a2 \u2200 (s s' : S\u271d.Splitting), s.r = s'.r \u2192 s = s'",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h : PNat.XgcdType\nhc\u271d : h.r = 0\nhc : PNat.XgcdType\n\u22a2 PNat.XgcdType\n\nh\u271d : PNat.XgcdType\nhc\u271d\u00b9 : h\u271d.r = 0\nhc\u271d : h\u271d.r = 0\nhc : PNat.XgcdType\nh : PNat.XgcdType\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "M\u271d : Type w\nA\u271d : Set M\u271d\n\u22a2 \u2200 {L : FirstOrder.Language} [inst : L.Structure M\u271d] {\u03b1 : Type u\u2081} {f g : Set (\u03b1 \u2192 M\u271d)},\n  A\u271d.Definable L f \u2192 A\u271d.Definable L g \u2192 A\u271d.Definable L (f \u2229 g)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h : Set \u2115\ninst\u271d : DecidablePred fun x => x \u2208 h\nh' : 1 \u2209 h\n\u22a2 schnirelmannDensity h = 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nN : \u03b1 \u2192 Type u_2\ninst\u271d\u00b2 : DecidableEq \u03b1\ninst\u271d\u00b9 : (a : \u03b1) \u2192 DecidableEq (N a)\ninst\u271d : (a : \u03b1) \u2192 AddGroup (N a)\nf : \u03a0\u2080 (a : \u03b1), N a\ng : \u03a0\u2080 (a : \u03b1), N a\na : \u03b1\n\u22a2 False\n\n\u03b1 : Type u_1\nN : \u03b1 \u2192 Type u_2\ninst\u271d\u00b2 : DecidableEq \u03b1\ninst\u271d\u00b9 : (a : \u03b1) \u2192 DecidableEq (N a)\ninst\u271d : (a : \u03b1) \u2192 AddGroup (N a)\nf : \u03a0\u2080 (a : \u03b1), N a\ng : \u03a0\u2080 (a : \u03b1), N a\na : \u03b1\n\u22a2 \u00acf a = -g a \u2192 \u00ac-f a = g a",
+    "label": "negative"
+  },
+  {
+    "state_pp": "this : 0 < 1\na\u271d : (Nat.succ 0).le 0\nh : True\n\u22a2 False\n\nthis : 0 < 1\nh : 0 < 1\nh\u2081\u271d : 0 < 1\nh\u2081 : 0 < 1\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "k : \u2115\nhk : k \u2260 0\nhx\u2080 : \u211d\nhx\u2081 : 0 \u2264 hx\u2080\n\u22a2 hx\u2080 \u2264 1 \u2192\n  HasSum (fun n => (\u2191n)\u207b\u00b9 * (\u2191n)\u207b\u00b9 ^ (k * 2) * Real.sin (\u2191n * Real.pi * hx\u2080 * 2))\n    (-(Real.pi * Real.pi ^ (k * 2) * (\u2191(1 + k * 2).factorial)\u207b\u00b9 *\n            (Polynomial.aeval hx\u2080) (Polynomial.bernoulli (1 + k * 2)) *\n          (-1) ^ k *\n        2 ^ (k * 2)))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "s : \u2115 \u2192 \u211d\nU\u271d : Set \u211d\na\u271d : U\u271d \u2208 nhds (Real.exp (-1))\nb\u271d : \u2115\n\u22a2 ?w \u2264 b\u271d \u2192 \u2191(numDerangements b\u271d) * (\u2191b\u271d.factorial)\u207b\u00b9 \u2208 U\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "m : \u2115\nn : \u2115\n\u22a2 m.gcd n \u2260 1 \u2192 \u2203 p, Nat.Prime p \u2227 p \u2223 m \u2227 p \u2223 n\n\nm : \u2115\nn : \u2115\n\u22a2 (\u2203 p, Nat.Prime p \u2227 p \u2223 m \u2227 p \u2223 n) \u2192 \u00acm.gcd n = 1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case neg\nR : Type u\nS : Type v\nT : Type w\nA : Type z\na b : R\nn : \u2115\ninst\u271d : Ring R\np q f g : R[X]\nhg : g.Monic\na\u271d : Nontrivial R\nhfg : \u00acf /\u2098 g = 0\nhgf : g.degree \u2264 f.degree\n\u22a2 (f /\u2098 g).natDegree = f.natDegree - g.natDegree",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u211d \u2192 \u211d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\ninst\u271d\u2074 : CommRing R\u271d\ninst\u271d\u00b3 : IsDomain R\u271d\nK\u271d : Type u_2\ninst\u271d\u00b2 : Field K\u271d\ninst\u271d\u00b9 : Algebra R\u271d K\u271d\ninst\u271d : IsFractionRing R\u271d K\u271d\na\u271d : ValuationRing R\u271d\nx\u271d : K\u271d\n\u22a2 IsLocalization.IsInteger R\u271d x\u271d \u2228 IsLocalization.IsInteger R\u271d x\u271d\u207b\u00b9",
+    "label": "positive"
+  },
+  {
+    "state_pp": "K\u271d : Type u\ninst\u271d : Field K\u271d\n\u22a2 \u2200 {n : \u2115} {a : K\u271d}, Irreducible (Polynomial.X ^ n - Polynomial.C a) \u2192 \u00acn = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "H : Type u\ndeg : Semiring H\np : Polynomial H\nq : Polynomial H\nh : (p + q).natDegree = 0\n\u22a2 p.natDegree = q.natDegree",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\nM : Type u_2\ninst\u271d\u00b2 : Ring R\ninst\u271d\u00b9 : AddCommGroup M\ninst\u271d : Module R M\nf : \u2115 \u2192 R\ng : \u2115 \u2192 M\nm n : \u2115\nhmn : m < n\n\u22a2 \u2211 x \u2208 Ico m (n - 1), f (x + 1) \u2022 \u2211 i \u2208 range (x + 1), g i =\n    \u2211 i \u2208 Ico m (n - 1 + 1 - 1), f (i + 1) \u2022 \u2211 i \u2208 range (i + 1), g i",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u\nS : Type u_1\n\u03c3 : Type v\nM : Type w\ninst\u271d\u2074 : CommRing R\u271d\ninst\u271d\u00b3 : CommRing S\ninst\u271d\u00b2 : AddCommGroup M\ninst\u271d\u00b9 : Module R\u271d M\nR : Type u_2\ninst\u271d : CommSemiring R\nm n : \u2115\nF : MvPolynomial \u03c3 R\nhF : F.totalDegree \u2264 m\nf : \u03c3 \u2192 R[X]\nhf : \u2200 (i : \u03c3), (f i).natDegree \u2264 n\nd : \u03c3 \u2192\u2080 \u2115\nhd : d \u2208 F.support\nthis : \u2211 i \u2208 d.support, d i * n \u2264 m * n\n\u22a2 \u2200 i \u2208 d.support, ((fun n e => f n ^ e) i (d i)).natDegree \u2264 d i * n",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_2\n\u03b2\u271d : Type u_3\n\u22a2 \u2200 [inst : SeminormedAddCommGroup \u03b1\u271d] [inst_1 : SeminormedAddCommGroup \u03b2\u271d] (x : WithLp 2 (\u03b1\u271d \u00d7 \u03b2\u271d)),\n  \u2016x\u2016 = \u221a(\u2016x.fst\u2016 ^ 2 + \u2016x.snd\u2016 ^ 2)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h\u271d : \u2200 (n : \u2115), 0 < 2 * \u2191n + 1\nh' : \u2200 (n : \u2115), 0 < 2 * \u2191n + 1\nh : \u2200 (n : \u2115), 0 < 2 * n + 1\n\u22a2 Filter.Tendsto (fun n => \u2191n * (1 + \u2191n * 2)\u207b\u00b9) Filter.atTop (nhds 2\u207b\u00b9)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : Type u_1\ny : DecidableEq x\nthis\u271d : DecidableEq x\nthis : DecidableEq x\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d : DecidableEq \u03b1\ns : Finset \u03b1\nt : Finset \u03b1\na : \u03b1\nha : a \u2208 s\na\u271d\u00b9 : \u03b1\na\u271d : a\u271d\u00b9 = a \u2228 a\u271d\u00b9 \u2208 s \u2227 a\u271d\u00b9 \u2209 t\n\u22a2 a\u271d\u00b9 \u2208 s\n\n\u03b1 : Type u_1\ninst\u271d : DecidableEq \u03b1\ns : Finset \u03b1\nt : Finset \u03b1\na : \u03b1\nha : a \u2208 s\na\u271d\u00b9 : \u03b1\na\u271d : a\u271d\u00b9 \u2208 insert a (s \\ t)\n\u22a2 \u00aca\u271d\u00b9 = a \u2192 a\u271d\u00b9 \u2209 t\n\n\u03b1 : Type u_1\ninst\u271d : DecidableEq \u03b1\ns : Finset \u03b1\nt : Finset \u03b1\na : \u03b1\nha : a \u2208 s\na\u271d : \u03b1\n\u22a2 a\u271d \u2208 s \\ t.erase a \u2192 a\u271d \u2208 insert a (s \\ t)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u0393\u271d : Type u_1\nR\u271d : Type u_3\n\u22a2 \u2200 [inst : PartialOrder \u0393\u271d] [inst_1 : Zero R\u271d] [inst_2 : Zero \u0393\u271d] {x : HahnSeries \u0393\u271d R\u271d} {i : \u0393\u271d},\n  i < x.order \u2192 x.coeff i = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "f : \u211d \u2192 \u211d\nhf : AkraBazziRecurrence.GrowsPolynomially f\nhf'\u271d : \u00ac\u2203 a, \u2200 (b : \u211d), a \u2264 b \u2192 f b \u2264 0\nhf' : \u2200 (x : \u211d), \u2203 x_1, x \u2264 x_1 \u2227 0 < f x_1\n\u22a2 False\n\nf : \u211d \u2192 \u211d\nhf : AkraBazziRecurrence.GrowsPolynomially f\nhf' : \u00ac\u2203 a, \u2200 (b : \u211d), a \u2264 b \u2192 f b \u2264 0\n\u22a2 \u211d",
+    "label": "negative"
+  },
+  {
+    "state_pp": "X : Type u\ninst\u271d\u00b9 : Lattice X\ninst\u271d : JordanHolderLattice X\nx y : X\nhxy : x \u2260 y\nhxb : IsMaximal x (x \u2294 y)\nhyb : IsMaximal y (x \u2294 y)\n\u22a2 IsMaximal (x \u2293 y) y",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x\u271d : \u211d*\ny\u271d : \u211d*\nh\u271d : () * () = () * ()\nx : \u2115\ny : \u2115\nh : () * () = () * ()\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "h : Type u\ninst\u271d : Field h\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u\n\u22a2 \u2200 [inst : CommRing R\u271d] [IsDomain R\u271d] {p q : Polynomial R\u271d} {x : R\u271d},\n  \u00acp = 0 \u2192\n    \u00acq = 0 \u2192 Polynomial.rootMultiplicity x (p * q) = Polynomial.rootMultiplicity x p + Polynomial.rootMultiplicity x q",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\n\u22a2 \u2200 [inst : NontriviallyNormedField \ud835\udd5c\u271d] {F : Type u_2} [inst_1 : NormedAddCommGroup F] [inst_2 : NormedSpace \ud835\udd5c\u271d F]\n  {R : Type u_3} [inst_3 : Semiring R] [inst_4 : Module R F] [SMulCommClass \ud835\udd5c\u271d R F] [ContinuousConstSMul R F] {n : \u2115}\n  {x : \ud835\udd5c\u271d} {s : Set \ud835\udd5c\u271d},\n  x \u2208 s \u2192\n    UniqueDiffOn \ud835\udd5c\u271d s \u2192\n      \u2200 {f : \ud835\udd5c\u271d \u2192 F} (c : R),\n        ContDiffWithinAt \ud835\udd5c\u271d (\u2191n) f s x \u2192\n          ((iteratedFDerivWithin \ud835\udd5c\u271d n (c \u2022 f) s x) fun x => 1) = c \u2022 (iteratedFDerivWithin \ud835\udd5c\u271d n f s x) fun x => 1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case intro.h\nR : Type u_1\n\u03b1 : Type u_2\n\u03b2 : Type u_3\n\u03b4 : Type u_4\n\u03b3 : Type u_5\n\u03b9 : Type u_6\nm0 : MeasurableSpace \u03b1\ninst\u271d\u00b9 : MeasurableSpace \u03b2\ninst\u271d : MeasurableSpace \u03b3\n\u03bc \u03bc\u2081 \u03bc\u2082 \u03bc\u2083 \u03bd \u03bd' \u03bd\u2081 \u03bd\u2082 : Measure \u03b1\ns s' t : Set \u03b1\nhs : \u03bc.restrict s = \u03bd.restrict s\nht : \u03bc.restrict t = \u03bd.restrict t\nu : Set \u03b1\nhu : MeasurableSet u\n\u22a2 (\u03bc.restrict (s \u222a t)) u = (\u03bd.restrict (s \u222a t)) u",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\n\u03b2 : Type u_1\nw x y z : \u03b1\ninst\u271d : GeneralizedBooleanAlgebra \u03b1\n\u22a2 (x \\ y \u2294 x \u2294 y \\ x) \u2293 (x \\ y \u2294 (y \\ x \u2294 y)) = (x \u2294 y \\ x) \u2293 (x \\ y \u2294 y)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "n\u271d : Type u_11\nm\u271d : Type u_12\nn'\u271d : Type u_13\nm'\u271d : Type u_14\nR\u271d : Type u_16\n\u22a2 \u2200 [inst : CommSemiring R\u271d] [inst_1 : Fintype n\u271d] [inst_2 : Fintype m\u271d] [inst_3 : DecidableEq n\u271d]\n  [inst_4 : DecidableEq m\u271d] [inst_5 : Fintype n'\u271d] [inst_6 : Fintype m'\u271d] [inst_7 : DecidableEq n'\u271d]\n  [inst_8 : DecidableEq m'\u271d] (B : (n\u271d \u2192 R\u271d) \u2192\u2097[R\u271d] (m\u271d \u2192 R\u271d) \u2192\u2097[R\u271d] R\u271d) (l : (n'\u271d \u2192 R\u271d) \u2192\u2097[R\u271d] n\u271d \u2192 R\u271d)\n  (r : (m'\u271d \u2192 R\u271d) \u2192\u2097[R\u271d] m\u271d \u2192 R\u271d),\n  (LinearMap.toMatrix\u2082' R\u271d) (B.compl\u2081\u2082 l r) =\n    (LinearMap.toMatrix' l).transpose * (LinearMap.toMatrix\u2082' R\u271d) B * LinearMap.toMatrix' r",
+    "label": "positive"
+  },
+  {
+    "state_pp": "A\u271d : Type u_1\ninst\u271d\u00b9 : Field A\u271d\nB\u271d : Type u_3\ninst\u271d : CommRing B\u271d\n\u22a2 \u2200 [inst : Algebra A\u271d B\u271d] (x : B\u271d) (a : A\u271d),\n  minpoly A\u271d (x + (algebraMap A\u271d B\u271d) a) = (minpoly A\u271d x).comp (Polynomial.X - Polynomial.C a)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_2\ninst\u271d\u00b9 : CommRing R\u271d\ninst\u271d : IsDomain R\u271d\np\u271d : \u2115\n\u22a2 \u2200 [CharP R\u271d p\u271d], p\u271d \u2260 2 \u2192 Polynomial.cyclotomic' 2 R\u271d = 1 + Polynomial.X",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\ninst\u271d : NontriviallyNormedField \ud835\udd5c\u271d\n\u22a2 \u2200 [LocallyCompactSpace \ud835\udd5c\u271d] {E : Type u_2} [inst : NormedAddCommGroup E] [inst_1 : NormedSpace \ud835\udd5c\u271d E]\n  [inst_2 : MeasurableSpace E] [OpensMeasurableSpace E] {F : Type u_3} [inst_4 : NormedAddCommGroup F]\n  [inst_5 : NormedSpace \ud835\udd5c\u271d F] [CompleteSpace F] {f : E \u2192 F} [SecondCountableTopology E],\n  Continuous f \u2192 Measurable fun p => LineDifferentiableAt \ud835\udd5c\u271d f p.1 p.2",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u\nL\u271d : Type v\nL'\u271d : Type w\u2082\n\u22a2 \u2200 [inst : CommRing R\u271d] [inst_1 : LieRing L\u271d] [inst_2 : LieRing L'\u271d] [inst_3 : LieAlgebra R\u271d L'\u271d]\n  [inst_4 : LieAlgebra R\u271d L\u271d] (f : L\u271d \u2192\u2097\u2045R\u271d\u2046 L'\u271d), Function.Surjective \u21d1f \u2192 f.idealRange = \u22a4",
+    "label": "positive"
+  },
+  {
+    "state_pp": "z : \u2102\nhz : z \u2260 0\nx : \u211d\n\u22a2 HasDerivAt (fun y => Complex.sin (2 * z * \u2191y) * (z\u207b\u00b9 * (1 / 2))) (Complex.cos (2 * z * \u2191x)) x",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case mp.intro\nX\u271d Y\u271d : LightProfinite\nf\u271d : X\u271d \u27f6 Y\u271d\nX Y : LightProfinite\nf : X \u27f6 Y\ny : (forget LightProfinite).obj Y\nhy : \u2200 (a : (forget LightProfinite).obj X), f a \u2260 y\nhf : Epi f\nC : Set ((forget LightProfinite).obj Y) := Set.range \u21d1f\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ns : Set \u03b1\nn\u271d : \u2115\na\u271d : s.encard \u2264 \u2191n\u271d \u2192 s.Finite\nhk\u271d : s.encard \u2264 \u2191(n\u271d + 1)\nhk : s.encard \u2264 \u2191n\u271d + 1\n\u22a2 False\n\n\u03b1 : Type u_1\ns : Set \u03b1\nn\u271d : \u2115\na\u271d : s.encard \u2264 \u2191n\u271d \u2192 s.Finite\nhk : s.encard \u2264 \u2191(n\u271d + 1)\n\u22a2 \u2115",
+    "label": "negative"
+  },
+  {
+    "state_pp": "f : Bool \u2192 Bool \u2192 Bool\nh\u2080 : f false true = f true false\nh\u2081 : f true false = f false true\nn : \u2115\nm : \u2115\n\u22a2 Nat.bitwise f n m = Nat.bitwise f m n",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case neg\n\u03a9 : Type u_1\ninst\u271d\u00b2 : Nonempty \u03a9\nm0 : MeasurableSpace \u03a9\n\u03bc : FiniteMeasure \u03a9\ninst\u271d\u00b9 : TopologicalSpace \u03a9\ninst\u271d : OpensMeasurableSpace \u03a9\n\u03b3 : Type u_2\nF : Filter \u03b3\n\u03bcs : \u03b3 \u2192 FiniteMeasure \u03a9\n\u03bcs_lim : Tendsto (ProbabilityMeasure.toFiniteMeasure \u2218 fun i => (\u03bcs i).normalize) F (\ud835\udcdd \u03bc.normalize.toFiniteMeasure)\nmass_lim : Tendsto (fun i => (\u03bcs i).mass) F (\ud835\udcdd \u03bc.mass)\nf : \u03a9 \u2192\u1d47 \u211d\u22650\nh_mass : \u00ac\u03bc.mass = 0\n\u22a2 Tendsto (fun i => (\u03bcs i).mass * (\u03bcs i).normalize.toFiniteMeasure.testAgainstNN f) F\n    (\ud835\udcdd (\u03bc.mass * \u03bc.normalize.toFiniteMeasure.testAgainstNN f))",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\nM\u271d : Type u_2\ninst\u271d\u00b2 : Ring R\u271d\ninst\u271d\u00b9 : AddCommGroup M\u271d\ninst\u271d : Module R\u271d M\u271d\n\u22a2 Module.rank R\u271d M\u271d = 0 \u2192 \u2200 (x : M\u271d), \u2203 a, a \u2260 0 \u2227 a \u2022 x = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "V : Type u_1\nP : Type u_2\ninst\u271d\u00b3 : NormedAddCommGroup V\ninst\u271d\u00b2 : InnerProductSpace \u211d V\ninst\u271d\u00b9 : MetricSpace P\ninst\u271d : NormedAddTorsor V P\np p\u2080 p\u2081\u271d p\u2082\u271d p\u2081 p\u2082 p\u2083 : P\n\u22a2 \u00acCollinear \u211d {p\u2081, p\u2082, p\u2083} \u2192 \u00acsin (\u2220 p\u2081 p\u2082 p\u2083) = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "n : \u2115\n\u03b1 : Sort u_1\na : Fin n \u2192 \u03b1\nm : \u2115\nx : Fin (m.succ * n)\n\u22a2 Fin 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_1\nK\u271d : Type u_2\nV\u271d : Type u_3\ninst\u271d\u00b2 : DivisionRing K\u271d\ninst\u271d\u00b9 : AddCommGroup V\u271d\ninst\u271d : Module K\u271d V\u271d\nf\u271d : \u03b9\u271d \u2192 Projectivization K\u271d V\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\ninst\u271d : DecidableEq \u03b1\n\u03b2 : Type v\nn : \u2115\nx y : Fin (n + 2)\nhxy : x \u2260 y\n\u22a2 (swap x y).signAux = -1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "a : \u2115+\nb : \u2115+\nm : \u2115+\nn : \u2115+\nh : m.Coprime n\nhm : a \u2223 m\nhb : b \u2223 n\nthis : Fact True\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\n_p : Fintype \u03b1\n_n : \u2115\nhp : \u2115\nhdiv : Fact (Nat.Prime _n)\n\u03c3 : _n \u2223 Fintype.card \u03b1\nh\u03c3 : Equiv.Perm \u03b1\na : h\u03c3 ^ _n ^ hp = 1\nha : \u03b1\n\u22a2 (Nat.succ ?m.28).le ?m\n\n\u03b1 : Type u_1\n_p : Fintype \u03b1\n_n : \u2115\nhp : \u2115\nhdiv : Fact (Nat.Prime _n)\n\u03c3 : _n \u2223 Fintype.card \u03b1\nh\u03c3 : Equiv.Perm \u03b1\na : h\u03c3 ^ _n ^ hp = 1\nha : \u03b1\n\u22a2 \u2115\n\n\u03b1 : Type u_1\n_p : Fintype \u03b1\n_n : \u2115\nhp : \u2115\nhdiv : Fact (Nat.Prime _n)\n\u03c3 : _n \u2223 Fintype.card \u03b1\nh\u03c3 : Equiv.Perm \u03b1\na : h\u03c3 ^ _n ^ hp = 1\nha : \u03b1\n\u22a2 \u2115\n\n\u03b1 : Type u_1\n_p : Fintype \u03b1\n_n : \u2115\nhp : \u2115\nhdiv : Fact (Nat.Prime _n)\n\u03c3 : _n \u2223 Fintype.card \u03b1\nh\u03c3 : Equiv.Perm \u03b1\na : h\u03c3 ^ _n ^ hp = 1\nha : \u03b1\n\u22a2 0 < ?m.28\n\n\u03b1 : Type u_1\n_p : Fintype \u03b1\n_n : \u2115\nhp : \u2115\nhdiv : Fact (Nat.Prime _n)\n\u03c3 : _n \u2223 Fintype.card \u03b1\nh\u03c3 : Equiv.Perm \u03b1\na : h\u03c3 ^ _n ^ hp = 1\nha : \u03b1\n\u22a2 Nat.succ ?m \u2223 ?m.28",
+    "label": "negative"
+  },
+  {
+    "state_pp": "n\u271d : \u2115\n\u03b1\u271d : Fin (n\u271d + 1) \u2192 Sort u\nx\u271d\u00b9 : \u03b1\u271d 0\np\u271d : (i : Fin n\u271d) \u2192 \u03b1\u271d i.succ\nz\u271d : \u03b1\u271d 0\nx\u271d : Fin (n\u271d + 1)\n\u22a2 Function.update (Fin.cons x\u271d\u00b9 p\u271d) 0 z\u271d x\u271d = Fin.cons z\u271d p\u271d x\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "m\u271d : \u2115\nn\u271d : \u2115\n\u22a2 m\u271d \u2264 n\u271d \u2192 (n\u271d - m\u271d).gcd m\u271d = n\u271d.gcd m\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u03b9\u271d : Type u_3\n\u03b9'\u271d : Type u_4\ninst\u271d\u00b3 : Lattice \u03b1\u271d\ninst\u271d\u00b2 : IsModularLattice \u03b1\u271d\ninst\u271d\u00b9 : OrderBot \u03b1\u271d\ninst\u271d : DecidableEq \u03b9\u271d\ns\u271d : Finset \u03b9'\u271d\ng\u271d : \u03b9'\u271d \u2192 Finset \u03b9\u271d\nf\u271d : \u03b9\u271d \u2192 \u03b1\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "G : Type u_1\ninst\u271d : Group G\nh\u271d : Group.IsNilpotent (G \u29f8 Subgroup.center G)\nh : Group.IsNilpotent (G \u29f8 Subgroup.center G)\nthis : Group.IsNilpotent (G \u29f8 Subgroup.center G)\n\u22a2 False\n\nG : Type u_1\ninst\u271d : Group G\nh\u271d : Group.IsNilpotent (G \u29f8 Subgroup.center G)\nh : Group.IsNilpotent (G \u29f8 Subgroup.center G)\nthis : Group.IsNilpotent (G \u29f8 Subgroup.center G)\n\u22a2 \u2115",
+    "label": "negative"
+  },
+  {
+    "state_pp": "f\u271d : \u2102 \u2192 \u2102\nz\u271d : \u2102\na\u271d : ConformalAt f\u271d z\u271d\n\u22a2 \u2200 U \u2208 nhds 0,\n  \u2203 V \u2208 nhds 0,\n    \u2200 (\u03b5 : NNReal),\n      \u03b5 \u2260 0 \u2192\n        (fun x =>\n            egauge \u2102 U\n              (f\u271d ((starRingEnd \u2102) x) - f\u271d z\u271d -\n                (?mp.left.h.w x - ?mp.left.h.w ((starRingEnd \u2102) z\u271d)))) \u2264\u1da0[nhds ((starRingEnd \u2102) z\u271d)]\n          fun x => \u2191\u03b5 * egauge \u2102 V (x - (starRingEnd \u2102) z\u271d)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u2102\n\u22a2 Complex.cos ?w = x",
+    "label": "negative"
+  },
+  {
+    "state_pp": "K\u271d : Type u\nL\u271d : Type v\nE\u271d : Type z\ninst\u271d : Field K\u271d\n\u22a2 \u2200 [inst : Field L\u271d] [inst_1 : Field E\u271d] [inst_2 : Algebra K\u271d L\u271d] [inst_3 : Algebra K\u271d E\u271d] [Module.Finite K\u271d L\u271d]\n  [IsAlgClosed E\u271d] (pb : PowerBasis K\u271d L\u271d) [Algebra.IsSeparable K\u271d L\u271d] (e : Fin pb.dim \u2243 (L\u271d \u2192\u2090[K\u271d] E\u271d)),\n  (algebraMap K\u271d E\u271d) (Algebra.discr K\u271d \u21d1pb.basis) =\n    \u220f i, \u220f j \u2208 Finset.Ioi i, -(((e j) pb.gen - (e i) pb.gen) * ((e i) pb.gen - (e j) pb.gen))",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\nhp : Fact (Nat.Prime p)\nm : \u2124\n\u22a2 padicNorm p \u2191m = 1 \u2194 (\u2191p)\u207b\u00b9 < padicNorm p \u2191m",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\ninst\u271d\u2074 : NontriviallyNormedField \ud835\udd5c\u271d\nE\u271d : Type u_2\ninst\u271d\u00b3 : NormedAddCommGroup E\u271d\ninst\u271d\u00b2 : NormedSpace \ud835\udd5c\u271d E\u271d\nF\u271d : Type u_3\ninst\u271d\u00b9 : NormedAddCommGroup F\u271d\ninst\u271d : NormedSpace \ud835\udd5c\u271d F\u271d\nf\u271d : E\u271d \u2192 F\u271d\nx\u2080\u271d : E\u271d\nC\u271d : \u211d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\nR\u271d : \u03b1\u271d \u2192 \u03b1\u271d \u2192 Prop\nl\u271d : List \u03b1\u271d\n\u22a2 List.Pairwise R\u271d l\u271d \u2192 \u2200 (i j : Fin l\u271d.length), i < j \u2192 R\u271d l\u271d[\u2191i] l\u271d[\u2191j]",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u03b2\u271d : Type u_3\n\u03b3\u271d : Type u_5\n\u03b4\u271d : Type u_7\nf\u271d : Filter \u03b1\u271d\ng\u271d : Filter \u03b2\u271d\nhf : \u00acFalse\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\nM\u271d : Type u_5\ninst\u271d : CommMonoid M\u271d\nf\u271d : \u03b1\u271d \u2192 M\u271d\np\u271d : \u03b1\u271d \u2192 Prop\nt\u271d : Finset \u03b1\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ninst\u271d : PartialOrder \u03b1\u271d\na : \u03b1\u271d\nl' : List \u03b1\u271d\nHs : (a :: l').SortedGE\n\u03b1 : Fin (a :: l').length\ninst : Fin (a :: l').length\nHnd : a \u2209 l' \u2227 l'.Nodup\nHl : \u03b1 < inst\n\u22a2 (a :: l')[\u2191inst] < (a :: l')[\u2191\u03b1]",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\ninst\u271d\u00b9 : DivisionRing R\ninst\u271d : CharZero R\np : R\nr : R\nn : \u2115\nhn : \u00acn = 0\n\u22a2 \u2191n * r \u2208 AddSubgroup.zmultiples p \u2192 \u2203 k, r - \u2191\u2191k * (p / \u2191n) \u2208 AddSubgroup.zmultiples p\n\nR : Type u_1\ninst\u271d\u00b9 : DivisionRing R\ninst\u271d : CharZero R\np : R\nr : R\nn : \u2115\nhn : n \u2260 0\n\u22a2 (\u2203 k, r - \u2191\u2191k * (p / \u2191n) \u2208 AddSubgroup.zmultiples p) \u2192 \u2191n * r \u2208 AddSubgroup.zmultiples p",
+    "label": "negative"
+  },
+  {
+    "state_pp": "b : \u211d\nhab : \u22a4 \u2260 \u22a4\n\u22a2 False\n\nb : \u211d\na : NNReal\nhab : \u2191a \u2260 \u22a4\n\u22a2 False\n\na : ENNReal\nb : \u211d\nhab : a \u2260 \u22a4\n\u22a2 a.toReal < b \u2192 a < ENNReal.ofReal b",
+    "label": "negative"
+  },
+  {
+    "state_pp": "num : \u2124\nc : num.natAbs = 1\n\u22a2 ?m.158\n\nnum : \u2124\nc\u271d : num.natAbs = 1\nc : ?m.158\n\u22a2 False\n\nnum : \u2124\nc : num.natAbs = 1\nn\u271d : \u2115\n\u22a2 num = (Decidable.rec (fun h => Rat.normalize num 0 h) (fun h => 0) (instDecidableEqNat 0 0)).num\n\nnum : \u2124\nnz : True\nh : True\nden : \u2115\nc : num.natAbs.Coprime (den + 1)\n\u22a2 num = (Decidable.rec (fun h => Rat.normalize num (den + 1) h) (fun h => 0) (instDecidableEqNat (den + 1) 0)).num\n\nnum : \u2124\nden : \u2115\nnz : \u00acden = 0\nc : num.natAbs.Coprime den\n\u22a2 den =\n  (Decidable.rec (fun h => (fun den_nz => Rat.normalize num den den_nz) h)\n      (fun h => (fun den_nz => { num := 0, den_nz := \u22ef, reduced := \u22ef }) h) (instDecidableEqNat den 0)).den",
+    "label": "negative"
+  },
+  {
+    "state_pp": "U\u271d : Set \u211d\na\u271d : U\u271d \u2208 nhds (Real.pi / 2)\n\u22a2 \u2200 (b : \u2115), ?w \u2264 b \u2192 Real.Wallis.W b \u2208 U\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d\nh : \u211d\nh\u2081\u271d : x * 2\u207b\u00b9 = x / 2\nh\u2081 : x * 2\u207b\u00b9 = x / 2\n\u22a2 Real.exp (x * 2\u207b\u00b9) = \u221a(Real.exp x)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "C : Type u_1\nD : Type u_2\ninst\u271d\u00b9 : CategoryTheory.Category.{u_3, u_1} C\ninst\u271d : CategoryTheory.Category.{u_4, u_2} D\nG : CategoryTheory.Functor C D\nF : CategoryTheory.Functor D C\nA : C\nB : C\nX : D\nY : D\ni : A \u27f6 B\np : X \u27f6 Y\nu : A \u27f6 F.obj X\nv : B \u27f6 F.obj Y\nhf : CategoryTheory.CommSq u i (F.map p) v\nadj : G \u22a3 F\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9 : Type v\nM : Type u_1\ninst\u271d\u00b9 : DecidableEq \u03b9\ninst\u271d : AddCommMonoid M\nA : \u03b9 \u2192 AddSubmonoid M\nh : DirectSum.IsInternal A\nx\u271d : M\n\u22a2 x\u271d \u2208 iSup A \u2192 x\u271d \u2208 \u22a4\n\n\u03b9 : Type v\nM : Type u_1\ninst\u271d\u00b9 : DecidableEq \u03b9\ninst\u271d : AddCommMonoid M\nA : \u03b9 \u2192 AddSubmonoid M\nh : DirectSum.IsInternal A\nx\u271d : M\n\u22a2 x\u271d \u2208 \u22a4 \u2192 x\u271d \u2208 iSup A",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h : Type u_1\nl\u271d : List h\nl : \u2115\n\u22a2 False\n\nh : Type u_1\nl\u271d : List h\nl : \u2115\nn\u271d : \u2115\n\u22a2 False\n\nh : Type u_1\nl\u271d : List h\nl : \u2115\nn : \u2115\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case succ\nR : Type u_1\nn\u271d x p : \u2115\nhp : Fact (Nat.Prime p)\nhp1 : Odd p\nhx : \u00acp \u2223 x\nn : \u2115\nhn : Odd n\ny : \u2115\nhxy : p \u2223 x + (y + 1)\n\u22a2 0 < x + (y + 1)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u\n_inst_1 : CommSemiring R\nP : Polynomial R\n\u22a2 ((\u2200 (y : Polynomial R), P * y = 0 \u2192 y = 0) \u2192 \u2203 x, P * x = 0 \u2227 x \u2260 0) \u2192 \u2203 a, a \u2260 0 \u2227 a \u2022 P = 0\n\nR : Type u\n_inst_1 : CommSemiring R\nP : Polynomial R\n\u22a2 (\u2203 a, a \u2260 0 \u2227 a \u2022 P = 0) \u2192 (\u2200 (y : Polynomial R), P * y = 0 \u2192 y = 0) \u2192 \u2203 x, P * x = 0 \u2227 x \u2260 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c : Type u_1\nE : Type u_2\ninst\u271d\u00b3 : Ring \ud835\udd5c\ninst\u271d\u00b2 : PartialOrder \ud835\udd5c\ninst\u271d\u00b9 : AddCommGroup E\ninst\u271d : Module \ud835\udd5c E\nQ : AffineSubspace \ud835\udd5c E\nx\u271d : E\nhx\u271d : E\nx : x\u271d \u2208 Q\nhx : hx\u271d \u2208 Q\na : \ud835\udd5c\nb : \ud835\udd5c\na\u271d\u00b9 : 0 \u2264 a\na\u271d : 0 \u2264 b\nhab : a + b = 1\n\u22a2 a \u2022 x\u271d + b \u2022 hx\u271d \u2208 Q",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ne : Sym2 \u03b1\nh\u271d : True\nh : True\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case h\n\ud835\udd5c : Type u_1\nE : Type u_2\nF : Type u_3\n\ud835\udcd5 : Type u_4\ninst\u271d\u00b3 : NormedAddCommGroup E\ninst\u271d\u00b2 : NormedAddCommGroup F\ninst\u271d\u00b9 : ProperSpace E\ninst\u271d : ProperSpace F\nf\u271d : \ud835\udcd5\nf : E \u2192 F\nh : \u2200 (\u03b5 : \u211d), \u2203 r, \u2200 (x : E), r < \u2016x\u2016 \u2192 \u03b5 < \u2016f x\u2016\ns : Set F\nhs : s \u2208 cocompact F\n\u03b5 : \u211d\nh\u03b5 : (closedBall 0 \u03b5)\u1d9c \u2286 s\nr : \u211d\nhr : \u2200 (x : E), r < \u2016x\u2016 \u2192 \u03b5 < \u2016f x\u2016\nx : E\nhx : r < \u2016x\u2016\n\u22a2 x \u2208 f \u207b\u00b9' s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h_mem\u271d : Type u_1\nh_mem : CancelCommMonoidWithZero h_mem\u271d\ninst\u271d : UniqueFactorizationMonoid h_mem\u271d\na\u271d : h_mem\u271d\na : Associates h_mem\u271d\np : Irreducible a\nhp : \u00aca\u271d = 0\nhz : \u27e8a, p\u27e9 \u2208 Associates.factors' a\u271d\n\u22a2 Associates.mk a\u271d = a * ?w\n\nh_mem\u271d : Type u_1\nh_mem : CancelCommMonoidWithZero h_mem\u271d\ninst\u271d : UniqueFactorizationMonoid h_mem\u271d\na\u271d : h_mem\u271d\na : Associates h_mem\u271d\np : Irreducible a\nhp : \u00aca\u271d = 0\nhz : \u27e8a, p\u27e9 \u2208 Associates.factors' a\u271d\n\u22a2 Associates h_mem\u271d",
+    "label": "negative"
+  },
+  {
+    "state_pp": "E : Type u_1\ninst\u271d\u00b2 : NormedAddCommGroup E\ninst\u271d\u00b9 : InnerProductSpace \u211d E\ninst\u271d : Fact (finrank \u211d E = 2)\no : Orientation \u211d E (Fin 2)\nx y : E\nhx : (o.kahler x) y = 0\n\u22a2 \u2016x\u2016 * \u2016y\u2016 = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "z\u271d : \u2102\n\u22a2 HasSum (fun n => z\u271d ^ (n * 2) * Complex.I ^ (n * 2) * (\u2191(n * 2).factorial)\u207b\u00b9) (Complex.cos z\u271d)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "c : \u211d\nf g : \u2115 \u2192 Bool\nn : \u2115\na b : \u211d\nh : a < b\nh1 : #\u2191((fun x => x - a) '' Ioo a b) \u2264 #\u2191(Ioo a b)\n\u22a2 \ud835\udd20 \u2264 #\u2191(Ioo 0 (b - a))",
+    "label": "positive"
+  },
+  {
+    "state_pp": "n\u271d : \u2115\nguess\u271d : \u2115\n\u22a2 Nat.sqrt.iter n\u271d guess\u271d * Nat.sqrt.iter n\u271d guess\u271d \u2264 n\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d\nthis\u271d : Real.sin x ^ 2 + Real.cos x ^ 2 = 1\nthis : Real.sin x ^ 2 + Real.cos x ^ 2 = 1\nh : Real.sin x ^ 2 + Real.cos x ^ 2 = 1\n\u22a2 Real.cos x ^ 2 \u2264 1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "V\u271d : Type u\nW\u271d : Type v\nG\u271d : SimpleGraph V\u271d\nG'\u271d : SimpleGraph W\u271d\nV : Prop\nthis : Decidable V\nh : \u00acV\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "X\u271d : AlgebraicGeometry.Scheme\nS\u271d : \u2191X\u271d.affineOpens\n\u22a2 \u2200 (U\u2081 U\u2082 : X\u271d.Opens) {n\u2081 n\u2082 : \u2115} {y\u2081 : \u2191(X\u271d.presheaf.obj (Opposite.op U\u2081))} {y\u2082 : \u2191(X\u271d.presheaf.obj (Opposite.op U\u2082))}\n  {f : \u2191(X\u271d.presheaf.obj (Opposite.op (U\u2081 \u2294 U\u2082)))} {x : \u2191(X\u271d.presheaf.obj (Opposite.op (X\u271d.basicOpen f)))}\n  (h\u2081 : \u2191S\u271d \u2264 U\u2081) (h\u2082 : \u2191S\u271d \u2264 U\u2082),\n  TopCat.Presheaf.restrictOpen y\u2081 (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f U\u2081 \u22ef)) \u22ef =\n      TopCat.Presheaf.restrictOpen (TopCat.Presheaf.restrictOpen f U\u2081 \u22ef)\n            (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f U\u2081 \u22ef)) \u22ef ^\n          n\u2081 *\n        TopCat.Presheaf.restrictOpen x (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f U\u2081 \u22ef)) \u22ef \u2192\n    TopCat.Presheaf.restrictOpen y\u2082 (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f U\u2082 \u22ef)) \u22ef =\n        TopCat.Presheaf.restrictOpen (TopCat.Presheaf.restrictOpen f U\u2082 \u22ef)\n              (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f U\u2082 \u22ef)) \u22ef ^\n            n\u2082 *\n          TopCat.Presheaf.restrictOpen x (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f U\u2082 \u22ef)) \u22ef \u2192\n      \u2203 n,\n        \u2200 (m : \u2115),\n          n \u2264 m \u2192\n            TopCat.Presheaf.restrictOpen\n                (TopCat.Presheaf.restrictOpen f U\u2081 \u22ef ^ n\u2082 * TopCat.Presheaf.restrictOpen f U\u2081 \u22ef ^ m * y\u2081) (\u2191S\u271d) h\u2081 =\n              TopCat.Presheaf.restrictOpen\n                (TopCat.Presheaf.restrictOpen f U\u2082 \u22ef ^ n\u2081 * TopCat.Presheaf.restrictOpen f U\u2082 \u22ef ^ m * y\u2082) (\u2191S\u271d) h\u2082",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_1\nR\u271d : Type u_2\ninst\u271d\u00b9 : CommSemiring R\u271d\ninst\u271d : LinearOrder R\u271d\n\u22a2 \u2200 [IsStrictOrderedRing R\u271d] [ExistsAddOfLE R\u271d] (s : Finset \u03b9\u271d) (f g : \u03b9\u271d \u2192 R\u271d),\n  (\u2211 i \u2208 s, f i * g i) ^ 2 \u2264 (\u2211 x \u2208 s, f x ^ 2) * \u2211 x \u2208 s, g x ^ 2",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d*\ny : \u211d*\nhx : x.InfiniteNeg\nhy : \u00acy.Infinitesimal\nhy\u2080 : y < 0\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "k : \u2115\nhk : k \u2260 0\nx : \u211d\nhx : x \u2208 Icc 0 1\n\u22a2 2 \u2264 2 * k + 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case intro.intro.intro.refine_2\nF : Type u_1\ninst\u271d\u00b9 : NormedAddCommGroup F\ninst\u271d : NormedSpace \u211d F\nf : \u211d \u2192 F\nK : Set F\nx : \u211d\nhx : x \u2208 {x | DifferentiableWithinAt \u211d f (Ici x) x \u2227 derivWithin f (Ici x) x \u2208 K}\ne : \u2115\nthis : 0 < (1 / 2) ^ e\nR : \u211d\nR_pos : R > 0\nhR : \u2200 r \u2208 Ioo 0 R, x \u2208 A f (derivWithin f (Ici x) x) r ((1 / 2) ^ e)\nn : \u2115\nhn : (1 / 2) ^ n < R\np : \u2115\nhp : p \u2265 n\nq : \u2115\nhq : q \u2265 n\n\u22a2 (1 / 2) ^ q \u2264 (1 / 2) ^ n",
+    "label": "positive"
+  },
+  {
+    "state_pp": "M\u271d : Type w\nA\u271d : Set M\u271d\nL\u271d : FirstOrder.Language\ninst\u271d : L\u271d.Structure M\u271d\n\u03b1\u271d : Type u\u2081\n\u03b2\u271d : Type u_1\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h : Type u \u2192 Type v\n\u22a2 \u2200 [q : QPF h] (x y : (QPF.P h).W), QPF.Wequiv x y \u2192 QPF.Wequiv y x",
+    "label": "negative"
+  },
+  {
+    "state_pp": "s : \u2102\nhX : 0 < s.re\nX\u271d : \u211d\nhX\u2080\u271d : s = 0\nhX\u2080 : s \u2260 0\n\u22a2 0 \u2264 X\u271d \u2192 Complex.partialGamma 1 X\u271d = -Complex.exp (-\u2191X\u271d)\n\ns : \u2102\nhX : 0 < s.re\nX\u271d : \u211d\nhX\u2080 : \u00acs = 0\n\u22a2 0 \u2264 X\u271d \u2192 (1 + s).partialGamma X\u271d = s * s.partialGamma X\u271d - \u2191(Real.exp (-X\u271d)) * \u2191X\u271d ^ s",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d : Group \u03b1\nh : \u00acIsCyclic \u03b1\n\u22a2 \u00ac1 = ?exists_pair_ne.w\n\n\u03b1 : Type u_1\ninst\u271d : Group \u03b1\nh : \u00acIsCyclic \u03b1\n\u22a2 \u03b1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "C\u271d : Type u\ninst\u271d\u00b9 : CategoryTheory.Category.{v, u} C\u271d\ninst\u271d : CategoryTheory.Preadditive C\u271d\nK\u271d : CochainComplex C\u271d \u2124\n\u22a2 \u2200 {L : CochainComplex C\u271d \u2124} (n m : \u2124) {D : Type u_2} [inst : CategoryTheory.Category.{u_3, u_2} D]\n  [inst_1 : CategoryTheory.Preadditive D] (z : CochainComplex.HomComplex.Cochain K\u271d L n)\n  (\u03a6 : CategoryTheory.Functor C\u271d D) [inst_2 : \u03a6.Additive],\n  CochainComplex.HomComplex.\u03b4 n m (z.map \u03a6) = (CochainComplex.HomComplex.\u03b4 n m z).map \u03a6",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\n\u22a2 \u2200 {p : \u211d},\n  p \u2260 0 \u2192\n    (fun x => |deriv (fun z => z ^ p + z ^ p * AkraBazziRecurrence.smoothingFn z) x|) =\u0398[Filter.atTop] fun z =>\n      z ^ (-1 + p)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "p : \u2115\nR : Type u_1\nhp : Fact (Nat.Prime p)\ninst\u271d : CommRing R\nx : WittVector p R\nhx : x \u2260 0\n\u22a2 False\n\np : \u2115\nR : Type u_1\nhp : Fact (Nat.Prime p)\ninst\u271d : CommRing R\nx : WittVector p R\nhx : x \u2260 0\n\u22a2 \u2115",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : \u2102\ny : \u2102\nthis : (x + y) * 2\u207b\u00b9 = x * 2\u207b\u00b9 + y * 2\u207b\u00b9\n\u22a2 Complex.sin x + (Complex.sin y - Complex.sin (x * 2\u207b\u00b9 + y * 2\u207b\u00b9) * Complex.cos (x * 2\u207b\u00b9 + -(y * 2\u207b\u00b9)) * 2) = 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "X : Type u_1\nR : Type u_2\ninst\u271d\u00b3 : TopologicalSpace X\ninst\u271d\u00b2 : Semiring R\ninst\u271d\u00b9 : TopologicalSpace R\ninst\u271d : IsTopologicalSemiring R\nI : Ideal C(X, R)\nS : Set X\n\u22a2 ContinuousMap.setOfIdeal I \u2264 S \u2192 I \u2264 ContinuousMap.idealOfSet R S\n\nX : Type u_1\nR : Type u_2\ninst\u271d\u00b3 : TopologicalSpace X\ninst\u271d\u00b2 : Semiring R\ninst\u271d\u00b9 : TopologicalSpace R\ninst\u271d : IsTopologicalSemiring R\nI : Ideal C(X, R)\nS : Set X\n\u22a2 I \u2264 ContinuousMap.idealOfSet R S \u2192 ContinuousMap.setOfIdeal I \u2264 S",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u\n\u03c3 : Type u_1\ninst\u271d : CommSemiring R\ni : \u03c3\ne : \u2115\nr : R\na\u271d : \u03c3\nhe : \u00ace = 0\nhr : \u00acr = 0\n\u22a2 (fun\u2080 | i => e) a\u271d \u2260 0 \u2192 a\u271d = i\n\nR : Type u\n\u03c3 : Type u_1\ninst\u271d : CommSemiring R\ni : \u03c3\ne : \u2115\nr : R\nhe : e \u2260 0\nhr : r \u2260 0\na\u271d : \u03c3\n\u22a2 a\u271d \u2208 {i} \u2192 a\u271d \u2208 (fun\u2080 | i => e).support",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9 : Type u_1\nX : Type u_2\ninst\u271d : EMetricSpace X\nK U : \u03b9 \u2192 Set X\nhK : \u2200 (i : \u03b9), IsClosed (K i)\nhU : \u2200 (i : \u03b9), IsOpen (U i)\nhKU : \u2200 (i : \u03b9), K i \u2286 U i\nhfin : LocallyFinite K\nx : X\nthis : \u2200 (i : \u03b9), x \u2208 K i \u2192 \u2200\u1da0 (p : \u211d\u22650\u221e \u00d7 X) in \ud835\udcdd 0 \u00d7\u02e2 \ud835\udcdd x, closedBall p.2 p.1 \u2286 U i\n\u22a2 \u2200\u1da0 (p : \u211d\u22650\u221e \u00d7 X) in \ud835\udcdd 0 \u00d7\u02e2 \ud835\udcdd x, \u2200 (i : \u03b9), p.2 \u2208 K i \u2192 closedBall p.2 p.1 \u2286 U i",
+    "label": "positive"
+  },
+  {
+    "state_pp": "k1 : \u2124\nk2 : \u2124\nA\u271d : Matrix.SpecialLinearGroup (Fin 2) \u2124\nf : UpperHalfPlane \u2192 \u2102\ng : UpperHalfPlane \u2192 \u2102\nx\u271d : UpperHalfPlane\nA : Matrix.SpecialLinearGroup (Fin 2) \u2124\nA_1 : Matrix (Fin 2) (Fin 2) \u2124\nA_2 : A_1.det = 1\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\n\u22a2 \u2200 {G : Type u_2} [inst : CommRing R\u271d] [IsDomain R\u271d] [inst_2 : Group G] [inst_3 : Fintype G] (f : G \u2192* R\u271d),\n  f \u2260 1 \u2192 \u2211 g, f g = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case neg\nR : Type u_1\ninst\u271d\u00b2 : CommRing R\ninst\u271d\u00b9 : IsDomain R\ninst\u271d : NormalizedGCDMonoid R\np : R[X]\nh : p.natDegree \u2208 p.support\ni : \u2115\nhi : i \u2260 p.natDegree \u2227 i \u2208 p.support\n\u22a2 p.coeff i = p.eraseLead.coeff i",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p' : \u2115\nh : lucasLehmerResidue (p' + 2) = 0\n\u22a2 (LucasLehmer.X.\u03c9 ^ (2 ^ p' * 2)).1 = -1 + (LucasLehmer.X.\u03c9 ^ 2 ^ p').1 * \u2191?w * \u2191(mersenne (2 + p'))\n\np' : \u2115\nh : lucasLehmerResidue (p' + 2) = 0\n\u22a2 (LucasLehmer.X.\u03c9 ^ (2 ^ p' * 2)).2 = (-1 + LucasLehmer.X.\u03c9 ^ 2 ^ p' * \u2191?w * \u2191(mersenne (2 + p'))).2\n\np' : \u2115\nh : lucasLehmerResidue (p' + 2) = 0\n\u22a2 \u2124",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u\n\u22a2 \u2200 [inst : NontriviallyNormedField \ud835\udd5c\u271d] {x : \ud835\udd5c\u271d}, deriv (fun x => x\u207b\u00b9) x = -x\u207b\u00b9 ^ 2",
+    "label": "negative"
+  },
+  {
+    "state_pp": "G : Type u_1\ninst\u271d : Group G\nh : Group.IsNilpotent (G \u29f8 Subgroup.center G)\n\u22a2 False\n\nG : Type u_1\ninst\u271d : Group G\nh : Group.IsNilpotent (G \u29f8 Subgroup.center G)\n\u22a2 \u2115",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case mpr.inl.intro\n\u03b9 : Type u\n\u03b3 : Type w\n\u03b2 : \u03b9 \u2192 Type v\n\u03b2\u2081 : \u03b9 \u2192 Type v\u2081\n\u03b2\u2082 : \u03b9 \u2192 Type v\u2082\ninst\u271d\u00b9 : DecidableEq \u03b9\ninst\u271d : (i : \u03b9) \u2192 Zero (\u03b2 i)\ns : Finset \u03b9\nx : (i : \u2191\u2191s) \u2192 \u03b2 \u2191i\ni\u271d i : \u03b9\nxi xj : \u03b2 i\nhxi : HEq xi xj\n\u22a2 single i xi = single i xj",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u22a2 \u2200 [inst : DecidableEq \u03b1\u271d] {x : \u03b1\u271d} {s : Finset \u03b1\u271d},\n  x \u2209 s \u2192\n    \u2200 (n : \u2115),\n      Finset.powersetCard (n + 1) (insert x s) =\n        Finset.powersetCard (n + 1) s \u222a Finset.image (insert x) (Finset.powersetCard n s)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\ns\u2081 : Stream' \u03b1\ns\u2082 : Stream' \u03b1\nH\u2081 : s\u2081.head = s\u2082.head\nH\u2082\u271d : s\u2081 = s\u2081.tail\nH\u2083 : s\u2082 = s\u2082.tail\nH\u2082 : s\u2081 = s\u2081.tail\nn\u271d : \u2115\n\u22a2 s\u2081.get n\u271d = s\u2082.get n\u271d",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_1\nM\u271d : \u03b9\u271d \u2192 Type u_2\ninst\u271d : (i : \u03b9\u271d) \u2192 Monoid (M\u271d i)\nmotive\u271d : Monoid.CoprodI M\u271d \u2192 Prop\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "A : Type u_1\ninst\u271d\u2075 : NormedRing A\ninst\u271d\u2074 : NormedAlgebra \u2102 A\ninst\u271d\u00b3 : CompleteSpace A\ninst\u271d\u00b2 : StarRing A\ninst\u271d\u00b9 : CstarRing A\ninst\u271d : StarModule \u2102 A\na : A\nha : IsSelfAdjoint a\nz : \u2102\nhz : z \u2208 spectrum \u2102 a\nhu : NormedSpace.exp \u2102 (I \u2022 a) \u2208 unitary A\nIu : \u2102\u02e3 := Units.mk0 I I_ne_zero\n\u22a2 z = \u2191z.re",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9 : Type u_1\ninst\u271d : DecidableEq \u03b9\nM\u271d : Type u_9\ni : One M\u271d\nx : \u03b9\nj\u271d : M\u271d\nj : \u03b9\n\u22a2 Pi.mulSingle x j\u271d j = Pi.mulSingle j j\u271d x",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nx : \u03b1\na : \u03b1\nas : List \u03b1\nih : (List.permutations'Aux x as).Nodup \u2194 x \u2209 as\nh\u271d : x = a\n\u22a2 False\n\n\u03b1 : Type u_1\nx : \u03b1\na : \u03b1\nas : List \u03b1\nih : (List.permutations'Aux x as).Nodup \u2194 x \u2209 as\nh\u271d : x \u2260 a\n\u22a2 (a :: as \u2208 List.permutations'Aux x as \u2192 \u00aca = x) \u2227 (List.map (List.cons a) (List.permutations'Aux x as)).Nodup \u2194 x \u2209 as",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u\nt\u271d : TopologicalSpace \u03b1\u271d\n\u03b9\u271d : Sort u_2\nU\u271d : \u03b9\u271d \u2192 Set \u03b1\u271d\nUo\u271d : \u2200 (i : \u03b9\u271d), IsOpen (U\u271d i)\n\u22a2 \u22c3 i, U\u271d i = Set.univ \u2192\n  \u2200 {b : (i : \u03b9\u271d) \u2192 Set (Set \u2191(U\u271d i))},\n    (\u2200 (i : \u03b9\u271d), TopologicalSpace.IsTopologicalBasis (b i)) \u2192\n      TopologicalSpace.IsTopologicalBasis (\u22c3 i, Set.image Subtype.val '' b i)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x\u271d : Type u_1\nhx\u271d : Type u_2\ny\u271d : Type u_3\nhy\u271d : Semiring x\u271d\na\u271d : PartialOrder x\u271d\nb\u271d : AddCommMonoid hx\u271d\nha\u271d : AddCommMonoid y\u271d\nhb\u271d : Module x\u271d hx\u271d\nhab\u271d : Module x\u271d y\u271d\nx : Set y\u271d\nhx : Convex x\u271d x\ny : hx\u271d \u2192\u2097[x\u271d] y\u271d\nhy : hx\u271d\na : hy \u2208 \u21d1y \u207b\u00b9' x\nb : hx\u271d\nha : b \u2208 \u21d1y \u207b\u00b9' x\nhb : x\u271d\nhab : x\u271d\n\u22a2 0 \u2264 hb \u2192 0 \u2264 hab \u2192 hb + hab = 1 \u2192 hb \u2022 hy + hab \u2022 b \u2208 \u21d1y \u207b\u00b9' x",
+    "label": "negative"
+  },
+  {
+    "state_pp": "a\u271d : Ordinal.{u}\nb\u271d : Ordinal.{u}\nha\u271d : a\u271d \u2260 0\n\u22a2 Ordinal.Principal (fun x1 x2 => x1 * x2) b\u271d \u2192 2 < b\u271d \u2192 a\u271d * b\u271d = b\u271d ^ Order.succ (Ordinal.log b\u271d a\u271d)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ninst\u271d : DecidableEq \u03b1\u271d\ns\u271d : Finset \u03b1\u271d\nm\u271d : \u2115\na\u271d : \u2115\nb\u271d : \u2115\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {\u03b1 : Type u_1} (m : MeasureTheory.OuterMeasure \u03b1) {s : \u2115 \u2192 Set \u03b1},\n  (\u2200 (n : \u2115), s n \u2286 s (n + 1)) \u2192 \u00ac\u2211' (k : \u2115), m (s (k + 1) \\ s k) = \u22a4 \u2192 m (\u22c3 n, s n) = \u2a06 n, m (s n)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case h\nR : Type u_1\ninst\u271d\u00b2 : CommRing R\ninst\u271d\u00b9 : IsDomain R\ninst\u271d : NormalizedGCDMonoid R\np q : R[X]\n\u22a2 C p.leadingCoeff \u2223 (p * q).eraseLead - p.eraseLead * q",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x\u271d : \u211d\nh\u2080 : 0 < 1\n\u22a2 (Nat.succ 2).le 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "V : Type u_1\ninst\u271d\u00b9 : NormedAddCommGroup V\ninst\u271d : InnerProductSpace \u211d V\nx : V\ny : V\nh : inner \u211d x y = 0\nthis : Real.cos (InnerProductGeometry.angle x (x + y)) = \u2016x\u2016 / \u2016x + y\u2016\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_4\n\u03b2 : Type u_5\nr : \u03b1 \u2192 \u03b2 \u2192 Prop\ninst\u271d : (a : \u03b1) \u2192 DecidablePred (r a)\ns\u2081 : Finset \u03b1\ns\u2082 : Finset \u03b1\nt\u2081 : Finset \u03b2\nt\u2082 : Finset \u03b2\nh_s : s\u2082 \u2286 s\u2081\nh_t : t\u2082 \u2286 t\u2081\nh_s\u2081 : s\u2082.Nonempty\nh_t\u2081 : t\u2082.Nonempty\na : \u03b1\nha : a \u2208 s\u2082\n\u22a2 \u2191s\u2082.card * (\u2191s\u2081.card)\u207b\u00b9 * \u2191t\u2082.card * (\u2191t\u2081.card)\u207b\u00b9 * Rel.edgeDensity r s\u2082 t\u2082 \u2264 Rel.edgeDensity r s\u2081 t\u2081",
+    "label": "negative"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\ninst\u271d\u00b2 : MeasurableSpace G\u271d\ninst\u271d\u00b9 : Group G\u271d\ninst\u271d : MeasurableMul\u2082 G\u271d\n\u22a2 \u2200 (\u03bc : MeasureTheory.Measure G\u271d) [MeasureTheory.SFinite \u03bc] [MeasurableInv G\u271d] [\u03bc.IsMulLeftInvariant],\n  MeasureTheory.Measure.QuasiMeasurePreserving Inv.inv \u03bc \u03bc",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case intro.intro.intro.intro\np : \u2115\nhp\u271d : Fact (Nat.Prime p)\nk : Type u_1\ninst\u271d\u00b9 : Field k\ninst\u271d : CharP k p\nhp : \u00acIsUnit \u2191p\nb : \ud835\udd4e k\nhb0 : b \u2260 0\nm : \u2115\na : \ud835\udd4e k\nha : a.coeff 0 \u2260 0\nhab : \u2191p = (\u21d1verschiebung)^[m] a * b\nha0 : (\u21d1verschiebung)^[m] a \u2260 0\n\u22a2 IsUnit ((\u21d1verschiebung)^[m] a) \u2228 IsUnit b",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_2\ninst\u271d\u00b9 : CommSemiring \u03b1\ninst\u271d : DecidableEq \u03b1\ns : Multiset \u03b1\nn\u271d : \u2115\nn : Set \u03b1\n\u22a2 (n \u2208 Set.range fun s_1 => \u22c2 (_ : s_1 \u2208 {p | \u2191(Multiset.map (fun x => x * x ^ n\u271d) s).toFinset \u2286 \u2191p}), \u2191s_1) \u2192 s.sum \u2208 n",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_4\n\u03c0\u271d : \u03b9\u271d \u2192 Type u\ni\u271d : \u03b9\u271d\ninst\u271d\u00b2 : DecidableEq \u03b9\u271d\ninst\u271d\u00b9 : (i : \u03b9\u271d) \u2192 PartialOrder (\u03c0\u271d i)\ninst\u271d : (i : \u03b9\u271d) \u2192 OrderBot (\u03c0\u271d i)\na\u271d : \u03c0\u271d i\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d : DecidableEq \u03b1\nl : List \u03b1\nl' : List \u03b1\na : \u03b1\nh : \u00ac(List.zipWith Equiv.swap l l').prod a = a\n\u22a2 a \u2208 l",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ninst\u271d : DecidableEq \u03b1\u271d\na\u271d : \u03b1\u271d\n\u22a2 \u2200 {s : Finset \u03b1\u271d}, a\u271d \u2209 s \u2192 {a\u271d} \u2229 s = \u2205",
+    "label": "positive"
+  },
+  {
+    "state_pp": "i : Type u_1\nj : Type u_2\n\u22a2 \u2200 [inst : Field i] [inst_1 : CommRing j] [inst_2 : Algebra i j] {R : Type u_3} [inst_3 : CommRing R]\n  [inst_4 : Algebra R j] [inst_5 : Algebra R i] [IsScalarTower R i j] {B B' : PowerBasis i j} {P : Polynomial R},\n  (Polynomial.aeval B.gen) P = B'.gen \u2192\n    IsIntegral R B.gen \u2192\n      minpoly i B.gen = Polynomial.map (algebraMap R i) (minpoly R B.gen) \u2192\n        \u2200 (i_1 : Fin B.dim) (j_1 : Fin B'.dim), IsIntegral R (B.basis.toMatrix (fun i_2 => B'.gen ^ \u2191i_2) i_1 j_1)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "n\u271d : \u2115\ninst\u271d\u2074 : NeZero n\u271d\nA\u271d : Type u\nB\u271d : Type v\ninst\u271d\u00b3 : CommRing A\u271d\ninst\u271d\u00b2 : CommRing B\u271d\ninst\u271d\u00b9 : Algebra A\u271d B\u271d\ninst\u271d : IsDomain B\u271d\nh\u271d : IsCyclotomicExtension {n\u271d} A\u271d B\u271d\n\u22a2 \u22a4.FG",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x\u2081 : SetTheory.PGame\nx\u2082 : SetTheory.PGame\nx\u2083 : SetTheory.PGame\ny\u2081 : SetTheory.PGame\ny\u2082 : SetTheory.PGame\ny\u2083 : SetTheory.PGame\nh\u2081 : x\u2081 \u2248 x\u2083\nh\u2082 : Surreal.Multiplication.P2 x\u2081 x\u2083 y\u2081\nh\u2083 : Surreal.Multiplication.P2 x\u2081 x\u2083 y\u2083\nh\u2084 : Surreal.Multiplication.P3 x\u2081 x\u2082 y\u2082 y\u2083\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {V : Type u} [inst : Fintype V] {G : SimpleGraph V} [inst_1 : DecidableRel G.Adj] {n k \u2113 \u03bc : \u2115}\n  [inst_2 : DecidableEq V], G.IsSRGWith n k \u2113 \u03bc \u2192 G\u1d9c.IsRegularOfDegree (n - k - 1)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "E\u271d : Type u\ninst\u271d\u00b2 : NormedAddCommGroup E\u271d\ninst\u271d\u00b9 : NormedSpace \u2102 E\u271d\ninst\u271d : CompleteSpace E\u271d\nR\u271d : \u211d\nc\u271d : \u2102\nw\u271d : \u2102\nf\u271d : \u2102 \u2192 E\u271d\ns\u271d : Set \u2102\nhs\u271d : s\u271d.Countable\n\u22a2 dist w\u271d c\u271d < R\u271d \u2192\n  w\u271d \u2209 s\u271d \u2192\n    ContinuousOn f\u271d (Metric.closedBall c\u271d R\u271d) \u2192\n      (\u2200 (x : \u2102), dist x c\u271d < R\u271d \u2192 x \u2209 s\u271d \u2192 DifferentiableAt \u2102 f\u271d x) \u2192\n        \u222e (z : \u2102) in C(c\u271d, R\u271d), (z - w\u271d)\u207b\u00b9 \u2022 f\u271d z = (2 * \u2191Real.pi * Complex.I) \u2022 f\u271d w\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\nthis : Fact (Nat.Prime 2)\n\u22a2 ?m.35\n\np : \u2115\nthis\u271d : Fact (Nat.Prime 2)\nthis : ?m.35\n\u22a2 False\n\np\u271d : \u2115\nthis : Fact (Nat.Prime 2)\np : \u2115\n\u22a2 False\n\np : \u2115\nthis : Fact (Nat.Prime 2)\n\u22a2 Sort ?u.38666",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : SetTheory.PGame\ny : SetTheory.PGame\nh : y \u2264 x\n\u22a2 False\n\nx : SetTheory.PGame\ny : SetTheory.PGame\nh : x \u2264 y\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\ninst\u271d\u2075 : CommRing R\u271d\nK\u271d : Type u_2\ninst\u271d\u2074 : Field K\u271d\ninst\u271d\u00b3 : Algebra R\u271d K\u271d\ninst\u271d\u00b2 : IsFractionRing R\u271d K\u271d\ninst\u271d\u00b9 : IsDomain R\u271d\ninst\u271d : NormalizedGCDMonoid R\u271d\np\u271d : Polynomial K\u271d\n\u22a2 p\u271d \u2260 0 \u2192 IsUnit (IsLocalization.integerNormalization (nonZeroDivisors R\u271d) p\u271d).primPart \u2192 IsUnit p\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "m\u271d : Type u_1 \u2192 Type u_2\n\u03b1\u271d : Type u_3\n\u03b2\u271d : Type u_1\ninst\u271d\u00b9 : Monad m\u271d\ninst\u271d : LawfulMonad m\u271d\nas\u271d : Array \u03b1\u271d\nf\u271d : \u2115 \u2192 \u03b1\u271d \u2192 m\u271d \u03b2\u271d\np\u271d : (i : \u2115) \u2192 \u03b2\u271d \u2192 i < as\u271d.size \u2192 Prop\nmotive\u271d : \u2115 \u2192 Prop\nh0\u271d : motive\u271d 0\n\u22a2 (\u2200 (i : \u2115) (h : i < as\u271d.size), motive\u271d i \u2192 SatisfiesM (fun x => p\u271d i x h \u2227 motive\u271d (1 + i)) (f\u271d i as\u271d[i])) \u2192\n  SatisfiesM (fun arr => motive\u271d as\u271d.size \u2227 \u2203 (eq : arr.size = as\u271d.size), \u2200 (i : \u2115) (h : i < as\u271d.size), p\u271d i arr[i] h)\n    (Array.mapIdxM f\u271d as\u271d)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "o : Ordinal.{u}\nf : (a : Ordinal.{u}) \u2192 a < o \u2192 Ordinal.{max u v}\nhf : o.bsup f = o.blsub f\na : Ordinal.{max u v}\nha : a < o.blsub f\n\u22a2 Order.succ a < o.blsub f\n\no : Ordinal.{u}\nf : (a : Ordinal.{u}) \u2192 a < o \u2192 Ordinal.{max u v}\n\u22a2 (\u2200 a < o.blsub f, Order.succ a < o.blsub f) \u2192 o.bsup f = o.blsub f",
+    "label": "negative"
+  },
+  {
+    "state_pp": "s\u271d : Finset \u2115\nm\u271d : \u2115\n\u22a2 \u2200 {k : \u2115}, m\u271d \u2208 Nat.factoredNumbers s\u271d \u2192 k \u2223 m\u271d \u2192 k \u2208 Nat.factoredNumbers s\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u\ninst\u271d\u00b9 : CommRing R\ninst\u271d : IsDomain R\np : Polynomial R\na : R\nh : \u00acp.degree = 0\nh0\u271d : p.degree \u2260 0\nh0 : p.degree \u2260 0\nhlt : p.degree < 0\n\u22a2 False\n\nR : Type u\ninst\u271d\u00b9 : CommRing R\ninst\u271d : IsDomain R\np : Polynomial R\na : R\nh : \u00acp.degree = 0\nh0\u271d : p.degree \u2260 0\nh0 : p.degree \u2260 0\nhgt : 0 < p.degree\n\u22a2 p.degree = 0",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d : Preorder \u03b1\no : Ordering\na : \u03b1\nb : \u03b1\nh : o.Compares a b\n\u22a2 \u00aco = Ordering.lt \u2192 b \u2264 a\n\n\u03b1 : Type u_1\ninst\u271d : Preorder \u03b1\no : Ordering\na : \u03b1\nb : \u03b1\nh : o.Compares a b\n\u22a2 b \u2264 a \u2192 o \u2260 Ordering.lt",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x : Type u_1\nhx : Type u_2\ninst\u271d\u00b2 : Ring x\ninst\u271d\u00b9 : AddCommGroup hx\ninst\u271d : Module x hx\ns\u271d : Set hx\na\u271d : hx\n\u22a2 a\u271d \u2208 spanPoints x s\u271d \u2192 a\u271d \u2208 Submodule.span x s\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case isFalse.isFalse\ni : Nat\narr : Array UFNode\nh\u271d\u00b9 : \u00aci < arr.size + 1\nh\u271d : \u00aci < arr.size\n\u22a2 i = i",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c : Type u_1\ninst\u271d\u00b3 : NontriviallyNormedField \ud835\udd5c\nE : Type u_2\ninst\u271d\u00b2 : AddCommGroup E\ninst\u271d\u00b9 : Module \ud835\udd5c E\ninst\u271d : TopologicalSpace E\nx : E\ny : E\ns : Set E\nr : \ud835\udd5c\nhne\u271d : r \u2260 0\nhlt\u271d : \u2016r\u2016 < 1\nn : \u2115\nhn\u271d : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\nhne : \u00acr = 0\nhlt : \u2016r\u2016 < 1\nhn : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\n\u22a2 False\n\n\ud835\udd5c : Type u_1\ninst\u271d\u00b3 : NontriviallyNormedField \ud835\udd5c\nE : Type u_2\ninst\u271d\u00b2 : AddCommGroup E\ninst\u271d\u00b9 : Module \ud835\udd5c E\ninst\u271d : TopologicalSpace E\nx : E\ny : E\ns : Set E\nr : \ud835\udd5c\nhne\u271d : r \u2260 0\nhlt\u271d : \u2016r\u2016 < 1\nn : \u2115\nhn\u271d : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\nhne : \u00acr = 0\nhlt : \u2016r\u2016 < 1\nhn : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\n\u22a2 \u2115\n\n\ud835\udd5c : Type u_1\ninst\u271d\u00b3 : NontriviallyNormedField \ud835\udd5c\nE : Type u_2\ninst\u271d\u00b2 : AddCommGroup E\ninst\u271d\u00b9 : Module \ud835\udd5c E\ninst\u271d : TopologicalSpace E\nx : E\ny : E\ns : Set E\nr : \ud835\udd5c\nhne\u271d : r \u2260 0\nhlt\u271d : \u2016r\u2016 < 1\nn : \u2115\nhn\u271d : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\nhne : \u00acr = 0\nhlt : \u2016r\u2016 < 1\nhn : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\n\u22a2 Filter.Tendsto ?w Filter.atTop (Bornology.cobounded \ud835\udd5c) \u2227 Filter.Tendsto (fun n => ?w n \u2022 ?h.w n) Filter.atTop (nhds y)\n\n\ud835\udd5c : Type u_1\ninst\u271d\u00b3 : NontriviallyNormedField \ud835\udd5c\nE : Type u_2\ninst\u271d\u00b2 : AddCommGroup E\ninst\u271d\u00b9 : Module \ud835\udd5c E\ninst\u271d : TopologicalSpace E\nx : E\ny : E\ns : Set E\nr : \ud835\udd5c\nhne\u271d : r \u2260 0\nhlt\u271d : \u2016r\u2016 < 1\nn : \u2115\nhn\u271d : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\nhne : \u00acr = 0\nhlt : \u2016r\u2016 < 1\nhn : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\n\u22a2 \u2115 \u2192 E\n\n\ud835\udd5c : Type u_1\ninst\u271d\u00b3 : NontriviallyNormedField \ud835\udd5c\nE : Type u_2\ninst\u271d\u00b2 : AddCommGroup E\ninst\u271d\u00b9 : Module \ud835\udd5c E\ninst\u271d : TopologicalSpace E\nx : E\ny : E\ns : Set E\nr : \ud835\udd5c\nhne : r \u2260 0\nhlt : \u2016r\u2016 < 1\nn : \u2115\nhn : \u2200 (b : \u2115), n \u2264 b \u2192 x + r ^ b \u2022 y \u2208 s\n\u22a2 \u2115 \u2192 \ud835\udd5c",
+    "label": "negative"
+  },
+  {
+    "state_pp": "n : \u2115\nhn1 : n \u2260 1\nhn0 : \u00acn = 0\nhn : 1 < n\nhp : X ^ n - X - 1 = trinomial 0 1 n (-1) (-1) 1\nz : \u2102\nh1 : z ^ n = z + 1\nh2 : 1 * z ^ 0 * z + -1 * (z + 1) + -1 * (z + 1) * z = 0\n\u22a2 z + 1 + z ^ 2 = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_4\n\u03b2\u271d : Type u_5\n\u22a2 \u2200 (r : \u03b1\u271d \u2192 \u03b2\u271d \u2192 Prop) [inst : (a : \u03b1\u271d) \u2192 DecidablePred (r a)] {s : Finset \u03b1\u271d} {t : Finset \u03b2\u271d} [inst_1 : DecidableEq \u03b1\u271d]\n  [inst_2 : DecidableEq \u03b2\u271d] (P : Finpartition s) (Q : Finpartition t),\n  (Rel.interedges r s t).card = \u2211 ab \u2208 P.parts \u00d7\u02e2 Q.parts, (Rel.interedges r ab.1 ab.2).card",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d\nhx : 0 < x\na : \u211d\nh1 : I * \u2191(1 / x) = -1 / (I * \u2191x)\nhx' : I * \u2191x \u2260 0\n\u22a2 \u2191a * I * \u2191x = \u2191a * (I * \u2191x)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\ninst\u271d : Semiring R\u271d\nP\u271d : Polynomial R\u271d\na\u271d : IsNilpotent P\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : ENNReal\ny : \u211d\nhy : 0 \u2264 y\nh : x ^ y = \u22a4\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "s : Set \u211d\na : \u211d\nh\u2080 : BddAbove s\nh\u2081 : s.Nonempty\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nc : Set (Set \u03b1)\nh\u2080 : \u22c3\u2080 c = Set.univ\nh\u2081 : c.PairwiseDisjoint id\na : \u03b1\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d : DivisionRing \u03b1\na : \u03b1\nnb : \u2115\nnum : \u2124\nden : \u2115\nb : \u2115\nh\u2082 : Mathlib.Meta.NormNum.IsRat 1 num den\nc : b = 0 \u2227 nb = 0\n\u22a2 False\n\n\u03b1 : Type u_1\ninst\u271d : DivisionRing \u03b1\na : \u03b1\nnb : \u2115\nnum : \u2124\nden : \u2115\nh\u2082 : Mathlib.Meta.NormNum.IsRat (a ^ nb)\u207b\u00b9 num den\na\u271d : \u2115\nc : Int.negSucc a\u271d = \u2191(Int.negOfNat nb)\n\u22a2 a ^ Int.negSucc a\u271d = \u2191num * \u215f\u2191den",
+    "label": "negative"
+  },
+  {
+    "state_pp": "f : \u211d \u2192 \u211d\nhf : AkraBazziRecurrence.GrowsPolynomially f\nb : \u211d\nhf' : \u2200 (x : \u211d), \u2203 x_1, x \u2264 x_1 \u2227 0 < f x_1\nh : -1 \u2264 b\n\u22a2 0 \u2264 f b",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_4\nf\u271d : \u03b9\u271d \u2192 Ordinal.{max u_5 u_4}\na\u271d : iSup f\u271d = Ordinal.lsub f\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\n\u03b2 : Type u_2\nG : Type u_3\n\ud835\udcd5 : Filter \u03b1\ninst\u271d\u00b9 : NormedAddCommGroup G\ninst\u271d : CompleteSpace G\nf : \u03b1 \u2192 \u03b2 \u2192 G\ng : \u03b2 \u2192 G\nbound : \u03b2 \u2192 \u211d\nh_sum : Summable bound\nhab : \u2200 (k : \u03b2), Tendsto (fun x => f x k) \ud835\udcd5 (\ud835\udcdd (g k))\nh_bound : \u2200\u1da0 (n : \u03b1) in \ud835\udcd5, \u2200 (k : \u03b2), \u2016f n k\u2016 \u2264 bound k\nh\u271d\u00b9 : Nonempty \u03b2\nh\u271d : \ud835\udcd5.NeBot\nh_g_le : \u2200 (k : \u03b2), \u2016g k\u2016 \u2264 bound k\nh_sumg : Summable fun x => \u2016g x\u2016\nn : \u03b1\nh : \u2200 (k : \u03b2), \u2016f n k\u2016 \u2264 bound k\n\u22a2 \u2200 (i : \u03b2), \u2016\u2016f n i\u2016\u2016 \u2264 bound i",
+    "label": "positive"
+  },
+  {
+    "state_pp": "X\u271d : AlgebraicGeometry.Scheme\nS\u271d : \u2191X\u271d.affineOpens\nU\u2081\u271d : X\u271d.Opens\nU\u2082\u271d : X\u271d.Opens\nn\u2081\u271d : \u2115\nn\u2082\u271d : \u2115\ny\u2081\u271d : \u2191(X\u271d.presheaf.obj (Opposite.op U\u2081\u271d))\ny\u2082\u271d : \u2191(X\u271d.presheaf.obj (Opposite.op U\u2082\u271d))\nf\u271d : \u2191(X\u271d.presheaf.obj (Opposite.op (U\u2081\u271d \u2294 U\u2082\u271d)))\nx\u271d : \u2191(X\u271d.presheaf.obj (Opposite.op (X\u271d.basicOpen f\u271d)))\nh\u2081\u271d : \u2191S\u271d \u2264 U\u2081\u271d\nh\u2082\u271d : \u2191S\u271d \u2264 U\u2082\u271d\n\u22a2 TopCat.Presheaf.restrictOpen y\u2081\u271d (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2081\u271d \u22ef)) \u22ef =\n    TopCat.Presheaf.restrictOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2081\u271d \u22ef)\n          (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2081\u271d \u22ef)) \u22ef ^\n        n\u2081\u271d *\n      TopCat.Presheaf.restrictOpen x\u271d (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2081\u271d \u22ef)) \u22ef \u2192\n  TopCat.Presheaf.restrictOpen y\u2082\u271d (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2082\u271d \u22ef)) \u22ef =\n      TopCat.Presheaf.restrictOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2082\u271d \u22ef)\n            (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2082\u271d \u22ef)) \u22ef ^\n          n\u2082\u271d *\n        TopCat.Presheaf.restrictOpen x\u271d (X\u271d.basicOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2082\u271d \u22ef)) \u22ef \u2192\n    \u2203 n,\n      \u2200 (m : \u2115),\n        n \u2264 m \u2192\n          TopCat.Presheaf.restrictOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2081\u271d \u22ef ^ (m + n\u2082\u271d) * y\u2081\u271d) (\u2191S\u271d) h\u2081\u271d =\n            TopCat.Presheaf.restrictOpen (TopCat.Presheaf.restrictOpen f\u271d U\u2082\u271d \u22ef ^ (m + n\u2081\u271d) * y\u2082\u271d) (\u2191S\u271d) h\u2082\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {a : \u2124} {m n : \u2115}, a.gcd (\u2191m * \u2191n) \u2260 1 \u2194 a.gcd \u2191m \u2260 1 \u2228 a.gcd \u2191n \u2260 1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c : Type u_1\ninst\u271d\u00b2 : Field \ud835\udd5c\ninst\u271d\u00b9 : LinearOrder \ud835\udd5c\ninst\u271d : IsStrictOrderedRing \ud835\udd5c\ns : Set \ud835\udd5c\nf : \ud835\udd5c \u2192 \ud835\udd5c\nhs : Convex \ud835\udd5c s\nhf : \u2200 {x y z : \ud835\udd5c}, x \u2208 s \u2192 z \u2208 s \u2192 x < y \u2192 y < z \u2192 f y * (-y + z)\u207b\u00b9 + (f y * (y - x)\u207b\u00b9 - (y - x)\u207b\u00b9 * f x) \u2264 (-y + z)\u207b\u00b9 * f z\n\u22a2 ConvexOn \ud835\udd5c s f",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u\ninst\u271d\u00b2 : CommRing R\ninst\u271d\u00b9 : IsDomain R\ninst\u271d : IsPrincipalIdealRing R\na : R\nha : a \u2260 0\nb : R\nhb : b \u2208 PrincipalIdealRing.factors a\n\u22a2 False\n\nR : Type u\ninst\u271d\u00b2 : CommRing R\ninst\u271d\u00b9 : IsDomain R\ninst\u271d : IsPrincipalIdealRing R\na : R\nha : a \u2260 0\n\u22a2 Associated (PrincipalIdealRing.factors a).prod a",
+    "label": "negative"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\ninst\u271d\u00b9 : Group G\u271d\ninst\u271d : MeasurableSpace G\u271d\n\u22a2 \u2200 [inst : TopologicalSpace G\u271d] [IsTopologicalGroup G\u271d] [BorelSpace G\u271d] {\u03bc : MeasureTheory.Measure G\u271d} {\u0393 : Subgroup G\u271d}\n  {\ud835\udcd5 : Set G\u271d},\n  MeasureTheory.IsFundamentalDomain (\u21a5\u0393.op) \ud835\udcd5 \u03bc \u2192\n    \u2200 [Countable \u21a5\u0393] [inst_4 : MeasurableSpace (G\u271d \u29f8 \u0393)] [BorelSpace (G\u271d \u29f8 \u0393)] {K : Type u_2} [inst : NormedField K]\n      [inst_5 : NormedSpace \u211d K] [\u03bc.IsMulRightInvariant] {f : G\u271d \u2192 K},\n      MeasureTheory.Integrable f \u03bc \u2192\n        \u2200 {g : G\u271d \u29f8 \u0393 \u2192 K},\n          MeasureTheory.AEStronglyMeasurable g (MeasureTheory.Measure.map QuotientGroup.mk (\u03bc.restrict \ud835\udcd5)) \u2192\n            essSup (fun x => \u2016g x\u2016\u2091) (MeasureTheory.Measure.map QuotientGroup.mk (\u03bc.restrict \ud835\udcd5)) \u2260 \u22a4 \u2192\n              MeasureTheory.AEStronglyMeasurable (QuotientGroup.automorphize f)\n                  (MeasureTheory.Measure.map QuotientGroup.mk (\u03bc.restrict \ud835\udcd5)) \u2192\n                \u222b (x : G\u271d), g \u2191x * f x \u2202\u03bc =\n                  \u222b (x : G\u271d \u29f8 \u0393),\n                    g x * QuotientGroup.automorphize f x \u2202MeasureTheory.Measure.map QuotientGroup.mk (\u03bc.restrict \ud835\udcd5)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case refine_1\nK : Type u_1\ninst\u271d\u00b9 : Field K\ninst\u271d : NumberField K\nx : (\ud835\udcde K)\u02e3\nh : (logEmbedding K) x = 0\nw : InfinitePlace K\n\u22a2 w ((algebraMap (\ud835\udcde K) K) \u2191x) = 1",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u\ninst\u271d : Semiring R\ntoFinsupp\u271d : AddMonoidAlgebra R \u2115\nn\u271d : \u2115\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_2\n\u03b2 : Type u_3\ninst\u271d\u00b9 : Fintype \u03b2\nf : \u03b1 \u2192 \u03b2\ninst\u271d : Fintype \u2191(Setoid.ker f).classes\ng : \u2191(Setoid.ker f).classes\nh : Fintype \u2191(Setoid.ker f).classes\nx\u271d : \u03b1\n\u22a2 x\u271d \u2208 \u2191(?f ?h.w) \u2194 x\u271d \u2208 \u2191g\n\n\u03b1 : Type u_2\n\u03b2 : Type u_3\ninst\u271d\u00b9 : Fintype \u03b2\nf : \u03b1 \u2192 \u03b2\ninst\u271d : Fintype \u2191(Setoid.ker f).classes\ng : \u2191(Setoid.ker f).classes\n\u22a2 \u03b2\n\n\u03b1 : Type u_2\n\u03b2 : Type u_3\ninst\u271d\u00b9 : Fintype \u03b2\nf : \u03b1 \u2192 \u03b2\ninst\u271d : Fintype \u2191(Setoid.ker f).classes\n\u22a2 \u03b2 \u2192 \u2191(Setoid.ker f).classes",
+    "label": "negative"
+  },
+  {
+    "state_pp": "C\u271d : Type u\ninst\u271d\u00b9 : CategoryTheory.Category.{v, u} C\u271d\ninst\u271d : CategoryTheory.Preadditive C\u271d\nK\u271d : CochainComplex C\u271d \u2124\n\u22a2 \u2200 (a b n : \u2124),\n  ((CategoryTheory.shiftFunctorAdd (CochainComplex C\u271d \u2124) a b).hom.app K\u271d).f n = (HomologicalComplex.XIsoOfEq K\u271d \u22ef).hom",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\nE\u271d : Type u_2\nF\u271d : Type u_3\ninst\u271d : CommRing R\u271d\n\u22a2 \u2200 [inst : AddCommGroup E\u271d] [inst_1 : AddCommGroup F\u271d] [inst_2 : Module R\u271d E\u271d] [inst_3 : Module R\u271d F\u271d]\n  [inst_4 : TopologicalSpace E\u271d] [inst_5 : TopologicalSpace F\u271d] {f : E\u271d \u2192\u2097.[R\u271d] F\u271d} [inst_6 : ContinuousAdd E\u271d]\n  [inst_7 : ContinuousAdd F\u271d] [inst_8 : TopologicalSpace R\u271d] [inst_9 : ContinuousSMul R\u271d E\u271d]\n  [inst_10 : ContinuousSMul R\u271d F\u271d],\n  LinearMap.ker f.toFun = \u22a5 \u2192\n    f.IsClosable \u2192 LinearMap.ker f.closure.toFun = \u22a5 \u2192 f.closure.inverse.graph = f.inverse.graph.topologicalClosure",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d\u00b9 : Fintype \u03b1\ninst\u271d : DecidableEq \u03b1\n\u03c3 : Equiv.Perm \u03b1\nh\u03c3 : \u03c3 ^ 2 = 1\n\u22a2 \u2115\n\n\u03b1 : Type u_1\ninst\u271d\u00b9 : Fintype \u03b1\ninst\u271d : DecidableEq \u03b1\n\u03c3 : Equiv.Perm \u03b1\nh\u03c3 : \u03c3 ^ 2 = 1\n\u22a2 \u03c3.support.card = 2 * (Nat.succ ?w).succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ.succ",
+    "label": "negative"
+  },
+  {
+    "state_pp": "s : \u2102\nhX : 0 < s.re\nX\u271d : \u211d\nhX\u2080 : \u00acs = 0\nhX\u271d : 0 \u2264 X\u271d\n\u22a2 False\n\ns : \u2102\nhX\u271d\u00b9 : 0 < s.re\nX\u271d : \u211d\nhX\u2080 : \u00acs = 0\nhX\u271d : 0 \u2264 X\u271d\nhX : 0 < s.re\n\u22a2 (1 + s).partialGamma X\u271d = s * s.partialGamma X\u271d - Complex.exp (-\u2191X\u271d) * \u2191X\u271d ^ s",
+    "label": "negative"
+  },
+  {
+    "state_pp": "V\u271d : Type u_1\nP\u271d : Type u_2\ninst\u271d\u00b9 : NormedAddCommGroup V\u271d\ninst\u271d : InnerProductSpace \u211d V\u271d\n\u22a2 \u2200 [inst : MetricSpace P\u271d] [inst_1 : NormedAddTorsor V\u271d P\u271d] {n : \u2115} (s : Affine.Simplex \u211d P\u271d n) {p : P\u271d} (x : \u211d),\n  (\u2200 (i : Fin (n + 1)), dist (s.points i) p = x) \u2192 \u2191(s.orthogonalProjectionSpan p) = s.circumcenter",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case intro.intro.refine_2.intro.intro.intro.intro.intro.refine_2.intro.intro.intro.intro.intro.intro\nR\u271d : Type u_1\nM\u271d : Type u_2\ninst\u271d\u2075 : Semiring R\u271d\ninst\u271d\u2074 : AddCommMonoid M\u271d\ninst\u271d\u00b3 : Module R\u271d M\u271d\nR : Type u_3\ninst\u271d\u00b2 : CommRing R\nM : Type u_4\ninst\u271d\u00b9 : AddCommGroup M\ninst\u271d : Module R M\nI : Ideal R\nN : Submodule R M\ns\u271d : Set M\nhfs : s\u271d.Finite\ni : M\ns : Set M\nx\u271d\u00b9 : i \u2209 s\nx\u271d : s.Finite\nih :\n  (\u2203 r, r - 1 \u2208 I \u2227 N \u2264 comap ((LinearMap.lsmul R M) r) (I \u2022 span R s) \u2227 s \u2286 \u2191N) \u2192 \u2203 r, r - 1 \u2208 I \u2227 \u2200 n \u2208 N, r \u2022 n = 0\nr : R\nhr1 : r - 1 \u2208 I\nhs : i \u2208 \u2191N \u2227 s \u2286 \u2191N\nc : R\nhc1 : c - 1 \u2208 I\nhci : c \u2022 i \u2208 I \u2022 span R s\nn : M\nhn : n \u2208 N\nz : M\nhz : z \u2208 I \u2022 span R s\nd : R\nleft\u271d : d \u2208 I\nhyz : d \u2022 i + z = r \u2022 n\n\u22a2 n \u2208 comap ((LinearMap.lsmul R M) (c * r)) (I \u2022 span R s)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u03b2\u271d : Type u_2\n\u03b3\u271d : Type u_3\ninst\u271d\u00b2 : Preorder \u03b1\u271d\ninst\u271d\u00b9 : Preorder \u03b2\u271d\ninst\u271d : Preorder \u03b3\u271d\nf\u271d : \u03b1\u271d \u2192 \u03b2\u271d\ng\u271d : \u03b2\u271d \u2192 \u03b1\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case inr\nb m n : \u2115\nh : m \u2260 0 \u2228 1 < b \u2227 n \u2260 0\nhbn : b \u2264 1 \u2228 n = 0\nhm : m \u2260 0\n\u22a2 log b n = m \u2194 b ^ m \u2264 n \u2227 n < b ^ (m + 1)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "M\u271d : Type u_1\nN\u271d : DecidableEq M\u271d\nM : Fintype M\u271d\nN : Type v\ninst\u271d : CommRing N\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "X\u271d : Type u\n\u22a2 \u2200 [TopologicalSpace X\u271d] {S : Set (Set X\u271d)}, S.Finite \u2192 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "a : Cardinal.{u_1}\nha : a \u2208 Set.Iic Cardinal.aleph0\nb : Cardinal.{u_1}\nhb : b \u2208 Set.Iic Cardinal.aleph0\nhab : a < b\n\u22a2 Cardinal.toENat a < Cardinal.toENat b",
+    "label": "negative"
+  },
+  {
+    "state_pp": "k : Type u_2\ninst\u271d : Field k\nx\u271d : PowerSeries k\n\u22a2 False\n\nk : Type u_2\ninst\u271d : Field k\nx\u271d : PowerSeries k\n\u22a2 x\u271d \u2208 IsLocalRing.maximalIdeal (PowerSeries k) \u2192 x\u271d \u2208 Ideal.comap PowerSeries.constantCoeff \u22a5",
+    "label": "negative"
+  },
+  {
+    "state_pp": "p\u271d : Polynomial \u211a\np_irr\u271d : Irreducible p\u271d\np_deg\u271d : Nat.Prime p\u271d.natDegree\np_roots1\u271d : Fintype.card \u2191(p\u271d.rootSet \u211d) + 1 \u2264 Fintype.card \u2191(p\u271d.rootSet \u2102)\n\u22a2 Fintype.card \u2191(p\u271d.rootSet \u2102) \u2264 3 + Fintype.card \u2191(p\u271d.rootSet \u211d) \u2192 Function.Bijective \u21d1(Polynomial.Gal.galActionHom p\u271d \u2102)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u03b2\u271d : Type u_2\n\u03b3\u271d : Type u_3\nop\u271d : \u03b2\u271d \u2192 \u03b2\u271d \u2192 \u03b2\u271d\n\u22a2 \u2200 [hc : Std.Commutative op\u271d] [ha : Std.Associative op\u271d] {f : \u03b1\u271d \u2192 \u03b2\u271d} {b : \u03b2\u271d} [inst : DecidableEq \u03b1\u271d] {g : \u03b3\u271d \u2192 \u03b1\u271d}\n  {s : Finset \u03b3\u271d} [hi : Std.IdempotentOp op\u271d],\n  Finset.fold op\u271d b f (Finset.image g s) = Finset.fold op\u271d b (fun x => f (g x)) s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case mpr\nR : Type u\nS : Type v\nF : Type w\ninst\u271d\u00b9 : CommRing R\ninst\u271d : Semiring S\nf : R \u2192+* S\nH : \u2200 a \u2208 ker f, f a = 0\n\u22a2 ker f \u2264 ker f",
+    "label": "positive"
+  },
+  {
+    "state_pp": "A\u271d : Set \u2115\ninst\u271d : DecidablePred fun x => x \u2208 A\u271d\nhA\u271d : 0 \u2208 A\u271d\na\u271d : schnirelmannDensity A\u271d = 1\nx\u271d : \u2115\n\u22a2 x\u271d \u2208 A\u271d \u2194 x\u271d \u2208 Set.univ",
+    "label": "positive"
+  },
+  {
+    "state_pp": "s : \u2115 \u2192 \u211d\n\u22a2 Filter.Tendsto (fun n => \u2191(numDerangements n) * (\u2191n.factorial)\u207b\u00b9) Filter.atTop (nhds (Real.exp (-1)))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\ninst\u271d\u00b3 : Semifield R\ninst\u271d\u00b2 : LinearOrder R\ninst\u271d\u00b9 : IsStrictOrderedRing R\ninst\u271d : FloorSemiring R\nb : \u2115\nr : R\nhb\u271d : 1 < b\nhr : 0 < r\nhb : 1 < \u2191b\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_2\nE\u271d : Type u_6\n\u03b9\u271d : Type u_9\ninst\u271d\u00b3 : NormedField \ud835\udd5c\u271d\ninst\u271d\u00b2 : AddCommGroup E\u271d\ninst\u271d\u00b9 : Module \ud835\udd5c\u271d E\u271d\ninst\u271d : TopologicalSpace E\u271d\n\u22a2 \u2200 {p : SeminormFamily \ud835\udd5c\u271d E\u271d \u03b9\u271d}, WithSeminorms p \u2192 (\u2200 (x : E\u271d), \u00acx = 0 \u2192 \u2203 i, \u00ac(p i) x = 0) \u2192 T1Space E\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : Type u\nx : Field p\nx_1 : p\n\u22a2 \u00acPrime (Polynomial.C x_1)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_2\n\u22a2 \u2200 (f : Equiv.Perm \u03b1\u271d) [inst : DecidableRel f.SameCycle] (x y : \u03b1\u271d), (f.cycleOf x) y = if f.SameCycle x y then f y else y",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case neg.intro\nA\u271d : Type u_1\ninst\u271d\u2077 : NormedRing A\u271d\ninst\u271d\u2076 : StarRing A\u271d\ninst\u271d\u2075 : CstarRing A\u271d\ninst\u271d\u2074 : CompleteSpace A\u271d\ninst\u271d\u00b3 : NormedAlgebra \u2102 A\u271d\ninst\u271d\u00b2 : StarModule \u2102 A\u271d\nA : Type u_2\ninst\u271d\u00b9 : Ring A\ninst\u271d : Algebra \u211d A\na : A\nha : \u2200 x \u2208 \u03c3 \u211d a, 0 \u2264 x\na\u271d : Nontrivial A\nx : \u211d\nr : \u211d\u02e3\nhr : 0 \u2264 \u2191r\nhx : r\u207b\u00b9 \u2022 x \u2208 \u03c3 \u211d a\nhr' : \u00ac\u2191r = 0\n\u22a2 (\u2191r)\u207b\u00b9 \u2022 0 \u2264 (\u2191r)\u207b\u00b9 \u2022 x",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\ud835\udd5c : Type u_1\nE : Type u_2\nF : Type u_3\nG : Type u_4\ninst\u271d\u2076 : NontriviallyNormedField \ud835\udd5c\ninst\u271d\u2075 : NormedAddCommGroup E\ninst\u271d\u2074 : NormedSpace \ud835\udd5c E\ninst\u271d\u00b3 : NormedAddCommGroup F\ninst\u271d\u00b2 : NormedSpace \ud835\udd5c F\ninst\u271d\u00b9 : NormedAddCommGroup G\ninst\u271d : NormedSpace \ud835\udd5c G\nf g : E \u2192 F\np pf pg : FormalMultilinearSeries \ud835\udd5c E F\nx : E\nr r' : \u211d\u22650\u221e\nhf : HasFPowerSeriesOnBall f pf x r\nv : Fin 0 \u2192 E\nv_eq : v = fun i => 0\nzero_mem : 0 \u2208 EMetric.ball 0 r\n\u22a2 \u2200 (i : \u2115), i \u2260 0 \u2192 ((pf i) fun j => 0) = 0",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u\n\u22a2 \u2200 {\u03b2 : \u03b1\u271d \u2192 Type v} [inst : DecidableEq \u03b1\u271d] (a : \u03b1\u271d) {l : List (Sigma \u03b2)}, l.NodupKeys \u2192 (List.lookupAll a l).Nodup",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x\u271d : \u211d\nhx\u271d : x\u271d < 0\ny\u271d : \u211d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ns\u271d : Multiset \u03b1\u271d\n\u03c3\u271d : \u03b1\u271d \u2192 Type u_5\nt\u271d : (a : \u03b1\u271d) \u2192 Multiset (\u03c3\u271d a)\nthis\u271d : True\nthis : True\n\u22a2 False\n\n\u03b1\u271d : Type u_1\ns\u271d : Multiset \u03b1\u271d\n\u03c3\u271d : \u03b1\u271d \u2192 Type u_5\nt\u271d : (a : \u03b1\u271d) \u2192 Multiset (\u03c3\u271d a)\nthis\u271d\u00b9 : True\nthis\u271d : True\nthis : True\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u_1\ninst\u271d\u00b9 : NormedCommRing R\u271d\nf\u271d : \u2115 \u2192 R\u271d\ninst\u271d : CompleteSpace R\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d\nhx\u2080\u271d\u00b9 : 0 < x\nhx\u2081\u271d : x \u2264 1\nhx\u2080\u271d : 0 < x\nhx\u2081 : x \u2264 1\nhx\u2080 : 0 < x\n\u22a2 x < Real.sin x + x ^ 3 * (1 / 4)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nt\u271d : Set \u03b1\np\u271d : Set \u03b1 \u2192 Prop\nt : Set \u2191t\u271d\np : p\u271d (Subtype.val '' t)\n\u22a2 False\n\n\u03b1 : Type u_1\nt\u271d : Set \u03b1\np\u271d : Set \u03b1 \u2192 Prop\nt : Set \u2191t\u271d\np : p\u271d (Subtype.val '' t)\n\u22a2 Set \u03b1\n\n\u03b1 : Type u_1\nt : Set \u03b1\np : Set \u03b1 \u2192 Prop\n\u22a2 (\u2203 s \u2286 t, p s) \u2192 \u2203 s, p (Subtype.val '' s)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case pos\n\u03a9 : Type u_1\ninst\u271d\u00b2 : Nonempty \u03a9\nm0 : MeasurableSpace \u03a9\n\u03bc : FiniteMeasure \u03a9\ninst\u271d\u00b9 : TopologicalSpace \u03a9\ninst\u271d : OpensMeasurableSpace \u03a9\n\u03b3 : Type u_2\nF : Filter \u03b3\n\u03bcs : \u03b3 \u2192 FiniteMeasure \u03a9\n\u03bcs_lim : Tendsto (fun i => (\u03bcs i).normalize) F (\ud835\udcdd \u03bc.normalize)\nmass_lim : Tendsto (fun i => (\u03bcs i).mass) F (\ud835\udcdd \u03bc.mass)\nf : \u03a9 \u2192\u1d47 \u211d\u22650\nh_mass : \u03bc.mass = 0\n\u22a2 Tendsto (fun i => (\u03bcs i).testAgainstNN f) F (\ud835\udcdd (\u03bc.testAgainstNN f))",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p\u271d : \u2115\nn\u271d : \u2115\nz\u271d : ZMod p\u271d\ninst\u271d : NeZero p\u271d\n\u22a2 \u2191n\u271d = z\u271d \u2194 \u2203 k, n\u271d = z\u271d.val + p\u271d * k",
+    "label": "positive"
+  },
+  {
+    "state_pp": "a\u2081 : EReal\na\u2082 : a\u2081 < 0\nh\u2082 : a\u2081 \u2260 \u22a5\n\u22a2 StrictAnti fun a => a / a\u2081",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case inr\n\u03b1 : Type u\ns : Set (Set \u03b1)\ni j : (Quotient.out (aleph 1).ord).\u03b1\nh\u271d : i \u2264 j\nx : Set \u03b1\nhx : x \u2208 generateMeasurableRec s i\nh : i < j\n\u22a2 x \u2208 generateMeasurableRec s j",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u\ns\u271d : Finset \u03b9\u271d\n\u22a2 \u2200 (w z : \u03b9\u271d \u2192 \u211d) (x : \u211d), \u2211 i \u2208 s\u271d, w i = 1 \u2192 (\u2200 i \u2208 s\u271d, w i \u2260 0 \u2192 z i = x) \u2192 \u2211 i \u2208 s\u271d, w i * z i = x",
+    "label": "positive"
+  },
+  {
+    "state_pp": "h : \u2124\nb : \u2124\nc : \u2124\nhab : h * b \u2223 c\nthis\u271d : h * b \u2223 c\nthis : h * b \u2223 c\n\u22a2 c / h = b ^ 2",
+    "label": "negative"
+  },
+  {
+    "state_pp": "E\u271d : Type u_1\ninst\u271d\u00b9 : NormedAddCommGroup E\u271d\ninst\u271d : InnerProductSpace \u211d E\u271d\n\u22a2 \u2200 {n : \u2115} [inst : Fact (Module.finrank \u211d E\u271d = n + 1)] (v : \u2191(Metric.sphere 0 1)),\n  LinearMap.range\n      (mfderiv (modelWithCornersSelf \u211d (EuclideanSpace \u211d (Fin n))) (modelWithCornersSelf \u211d E\u271d) Subtype.val v) =\n    (\u211d \u2219 \u2191v)\u15ee",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03c3\u2081\u271d : Type u_1\n\u03c3\u2082\u271d : Type u_2\nf\u2081\u271d : \u03c3\u2081\u271d \u2192 Option \u03c3\u2081\u271d\nf\u2082\u271d : \u03c3\u2082\u271d \u2192 Option \u03c3\u2082\u271d\n\u22a2 \u2200 {tr : \u03c3\u2081\u271d \u2192 \u03c3\u2082\u271d \u2192 Prop},\n  Turing.Respects f\u2081\u271d f\u2082\u271d tr \u2192\n    \u2200 {a\u2081 : \u03c3\u2081\u271d} {a\u2082 : \u03c3\u2082\u271d},\n      tr a\u2081 a\u2082 \u2192 \u2200 {b\u2081 : \u03c3\u2081\u271d}, Turing.Reaches f\u2081\u271d a\u2081 b\u2081 \u2192 \u2203 b\u2082, tr b\u2081 b\u2082 \u2227 Turing.Reaches f\u2082\u271d a\u2082 b\u2082",
+    "label": "positive"
+  },
+  {
+    "state_pp": "C : Type u_1\nD : Type u_2\ninst\u271d\u00b2 : CategoryTheory.Category.{u_4, u_1} C\ninst\u271d\u00b9 : CategoryTheory.Category.{u_6, u_2} D\nX : CategoryTheory.MorphismProperty C\nY : C\n\u03c6 : C\nE : X.LeftFraction Y \u03c6\nE\u271d : Type u_3\nL\u2081 : CategoryTheory.Category.{u_5, u_3} E\u271d\nL\u2082 : CategoryTheory.Functor C D\nL\u2082\u271d : CategoryTheory.Functor C E\u271d\ninst\u271d : L\u2082.IsLocalization X\nw : L\u2082\u271d.IsLocalization X\n\u22a2 (CategoryTheory.Localization.uniq L\u2082 L\u2082\u271d X).functor.map (E.map L\u2082 \u22ef) =\n  CategoryTheory.CategoryStruct.comp ((CategoryTheory.Localization.compUniqFunctor L\u2082 L\u2082\u271d X).hom.app Y)\n    (CategoryTheory.CategoryStruct.comp (E.map L\u2082\u271d \u22ef)\n      ((CategoryTheory.Localization.compUniqFunctor L\u2082 L\u2082\u271d X).inv.app \u03c6))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "u\u271d : \u2115 \u2192 \u211d\nc\u271d : \u211d\n\u22a2 0 \u2264 c\u271d \u2192 \u2200 {n : \u2115}, 0 < n \u2192 (\u2200 k < n, c\u271d * u\u271d k < u\u271d (k + 1)) \u2192 c\u271d ^ n * u\u271d 0 < u\u271d n",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u22a2 \u2200 {\u03b2 : Type u_2} (e : Option \u03b1\u271d \u2243 Option \u03b2) (x : \u03b1\u271d), e.symm.removeNone_aux (e.removeNone_aux x) = x",
+    "label": "positive"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\ninst\u271d : Group G\u271d\nA\u271d : Subgroup G\u271d\nB\u271d : Subgroup G\u271d\n\u22a2 \u2200 (\u03c6 : \u21a5A\u271d \u2243* \u21a5B\u271d) {w\u2081 w\u2082 : HNNExtension.NormalWord.ReducedWord G\u271d A\u271d B\u271d},\n  HNNExtension.NormalWord.ReducedWord.prod \u03c6 w\u2081 = HNNExtension.NormalWord.ReducedWord.prod \u03c6 w\u2082 \u2192\n    List.map Prod.fst w\u2081.toList = List.map Prod.fst w\u2082.toList \u2227\n      \u2200 (u : \u2124\u02e3) (x : G\u271d), w\u2081.toList.head? = some (u, x) \u2192 w\u2081.head\u207b\u00b9 * w\u2082.head \u2208 HNNExtension.toSubgroup A\u271d B\u271d (-u)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\np_nonneg : \u211d\np_nonneg_ne_zero : \u00acp_nonneg = 0\n\u22a2 False\n\np : \u2115\np_nonneg : \u211d\np_nonneg_ne_zero : \u00acp_nonneg = 0\n\u22a2 (fun z => z ^ (-1 + p_nonneg)) =O[Filter.atTop] fun x =>\n  |deriv (fun z => z ^ p_nonneg + z ^ p_nonneg * AkraBazziRecurrence.smoothingFn z) x|",
+    "label": "negative"
+  },
+  {
+    "state_pp": "a\u271d : \u2115\nb\u2081\u271d : \u2115\nb\u2082\u271d : \u2115\nh\u271d : b\u2081\u271d < b\u2082\u271d\n\u22a2 Nat.pair a\u271d b\u2081\u271d < Nat.pair a\u271d b\u2082\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u_1\ninst\u271d\u2074 : Ring R\nE : Type u_2\ninst\u271d\u00b3 : AddCommGroup E\ninst\u271d\u00b2 : Module R E\nF : Type u_3\ninst\u271d\u00b9 : AddCommGroup F\ninst\u271d : Module R F\nf : E \u2192\u2097.[R] F\nh : LinearMap.ker f.toFun = \u22a5\nx\u271d\u00b9 : F \u00d7 E\nx\u271d : x\u271d\u00b9.1 \u2208 f.inverse.domain\nh\u2081 : \u2191f.inverse \u27e8x\u271d\u00b9.1, \u22ef\u27e9 = x\u271d\u00b9.2\n\u22a2 \u2203 b, (\u2203 (h : ?h.mp.w \u2208 f.domain), \u2191f \u27e8?h.mp.w, \u22ef\u27e9 = b) \u2227 (b, ?h.mp.w) = x\u271d\u00b9\n\nR : Type u_1\ninst\u271d\u2074 : Ring R\nE : Type u_2\ninst\u271d\u00b3 : AddCommGroup E\ninst\u271d\u00b2 : Module R E\nF : Type u_3\ninst\u271d\u00b9 : AddCommGroup F\ninst\u271d : Module R F\nf : E \u2192\u2097.[R] F\nh : LinearMap.ker f.toFun = \u22a5\nx\u271d\u00b9 : F \u00d7 E\nx\u271d : x\u271d\u00b9.1 \u2208 f.inverse.domain\nh\u2081 : \u2191f.inverse \u27e8x\u271d\u00b9.1, \u22ef\u27e9 = x\u271d\u00b9.2\n\u22a2 E\n\nR : Type u_1\ninst\u271d\u2074 : Ring R\nE : Type u_2\ninst\u271d\u00b3 : AddCommGroup E\ninst\u271d\u00b2 : Module R E\nF : Type u_3\ninst\u271d\u00b9 : AddCommGroup F\ninst\u271d : Module R F\nf : E \u2192\u2097.[R] F\nh : LinearMap.ker f.toFun = \u22a5\nx\u271d : F \u00d7 E\n\u22a2 x\u271d \u2208 Submodule.map (LinearEquiv.prodComm R E F) f.graph \u2192 x\u271d \u2208 f.inverse.graph",
+    "label": "negative"
+  },
+  {
+    "state_pp": "C : Type u\ninst\u271d\u00b9 : Category.{v, u} C\ninst\u271d : IsFilteredOrEmpty C\nj\u2081 j\u2082 j\u2083 k\u2081 k\u2082 l : C\nf\u2081 : j\u2081 \u27f6 k\u2081\nf\u2082 : j\u2082 \u27f6 k\u2081\nf\u2083 : j\u2082 \u27f6 k\u2082\nf\u2084 : j\u2083 \u27f6 k\u2082\ng\u2081 : j\u2081 \u27f6 l\ng\u2082 : j\u2083 \u27f6 l\nl' : C\nk\u2081l : k\u2081 \u27f6 l'\nk\u2082l : k\u2082 \u27f6 l'\nhl : f\u2082 \u226b k\u2081l = f\u2083 \u226b k\u2082l\ns : C\nls : l \u27f6 s\nl's : l' \u27f6 s\nhs\u2081 : g\u2081 \u226b ls = (f\u2081 \u226b k\u2081l) \u226b l's\nhs\u2082 : g\u2082 \u226b ls = (f\u2084 \u226b k\u2082l) \u226b l's\n\u22a2 f\u2082 \u226b k\u2081l \u226b l's = f\u2083 \u226b k\u2082l \u226b l's",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case h\n\u03b9 : Type u_1\nG : Type u_2\nM : Type u_3\nhom : Type u_4\ninst\u271d\u2077 : TopologicalSpace G\ninst\u271d\u2076 : UniformSpace M\ninst\u271d\u2075 : Group G\ninst\u271d\u2074 : Group M\ninst\u271d\u00b3 : TopologicalGroup G\ninst\u271d\u00b2 : UniformGroup M\ninst\u271d\u00b9 : FunLike hom G M\ninst\u271d : MonoidHomClass hom G M\nF : \u03b9 \u2192 hom\nhf : ContinuousAt (\u21d1UniformFun.ofFun \u2218 swap (DFunLike.coe \u2218 F)) 1\na b : G\nx\u271d : \u03b9\n\u22a2 swap (DFunLike.coe \u2218 F) (a * b) x\u271d = (swap (DFunLike.coe \u2218 F) a * swap (DFunLike.coe \u2218 F) b) x\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "f\u271d : \u211d \u2192 \u211d\nx\u271d : \u211d\nn\u271d : \u2115\n\u22a2 ConvexOn \u211d (Set.Ioi 0) f\u271d \u2192\n  (\u2200 {y : \u211d}, 0 < y \u2192 f\u271d (1 + y) = f\u271d y + Real.log y) \u2192\n    0 < x\u271d \u2192 n\u271d \u2260 0 \u2192 f\u271d 1 + Real.BohrMollerup.logGammaSeq x\u271d n\u271d \u2264 f\u271d x\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case cons.mpr.cons\u2082\n\u03b1 : Type u\n\u03b2 : Type v\n\u03b3 : Type w\na : \u03b1\nt : List \u03b1\nIH : \u2200 {s : List \u03b1}, s \u2208 t.sublists' \u2194 s <+ t\ns : List \u03b1\nh : s <+ t\n\u22a2 a :: s <+ t \u2228 \u2203 a_1, a_1 <+ t \u2227 a :: a_1 = a :: s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p : \u2115\nq : \u2115\nhp\u271d : Fact (Nat.Prime p)\nhq : \u00ac\u2191q = 0\n\u22a2 \u2211 x \u2208 Finset.Ico 1 (1 + p / 2), q * x / p + \u2211 x \u2208 Finset.Ico 1 (1 + q / 2), p * x / q = p / 2 * (q / 2)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "m n : \u2115\n\u22a2 \u2191(-[m+1].gcd -[n+1]) = -(\u2191m + 1) * -m.succ.gcdA -[n+1].natAbs + -(\u2191n + 1) * - -[m+1].natAbs.gcdB n.succ",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u_1\nM : Type u_2\ninst\u271d\u00b2 : CommRing R\ninst\u271d\u00b9 : AddCommGroup M\ninst\u271d : Module R M\np : Submodule R M\nx : M\nhx : x \u2209 p\nhp' : Free R (M \u29f8 p)\nthis : \u2203 f, f (p.mkQ x) \u2260 0\n\u22a2 \u2203 f, f x \u2260 0 \u2227 map f p = \u22a5",
+    "label": "positive"
+  },
+  {
+    "state_pp": "X : Type u\nY : Type v\n\u03b9 : Type u_1\ninst\u271d\u00b9 : TopologicalSpace X\ninst\u271d : TopologicalSpace Y\ns t : Set X\nb : Set \u03b9\nc : \u03b9 \u2192 Set X\nhs : IsLindelof s\nhc\u2081 : \u2200 (x : { a // a \u2208 b }), IsOpen (c \u2191x)\nhc\u2082 : s \u2286 \u22c3 x, c \u2191x\nd : Set \u2191b\nhd : d.Countable \u2227 s \u2286 \u22c3 i \u2208 d, c \u2191i\n\u22a2 Subtype.val '' d \u2286 b",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {V : Type u_1} [inst : NormedAddCommGroup V] [inst_1 : InnerProductSpace \u211d V] [hd2 : Fact (Module.finrank \u211d V = 2)]\n  (o : Orientation \u211d V (Fin 2)) {x y : V},\n  o.oangle x y = \u2191(Real.pi / 2) \u2192 o.oangle (x + y) y = \u2191(Real.arccos (\u2016y\u2016 / \u2016x + y\u2016))",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_2\n\u22a2 \u2200 [inst : DecidableEq \u03b1\u271d] [inst_1 : SemilatticeSup \u03b1\u271d] [inst_2 : OrderBot \u03b1\u271d] [inst_3 : DecidableRel Disjoint]\n  (s t : Finset \u03b1\u271d), s.disjSups t = t.disjSups s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\ninst\u271d : Group G\u271d\nx\u271d\u00b9 : G\u271d\nx\u271d : Additive G\u271d\na\u271d : Additive.toMul x\u271d \u2208 Subgroup.zpowers x\u271d\u00b9\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R\u271d : Type u\n\u22a2 \u2200 [inst : Semiring R\u271d] {S : Type v} [inst_1 : Semiring S] {f : R\u271d \u2192+* S} {p : Polynomial S} (r : R\u271d),\n  p \u2208 Polynomial.lifts f \u2192 Polynomial.C (f r) * p \u2208 Polynomial.lifts f",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u_1\nM : Type u_2\ninst\u271d\u00b2 : CommSemiring R\ninst\u271d\u00b9 : AddCommMonoid M\ninst\u271d : Module R M\ns : Type u_3\na : Finset s\n\u03b9 : s \u2192 R\np : (\u2191a).Pairwise (Function.onFun IsCoprime \u03b9)\nS : Finset s\nhp : S \u2286 a\nq\u271d : s\nhq\u271d\u00b9 : q\u271d \u2208 a\nhq\u271d : q\u271d \u2209 S\nq : Submodule R M\nhq : q \u2264 Submodule.torsionBy R M (\u03b9 q\u271d)\nhq' : q \u2264 S.sup fun i => Submodule.torsionBy R M (\u03b9 i)\nx\u271d : M\n\u22a2 x\u271d \u2208 q \u2192 x\u271d = 0\n\nR : Type u_1\nM : Type u_2\ninst\u271d\u00b2 : CommSemiring R\ninst\u271d\u00b9 : AddCommMonoid M\ninst\u271d : Module R M\ns : Type u_3\na : Finset s\n\u03b9 : s \u2192 R\np : (\u2191a).Pairwise (Function.onFun IsCoprime \u03b9)\nS : Finset s\nhp : S \u2286 a\nq\u271d : s\nhq\u271d\u00b9 : q\u271d \u2208 a\nhq\u271d : q\u271d \u2209 S\nq : Submodule R M\nhq : q \u2264 Submodule.torsionBy R M (\u03b9 q\u271d)\nhq' : q \u2264 S.sup fun i => Submodule.torsionBy R M (\u03b9 i)\nx\u271d : M\n\u22a2 x\u271d \u2208 \u22a5 \u2192 x\u271d \u2208 q",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\n\u03b2 : Type v\n\u03b3 : Type u_2\ninst\u271d : DecidableEq \u03b1\nt\u271d u : Multiset \u03b1\na\u271d b a : \u03b1\nt : Multiset \u03b1\nIH : \u2200 {s : Multiset \u03b1}, s - t \u2264 u \u2194 s \u2264 u + t\ns : Multiset \u03b1\n\u22a2 s - a ::\u2098 t \u2264 u \u2194 s \u2264 u + a ::\u2098 t",
+    "label": "positive"
+  },
+  {
+    "state_pp": "n\u271d : \u2115\na\u271d : Fin n\u271d\n\u22a2 Finset.map Fin.valEmbedding (Finset.Ioi a\u271d) = Finset.Ioo (\u2191a\u271d) n\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_2\ninst\u271d : Monoid \u03b1\u271d\ns\u271d : Set \u03b1\u271d\n\u22a2 \u2200 {a : \u03b1\u271d} {n : \u2115}, a \u2208 s\u271d \u2192 a ^ n \u2208 s\u271d ^ n",
+    "label": "positive"
+  },
+  {
+    "state_pp": "R : Type u\n_inst_1 : CommSemiring R\nP : Polynomial R\n\u22a2 P \u2209 nonZeroDivisors (Polynomial R) \u2192 \u2203 a, a \u2260 0 \u2227 a \u2022 P = 0\n\nR : Type u\n_inst_1 : CommSemiring R\nP : Polynomial R\n\u22a2 (\u2203 a, a \u2260 0 \u2227 a \u2022 P = 0) \u2192 P \u2209 nonZeroDivisors (Polynomial R)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "M : Type u_1\n_S : CommMonoid M\nM' : Submonoid M\n_S' : Type u_2\nf : CommMonoid _S'\nx\u2081\u271d : M'.LocalizationMap _S'\nx\u2082 : M\na : M\nha : M\na' : ha \u2208 M'\nha' : M\nb : ha' \u2208 M'\nx\u2081 : Type (max u_1 u_2)\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "p\u271d : \u2115\n\u22a2 \u2200 (R : Type u_1) [inst : CommRing R] [hp : NeZero p\u271d] [CharZero R] (n : \u2115),\n  (wittPolynomial p\u271d R n).vars = Finset.range (n + 1)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u\nn : \u2115\nf : \u03b1 \u2192 \u03b1\na : \u03b1\n\u22a2 (Stream'.iterate f a).get (n + 1) = (Stream'.iterate f (f a)).get n",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nxs : List \u03b1\nns : List \u2115\ni\u271d : \u2115\na\u271d : List \u03b1\n\u22a2 (xs.takeList ns).1[i\u271d]? = some a\u271d \u2192 (xs.takeListTR ns).1[i\u271d]? = some a\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "X\u271d : Type u_1\n\u22a2 \u2200 {m : Type u_4} {n : Type u_5} {R : Type u_8} [inst : AddCommMonoid R] [inst_1 : TopologicalSpace R]\n  {L : SummationFilter X\u271d} [T2Space R] {f : X\u271d \u2192 Matrix m n R},\n  (\u2211'[L] (x : X\u271d), f x).transpose = \u2211'[L] (x : X\u271d), (f x).transpose",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u03b2\u271d : Type u_2\ns\u271d : Set \u03b1\u271d\nt\u271d : Set \u03b2\u271d\nf\u271d : \u03b1\u271d \u2192 \u03b2\u271d\ninst\u271d : Nonempty \u03b1\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh\u271d : l \u2208 (t :: ts).permutationsAux is\nh : l \u2208 List.foldr (fun y r => (List.permutationsAux2 t ts r y id).2) (ts.permutationsAux (t :: is)) is.permutations\n\u22a2 l.Perm ?cons.a.a.l\u2082\n\n\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh\u271d : l \u2208 (t :: ts).permutationsAux is\nh : l \u2208 List.foldr (fun y r => (List.permutationsAux2 t ts r y id).2) (ts.permutationsAux (t :: is)) is.permutations\n\u22a2 List.Perm ?cons.a.a.l\u2082 ?cons.a.l\u2082\n\n\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh\u271d : l \u2208 (t :: ts).permutationsAux is\nh : l \u2208 List.foldr (fun y r => (List.permutationsAux2 t ts r y id).2) (ts.permutationsAux (t :: is)) is.permutations\n\u22a2 List \u03b1\n\n\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh\u271d : l \u2208 (t :: ts).permutationsAux is\nh : l \u2208 List.foldr (fun y r => (List.permutationsAux2 t ts r y id).2) (ts.permutationsAux (t :: is)) is.permutations\n\u22a2 List.Perm ?cons.a.l\u2082 ?cons.l\u2082\n\n\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh\u271d : l \u2208 (t :: ts).permutationsAux is\nh : l \u2208 List.foldr (fun y r => (List.permutationsAux2 t ts r y id).2) (ts.permutationsAux (t :: is)) is.permutations\n\u22a2 List \u03b1\n\n\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh : l \u2208 (t :: ts).permutationsAux is\n\u22a2 List.Perm ?cons.l\u2082 (t :: ts ++ is)\n\n\u03b1 : Type u_1\nis : List \u03b1\nl : List \u03b1\nt : \u03b1\nts : List \u03b1\nih : l \u2208 ts.permutationsAux is \u2192 l.Perm (ts ++ is)\nh : l \u2208 (t :: ts).permutationsAux is\n\u22a2 List \u03b1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "m : \u2124\nn : \u2115\n\u22a2 m ^ n = 2 * ?mp.left.w + 1\n\nm : \u2124\nn : \u2115\n\u22a2 \u2124\n\nm : \u2124\nn : \u2115\nh : Even (m ^ n)\n\u22a2 \u00acn = 0\n\nm : \u2124\nn : \u2115\n\u22a2 Even m \u2227 n \u2260 0 \u2192 Even (m ^ n)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "G : Type u_2\ninst\u271d : Group G\nH : Subgroup G\u02e3\nx : G\na : G\u02e3\nha : a \u2208 H \u2227 \u2191a = x\n\u22a2 \u2200 a \u2208 H, \u2191a = x \u2192 { val := x, inv := x\u207b\u00b9, val_inv := \u22ef, inv_val := \u22ef } \u2208 H",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\n\u22a2 \u2200 {E : Type u_2} {m : MeasurableSpace \u03b1\u271d} (p : ENNReal) (\u03bc : MeasureTheory.Measure \u03b1\u271d) [inst : NormedAddCommGroup E]\n  [inst_1 : MeasureTheory.IsFiniteMeasure \u03bc] (c : E),\n  \u00acp = 0 \u2192 \u00acp = \u22a4 \u2192 \u2016(MeasureTheory.Lp.const p \u03bc) c\u2016 = \u2016c\u2016 * \u03bc.real Set.univ ^ p.toReal\u207b\u00b9",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\nR : \u03b1 \u2192 \u03b1 \u2192 Prop\ninst\u271d : IsRefl \u03b1 R\nl : List \u03b1\nh : List.Pairwise R l\nx : Fin l.length\ny : Fin l.length\nhxy\u271d : x \u2264 y\nhxy : x < y \u2228 x = y\n\u22a2 False\n\n\u03b1 : Type u_1\nR : \u03b1 \u2192 \u03b1 \u2192 Prop\ninst\u271d : IsRefl \u03b1 R\nl : List \u03b1\nh : List.Pairwise R l\nx : Fin l.length\ny : Fin l.length\nhxy : x \u2264 y\n\u22a2 x < y \u2228 x = y \u2192 \u2115\n\n\u03b1 : Type u_1\nR : \u03b1 \u2192 \u03b1 \u2192 Prop\ninst\u271d : IsRefl \u03b1 R\nl : List \u03b1\nh : List.Pairwise R l\nx : Fin l.length\ny : Fin l.length\nhxy : x \u2264 y\n\u22a2 (hxy : x < y \u2228 x = y) \u2192 Fin (?m.39 hxy)",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u271d : Type u\nS\u271d : Type v\ninst\u271d\u00b2 : CommSemiring R\u271d\ninst\u271d\u00b9 : Semiring S\u271d\ninst\u271d : Algebra R\u271d S\u271d\nM\u271d : Submodule R\u271d S\u271d\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9\u271d : Type u_4\n\u03b1\u271d : \u03b9\u271d \u2192 Type u_6\ninst\u271d\u00b2 : DecidableEq \u03b9\u271d\ninst\u271d\u00b9 : Fintype \u03b9\u271d\ninst\u271d : (i : \u03b9\u271d) \u2192 DecidableEq (\u03b1\u271d i)\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "N\u271d : \u2115\nk\u271d : \u2124\nn\u271d : \u2124\n\u22a2 \u2200 (f : SlashInvariantForm (Subgroup.map (Matrix.SpecialLinearGroup.mapGL \u211d) (CongruenceSubgroup.Gamma N\u271d)) k\u271d)\n  (z : UpperHalfPlane), f (\u2191N\u271d * \u2191n\u271d +\u1d65 z) = f z",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9 : Type u_1\nX : Type u_2\nY : Type u_3\n\u03b1 : Type u_4\n\u03b2 : Type u_5\ninst\u271d\u00b3 : TopologicalSpace X\ninst\u271d\u00b2 : UniformSpace \u03b1\ninst\u271d\u00b9 : UniformSpace \u03b2\nF : \u03b9 \u2192 X \u2192 \u03b1\nG : \u03b9 \u2192 \u03b2 \u2192 \u03b1\ninst\u271d : CompactSpace X\nF_eqcont : Equicontinuous F\n\u2131 : Filter \u03b9\nf : X \u2192 \u03b1\n\u2131_ne : \u2131.NeBot\nH : Tendsto F \u2131 (\ud835\udcdd f)\nS : Set (X \u2192 \u03b1) := closure (range F)\n\ud835\udca2 : Filter \u2191S := comap Subtype.val (map F \u2131)\nhS : S.Equicontinuous\nind : Inducing (\u21d1UniformFun.ofFun \u2218 Subtype.val)\nf_mem : f \u2208 S\nh\ud835\udca2\u2131 : map Subtype.val \ud835\udca2 = map F \u2131\n\u22a2 Tendsto id \ud835\udca2 (\ud835\udcdd \u27e8f, f_mem\u27e9)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\np : \u03b1 \u2192 Bool\ni : \u2115\nh : i < [].length\nhi : \u2200 (j : \u2115) (hji : j < i), p [][j] = false\nhxs : [].length = [].length\nh' : List.findIdx p [] < i\n\u22a2 False\n\n\u03b1 : Type u_1\np : \u03b1 \u2192 Bool\ni : \u2115\na : \u03b1\nxs : List \u03b1\nh : i < (a :: xs).length\nhi : \u2200 (j : \u2115) (hji : j < i), p (a :: xs)[j] = false\nhxs : (a :: xs).length = (a :: xs).length\nh' : List.findIdx p (a :: xs) < i\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "G\u2080\u271d : Type u_4\nG\u2080'\u271d : Type u_5\ninst\u271d\u00b3 : GroupWithZero G\u2080\u271d\ninst\u271d\u00b2 : GroupWithZero G\u2080'\u271d\ninst\u271d\u00b9 : MulActionWithZero G\u2080\u271d G\u2080'\u271d\ninst\u271d : SMulCommClass G\u2080\u271d G\u2080'\u271d G\u2080'\u271d\n\u22a2 \u2200 [IsScalarTower G\u2080\u271d G\u2080'\u271d G\u2080'\u271d] (c : G\u2080\u271d) (x : G\u2080'\u271d), (c \u2022 x)\u207b\u00b9 = c\u207b\u00b9 \u2022 x\u207b\u00b9",
+    "label": "positive"
+  },
+  {
+    "state_pp": "n : Set \u211d\nh : n \u2208 nhds (1 / 2)\n\u22a2 \u2203 a, \u2200 (b : \u2115), a \u2264 b \u2192 \u2191b * (1 + \u2191b * 2)\u207b\u00b9 \u2208 n",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R\u2081\u271d : Type u_3\ninst\u271d\u00b2 : CommRing R\u2081\u271d\nK\u271d : Type u_4\ninst\u271d\u00b9 : Field K\u271d\ninst\u271d : Algebra R\u2081\u271d K\u271d\n\u22a2 \u2200 [inst : IsFractionRing R\u2081\u271d K\u271d] [IsDomain R\u2081\u271d] (I : FractionalIdeal (nonZeroDivisors R\u2081\u271d) K\u271d),\n  \u2203 a, \u00aca = 0 \u2227 \u2203 x, I = FractionalIdeal.spanSingleton (nonZeroDivisors R\u2081\u271d) ((algebraMap R\u2081\u271d K\u271d) a)\u207b\u00b9 * \u2191x",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b1 : Type u_1\ninst\u271d\u00b2 : One \u03b1\np : Prop\ninst\u271d\u00b9 : Decidable p\na : p \u2192 \u03b1\nb : \u00acp \u2192 \u03b1\ninst\u271d : LE \u03b1\nhab : \u2200 (h : p), a h \u2264 1\n\u22a2 (\u2200 (h : \u00acp), b h \u2264 1) \u2192 dite p a b \u2264 1",
+    "label": "negative"
+  },
+  {
+    "state_pp": "l : Type u\nhne : Type v\nhle : TopologicalSpace l\ninst\u271d : TopologicalSpace hne\nf\u271d\u00b9 : l \u2192 hne\ny\u271d : hne\nhf\u271d : Filter.Tendsto f\u271d\u00b9 (Filter.cocompact l) (nhds y\u271d)\nhfc\u271d : Continuous f\u271d\u00b9\nf\u271d : Filter hne\n\u22a2 \u2200 [f\u271d.NeBot], insert y\u271d (Set.range f\u271d\u00b9) \u2208 f\u271d \u2192 ClusterPt y\u271d f\u271d \u2228 \u2203 y, ClusterPt (f\u271d\u00b9 y) f\u271d",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case h.e'_3.h.e'_3\nG : Type u_1\ninst\u271d\u00b2 : Group G\ninst\u271d\u00b9 : TopologicalSpace G\ninst\u271d : TopologicalGroup G\nK : Set G\nhK : IsCompact K\ng : G\nV : Set G\nhV : (interior V).Nonempty\n\u22a2 (fun x => g\u207b\u00b9 * (g * x)) '' K = K",
+    "label": "positive"
+  },
+  {
+    "state_pp": "b : \u2115\na : \u2115\nh : b \u2223 a\nh\u2081 : \u00aca = 0 \u2227 \u00acb = 0\n\u22a2 \u00acb = 0 \u2227 b \u2264 a",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case mp.intro.mk\n\u03b9 : Type u_1\n\u03b1 : Type u_2\n\u03b2 : Type u_3\n\u03b3 : Type u_4\n\u03c0 : \u03b9 \u2192 Type u_5\nr r' : \u03b1 \u2192 \u03b1 \u2192 Prop\ninst\u271d : IsStrictOrder \u03b1 r\ns t : Set \u03b1\nf : \u2115 \u21aa \u03b1\nhf : \u2200 {a b : \u2115}, r (f a) (f b) \u2227 f a \u2208 s \u2227 f b \u2208 s \u2194 a > b\nH : \u2200 (n : \u2115), f n \u2208 s\n\u22a2 \u2203 x, \u2200 (n : \u2115), x n \u2208 s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "p\u271d : Type u_1\nq\u271d : CommRing p\u271d\nhp\u271d : IsDomain p\u271d\nhq\u271d : NormalizedGCDMonoid p\u271d\np : Polynomial p\u271d\nq : Polynomial p\u271d\nhp : p.IsPrimitive\nhq : q.IsPrimitive\ns : Polynomial p\u271d\n\u22a2 q \u2223 s \u2192 p \u2223 s",
+    "label": "negative"
+  },
+  {
+    "state_pp": "I_1 : Type u_1\nL\u271d : Type u_2\ninst\u271d\u00b3 : CommRing I_1\ninst\u271d\u00b2 : LieRing L\u271d\ninst\u271d\u00b9 : LieAlgebra I_1 L\u271d\ninst\u271d : LieAlgebra.IsSemisimple I_1 L\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x\u271d : Type u\nf : CommSemiring x\u271d\nhf : Set (PrimeSpectrum x\u271d)\nr : x\u271d\nhr : r \u2208 (PrimeSpectrum.vanishingIdeal hf).radical\nx : Set x\u271d\nhx : x \u2208 Set.range fun s => \u22c2 (_ : s \u2208 Set.range fun x => \u2a05 (_ : x \u2208 hf), x.asIdeal), \u2191s\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "G\u271d : Type u_1\ninst\u271d\u00b3 : TopologicalSpace G\u271d\ninst\u271d\u00b2 : LocallyCompactSpace G\u271d\ninst\u271d\u00b9 : Group G\u271d\ninst\u271d : IsTopologicalGroup G\u271d\n\u22a2 \u2200 [inst : MeasurableSpace G\u271d] [BorelSpace G\u271d] {\u03bc : MeasureTheory.Measure G\u271d} [MeasureTheory.IsFiniteMeasureOnCompacts \u03bc]\n  {E : Type u_2} [inst_3 : NormedAddCommGroup E] [inst_4 : NormedSpace \u211d E] {g : G\u271d \u2192 E},\n  Continuous g \u2192 HasCompactSupport g \u2192 Continuous fun x => \u222b (y : G\u271d), g (y\u207b\u00b9 * x) \u2202\u03bc",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {n : \u2115} {S : Set (Vector3 \u2115 (n + 1))},\n  Dioph S \u2192 \u2200 {f : Vector3 \u2115 n \u2192 \u2115}, Dioph.DiophFn f \u2192 Dioph {v | Vector3.cons (f v) v \u2208 S}",
+    "label": "negative"
+  },
+  {
+    "state_pp": "case refine_1.refine_1\nC : Type u\u2081\ninst\u271d\u00b3 : Category.{v\u2081, u\u2081} C\nD : Type u\u2082\ninst\u271d\u00b2 : Category.{v\u2082, u\u2082} D\ninst\u271d\u00b9 : HasZeroMorphisms C\nG H : C\ninst\u271d : HasBinaryCoproduct G H\nh : IsSeparator (G \u2a3f H)\nX Y : C\nu v : X \u27f6 Y\nhuv : \u2200 G_1 \u2208 {G, H}, \u2200 (h : G_1 \u27f6 X), h \u226b u = h \u226b v\ng : G \u2a3f H \u27f6 X\n\u22a2 coprod.inl \u226b g \u226b u = coprod.inl \u226b g \u226b v",
+    "label": "positive"
+  },
+  {
+    "state_pp": "s\u2081 : Type u\ns\u2082 : Stream' s\u2081\nx : Stream' s\u2081\nh\u2081 : s\u2082.head = x.head\nh\u2082 : s\u2082 = s\u2082.tail\nh\u2083 : x = x.tail\n\u22a2 s\u2082 = x",
+    "label": "negative"
+  },
+  {
+    "state_pp": "M : Type u_2\ninst\u271d : Monoid M\na : M\nb : M\nc : M\nhba : b * a = 1\nhac\u271d\u00b2 : a * c = 1\nhac\u271d\u00b9 : True\nhac\u271d : a * c = 1\nhac : a = c\n\u22a2 False\n\nM : Type u_2\ninst\u271d : Monoid M\na : M\nb : M\nc : M\nhba : b * a = 1\nhac\u271d\u00b2 : a * c = 1\nhac\u271d\u00b9 : True\nhac\u271d : a * c = 1\nhac : a \u2260 c\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "p : \u211a\u22650\nq : \u211a\u22650\n\u22a2 q\u207b\u00b9 * p = \u27e8\u2191p.num * \u2191q.den * (\u2191p.den)\u207b\u00b9 * (\u2191q.num)\u207b\u00b9, \u22ef\u27e9",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c\u271d : Type u_1\n\ud835\udd5c\u2082\u271d : Type u_2\n\u22a2 \u2200 {E : Type u_4} {F : Type u_5} [inst : NormedAddCommGroup E] [inst_1 : NormedAddCommGroup F]\n  [inst_2 : NontriviallyNormedField \ud835\udd5c\u271d] [inst_3 : NontriviallyNormedField \ud835\udd5c\u2082\u271d] [inst_4 : NormedSpace \ud835\udd5c\u271d E]\n  [inst_5 : NormedSpace \ud835\udd5c\u2082\u271d F] {\u03c3\u2081\u2082 : \ud835\udd5c\u271d \u2192+* \ud835\udd5c\u2082\u271d} {\u03c3\u2082\u2081 : \ud835\udd5c\u2082\u271d \u2192+* \ud835\udd5c\u271d} [inst_6 : RingHomInvPair \u03c3\u2081\u2082 \u03c3\u2082\u2081]\n  [inst_7 : RingHomInvPair \u03c3\u2082\u2081 \u03c3\u2081\u2082] [RingHomIsometric \u03c3\u2082\u2081] [RingHomIsometric \u03c3\u2081\u2082] (e : E \u2243SL[\u03c3\u2081\u2082] F),\n  Subsingleton E \u2228 0 < \u2016\u2191e.symm\u2016",
+    "label": "positive"
+  },
+  {
+    "state_pp": "case refine_2\n\u03b1 : Type u_1\n\u03b2 : Type u_2\n\u03b3 : Type u_3\n\ud835\udd5c : Type u_4\ninst\u271d\u00b2 : LinearOrderedField \ud835\udd5c\nt : Finset (\u03b1 \u00d7 \u03b2 \u00d7 \u03b3)\na a' : \u03b1\nb b' : \u03b2\nc c' : \u03b3\nx\u271d : \u03b1 \u00d7 \u03b2 \u00d7 \u03b3\n\u03b5 : \ud835\udd5c\ninst\u271d\u00b9 : ExplicitDisjoint t\ninst\u271d : NoAccidental t\nx y : \u03b1 \u2295 \u03b2 \u2295 \u03b3\nhxy : (graph t).Adj x y\n\u22a2 \u2203 s, (graph t).IsNClique 3 s \u2227 x \u2208 s \u2227 y \u2208 s",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u03b9 : Type u_1\nM : Type u_3\nN : Type u_4\nP : Type u_5\ninst\u271d\u00b2 : One M\ninst\u271d\u00b9 : One N\ninst\u271d : One P\nop : M \u2192 N \u2192 P\nhop : op 1 1 = 1\nf : \u03b9 \u2192 M\ng : \u03b9 \u2192 N\nx : \u03b9\nh : \u00acop (f x) (g x) = 1\nh' : f x = 1\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\ninst\u271d : CommRing R\nv : Fin 2 \u2192 R\nh_cop : IsCoprime (v 0) (v 1)\nA : Matrix.SpecialLinearGroup (Fin 2) R\n\u22a2 Matrix.vecMul v (\u2191A) 0 ^ 2 + ?h.w * Matrix.vecMul v (\u2191A) 1 = 1\n\nR : Type u_1\ninst\u271d : CommRing R\nv : Fin 2 \u2192 R\nh_cop : IsCoprime (v 0) (v 1)\nA : Matrix.SpecialLinearGroup (Fin 2) R\n\u22a2 R",
+    "label": "negative"
+  },
+  {
+    "state_pp": "q : \u211a\u22650\nr : \u211a\u22650\n\u22a2 \u2191q = (\u2191q.den)\u207b\u00b9 * \u2191q.num\n\nq : \u211a\u22650\nr : \u211a\u22650\n\u22a2 \u2191r = (\u2191r.den)\u207b\u00b9 * \u2191r.num",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u_1\n_S : CommSemiring R\nM\u2080 : Submonoid R\nM\u2080' : Type u_6\nM\u2080'' : Type u_9\n_M\u2080 : AddCommMonoid M\u2080'\n_M\u2080' : AddCommMonoid M\u2080''\n_M\u2080'' : Module R M\u2080'\ninst\u271d\u2074 : Module R M\u2080''\nf\u2080\u271d : M\u2080' \u2192\u2097[R] M\u2080''\ninst\u271d\u00b3 : IsLocalizedModule M\u2080 f\u2080\u271d\nM\u2081\u271d : Type u_7\nM\u2081'\u271d : Type u_8\ninst\u271d\u00b2 : AddCommMonoid M\u2081\u271d\ninst\u271d\u00b9 : AddCommMonoid M\u2081'\u271d\ninst\u271d : Module R M\u2081\u271d\nf\u2080 : Module R M\u2081'\u271d\nf\u2080' : M\u2081\u271d \u2192\u2097[R] M\u2081'\u271d\n\u22a2 \u2200 [inst : IsLocalizedModule M\u2080 f\u2080'] (g : M\u2080' \u2192\u2097[R] M\u2081\u271d),\n  (IsLocalizedModule.map M\u2080 f\u2080\u271d f\u2080') g \u2218\u2097 \u2191(IsLocalizedModule.iso M\u2080 f\u2080\u271d) =\n    \u2191(IsLocalizedModule.iso M\u2080 f\u2080') \u2218\u2097\n      (IsLocalizedModule.map M\u2080 (LocalizedModule.mkLinearMap M\u2080 M\u2080') (LocalizedModule.mkLinearMap M\u2080 M\u2081\u271d)) g",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c : Type u_1\nG : Type u_2\nH : Type u_3\ninst\u271d\u00b9\u2070 : MeasurableSpace G\ninst\u271d\u2079 : MeasurableSpace H\ninst\u271d\u2078 : TopologicalSpace G\ninst\u271d\u2077 : BorelSpace G\n\u03bc\u271d : Measure G\ninst\u271d\u2076 : Group G\ninst\u271d\u2075 : TopologicalGroup G\ninst\u271d\u2074 : \u03bc\u271d.IsMulLeftInvariant\ninst\u271d\u00b3 : WeaklyLocallyCompactSpace G\ninst\u271d\u00b2 : NoncompactSpace G\n\u03bc : Measure G\ninst\u271d\u00b9 : \u03bc.IsOpenPosMeasure\ninst\u271d : \u03bc.IsMulLeftInvariant\nK : Set G\nK1 : K \u2208 \ud835\udcdd 1\nhK : IsCompact K\nKclosed : IsClosed K\nK_pos : 0 < \u03bc K\ng : Set G \u2192 G\nhg : \u2200 (L : Set G), IsCompact L \u2192 Disjoint L (g L \u2022 K)\nL : \u2115 \u2192 Set G := fun n => (fun T => T \u222a g T \u2022 K)^[n] K\nn : \u2115\n\u22a2 IsCompact (L n)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "X\u271d : AlgebraicGeometry.RingedSpace\nU\u271d : TopologicalSpace.Opens \u2191\u2191X\u271d.toPresheafedSpace\nf\u271d : \u2191(X\u271d.presheaf.obj (Opposite.op U\u271d))\nx\u271d : \u2191\u2191X\u271d.toPresheafedSpace\nhx\u271d : x\u271d \u2208 U\u271d\n\u22a2 x\u271d \u2208 X\u271d.basicOpen f\u271d \u2194 IsUnit ((CategoryTheory.ConcreteCategory.hom (X\u271d.presheaf.germ U\u271d x\u271d hx\u271d)) f\u271d)",
+    "label": "positive"
+  },
+  {
+    "state_pp": "S\u271d : Type u_1\ninst\u271d\u00b3 : CommRing S\u271d\ninst\u271d\u00b2 : Nontrivial S\u271d\ninst\u271d\u00b9 : IsDedekindDomain S\u271d\ninst\u271d : Module.Free \u2124 S\u271d\nI\u271d : Ideal S\u271d\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u03b1\u271d : Type u_1\ninst\u271d : CommMonoid \u03b1\u271d\nS\u271d : Multiset (Multiset \u03b1\u271d)\n\u22a2 False",
+    "label": "positive"
+  },
+  {
+    "state_pp": "a : Type u_1\nw : Group a\n\u22a2 \u2200 {s : Set a} {N : Subgroup a} [N.Normal], s \u2286 \u2191N \u2192 Subgroup.normalClosure s \u2264 N",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\ud835\udd5c : Type u_1\nE : Type u_2\ninst\u271d\u2076 : LinearOrderedField \ud835\udd5c\ninst\u271d\u2075 : AddCommGroup E\ninst\u271d\u2074 : Module \ud835\udd5c E\ninst\u271d\u00b3 : TopologicalSpace E\ninst\u271d\u00b2 : TopologicalAddGroup E\ninst\u271d\u00b9 : ContinuousConstSMul \ud835\udd5c E\ninst\u271d : LocallyConvexSpace \ud835\udd5c E\ns t : Set E\ndisj : Disjoint s t\nhs\u2081 : Convex \ud835\udd5c s\nhs\u2082 : IsCompact s\nht\u2081 : Convex \ud835\udd5c t\nht\u2082 : IsClosed t\nthis\u271d\u00b9 : UniformSpace E := TopologicalAddGroup.toUniformSpace E\nthis\u271d : UniformAddGroup E\nthis :\n  (comap (fun x => x.2 - x.1) (\ud835\udcdd 0)).HasBasis (fun s => 0 \u2208 s \u2227 IsOpen s \u2227 Convex \ud835\udd5c s) fun i =>\n    (fun x => x.2 - x.1) \u207b\u00b9' id i\n\u22a2 \u2203 u v, IsOpen u \u2227 IsOpen v \u2227 Convex \ud835\udd5c u \u2227 Convex \ud835\udd5c v \u2227 s \u2286 u \u2227 t \u2286 v \u2227 Disjoint u v",
+    "label": "positive"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {\u03b1 : Sort u_1} {\u03b2 : Sort u_2} {f : \u03b1 \u2192 \u03b2}, \u00acFunction.Injective f \u2194 \u2203 a b, f a = f b \u2227 a \u2260 b",
+    "label": "negative"
+  },
+  {
+    "state_pp": "R : Type u\ninst\u271d : CommRing R\np : Polynomial R\nt : R\nn : \u2115\nh\u271d : \u00acp = 0\nw\u2081 : \u2200 m \u2264 n, Polynomial.eval t ((\u21d1Polynomial.derivative)^[m] p) = 0\nw\u2082 : \u2191n.factorial \u2208 nonZeroDivisors R\nh : Polynomial.rootMultiplicity t p \u2264 n\nh\u2080 : Polynomial.eval t p = 0\n\u22a2 False",
+    "label": "negative"
+  },
+  {
+    "state_pp": "\u22a2 \u2200 {R : Type u} [inst : CommRing R] [IsDomain R] {p q : Polynomial R} {x : R},\n  p * q \u2260 0 \u2192 Polynomial.rootMultiplicity x (p * q) = Polynomial.rootMultiplicity x p + Polynomial.rootMultiplicity x q",
+    "label": "negative"
+  },
+  {
+    "state_pp": "x\u271d : \u211d\nU\u271d : Set \u211d\na\u271d\u00b9 : 1 \u2264 x\u271d\na\u271d : U\u271d \u2208 nhds (ZetaAsymptotics.term_tsum x\u271d)\n\u22a2 ?w \u2208 nhds x\u271d \u2227 \u2203 b, Set.Ici 1 \u2286 b \u2227 ZetaAsymptotics.term_tsum \u207b\u00b9' U\u271d = ?w \u2229 b",
+    "label": "positive"
+  },
+  {
+    "state_pp": "x : \u211d\ny : \u211d\nx' : \u211d\ny' : \u211d\nh1 : x \u2208 Set.uIcc x' y'\nh2 : y \u2208 Set.uIcc x' y'\n\u22a2 dist x y \u2264 dist x' y'",
+    "label": "negative"
+  }
+]

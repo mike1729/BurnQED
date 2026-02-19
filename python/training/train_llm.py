@@ -192,6 +192,113 @@ def pack_sequences(dataset, eos_token_id: int, max_seq_len: int):
     return packed_dataset
 
 
+class SeparationProbeCallback:
+    """Monitors embedding separation between positive/negative proof states during training.
+
+    Computes centroid distance, cosine similarity gap, and norm statistics
+    every `probe_interval` steps. Saves the checkpoint with best centroid L2
+    separation to `{output_dir}/best_separation/`.
+
+    Implements TrainerCallback interface (on_step_end). The actual base class
+    import is deferred to train() to avoid top-level transformers dependency.
+    """
+
+    def __init__(self, probe_path: str, tokenizer, max_seq_len: int, output_dir: str,
+                 probe_interval: int = 500, batch_size: int = 8):
+        probe_data = json.load(open(probe_path))
+        pos_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "positive"]
+        neg_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "negative"]
+        self.n_pos = len(pos_texts)
+        self.n_neg = len(neg_texts)
+        logger.info("Separation probe: %d positive, %d negative states from %s",
+                     self.n_pos, self.n_neg, probe_path)
+
+        all_texts = pos_texts + neg_texts
+        self.tokens = tokenizer(
+            all_texts, padding=True, truncation=True,
+            max_length=max_seq_len, return_tensors="pt",
+        )
+        self.output_dir = output_dir
+        self.probe_interval = probe_interval
+        self.batch_size = batch_size
+        self.best_centroid_l2 = 0.0
+        self.trainer = None  # Set after Trainer creation
+
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step == 0 or state.global_step % self.probe_interval != 0:
+            return
+
+        model = kwargs.get("model") or self.trainer.model
+        model.eval()
+
+        all_embs = []
+        input_ids = self.tokens["input_ids"]
+        attention_mask = self.tokens["attention_mask"]
+        n_total = input_ids.shape[0]
+
+        with torch.no_grad():
+            for i in range(0, n_total, self.batch_size):
+                batch_ids = input_ids[i:i + self.batch_size].to(model.device)
+                batch_mask = attention_mask[i:i + self.batch_size].to(model.device)
+
+                outputs = model(batch_ids, attention_mask=batch_mask, output_hidden_states=True)
+                hidden = outputs.hidden_states[-1].float()  # [B, seq_len, hidden_dim]
+
+                # Mean-pool using attention mask
+                mask_expanded = batch_mask.unsqueeze(-1).float()  # [B, seq_len, 1]
+                pooled = (hidden * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1e-9)
+                all_embs.append(pooled.cpu())
+
+        model.train()
+
+        all_embs = torch.cat(all_embs, dim=0)  # [n_total, hidden_dim]
+        pos_embs = all_embs[:self.n_pos]
+        neg_embs = all_embs[self.n_pos:]
+
+        # Centroid L2 distance
+        pos_centroid = pos_embs.mean(dim=0)
+        neg_centroid = neg_embs.mean(dim=0)
+        centroid_l2 = (pos_centroid - neg_centroid).norm().item()
+
+        # Norms
+        pos_norms = pos_embs.norm(dim=1)
+        neg_norms = neg_embs.norm(dim=1)
+        pos_norm_mean = pos_norms.mean().item()
+        neg_norm_mean = neg_norms.mean().item()
+        norm_gap = neg_norm_mean - pos_norm_mean
+
+        # Cosine similarities
+        pos_normed = pos_embs / pos_norms.unsqueeze(1).clamp(min=1e-9)
+        neg_normed = neg_embs / neg_norms.unsqueeze(1).clamp(min=1e-9)
+        # Within-positive cosine (sample pairs to avoid O(n^2))
+        n_sample = min(100, self.n_pos)
+        idx = torch.randperm(self.n_pos)[:n_sample]
+        within_pos_cos = (pos_normed[idx] @ pos_normed[idx].T).fill_diagonal_(0).sum() / (n_sample * (n_sample - 1))
+        # Cross-class cosine
+        n_cross = min(100, self.n_pos, self.n_neg)
+        cross_cos = (pos_normed[:n_cross] @ neg_normed[:n_cross].T).mean()
+        delta_cosine = (within_pos_cos - cross_cos).item()
+
+        metrics = {
+            "sep_centroid_l2": round(centroid_l2, 4),
+            "sep_delta_cosine": round(delta_cosine, 4),
+            "sep_norm_gap": round(norm_gap, 4),
+            "sep_pos_norm": round(pos_norm_mean, 4),
+            "sep_neg_norm": round(neg_norm_mean, 4),
+        }
+
+        logger.info("Step %d separation probe: %s", state.global_step, metrics)
+        if self.trainer:
+            self.trainer.log(metrics)
+
+        # Save best separation checkpoint
+        if centroid_l2 > self.best_centroid_l2:
+            self.best_centroid_l2 = centroid_l2
+            save_dir = os.path.join(self.output_dir, "best_separation")
+            logger.info("New best centroid L2: %.4f — saving to %s", centroid_l2, save_dir)
+            model.save_pretrained(save_dir)
+
+
 def train(args):
     """Run QLoRA fine-tuning."""
     from peft import LoraConfig, get_peft_model, PeftModel
@@ -201,6 +308,7 @@ def train(args):
         BitsAndBytesConfig,
         DataCollatorForSeq2Seq,
         Trainer,
+        TrainerCallback,
         TrainingArguments,
         default_data_collator,
     )
@@ -240,13 +348,21 @@ def train(args):
         logger.info("Loading LoRA adapter from %s", args.base)
         model = PeftModel.from_pretrained(model, args.base, is_trainable=True)
     else:
+        # Attention-only LoRA by default.
+        # Use --lora-mlp to include MLP layers (gate/up/down_proj).
+        # Analysis shows MLP LoRA is critical for creating L2 norm-based
+        # separation between positive/negative proof states in embeddings
+        # (see docs/revelations.md). Recommend enabling for EBM training.
+        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+        if args.lora_mlp:
+            target_modules += ["gate_proj", "up_proj", "down_proj"]
+            logger.info("LoRA targeting attention + MLP layers")
+        else:
+            logger.info("LoRA targeting attention layers only")
         lora_config = LoraConfig(
             r=args.lora_r,
             lora_alpha=args.lora_alpha,
-            target_modules=[
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
-            ],
+            target_modules=target_modules,
             lora_dropout=0.05,
             bias="none",
             task_type="CAUSAL_LM",
@@ -354,6 +470,12 @@ def train(args):
 
     # Training arguments
     output_dir = Path(args.output)
+    if args.save_steps:
+        save_steps = args.save_steps
+    elif args.max_steps >= 10000:
+        save_steps = 2000
+    else:
+        save_steps = 500
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=args.epochs,
@@ -370,7 +492,7 @@ def train(args):
         logging_steps=10,
         logging_first_step=True,
         save_strategy="steps",
-        save_steps=500,
+        save_steps=save_steps,
         save_total_limit=3,
         eval_strategy="steps" if eval_dataset else "no",
         eval_steps=100 if eval_dataset else None,
@@ -395,8 +517,6 @@ def train(args):
     # Full eval callback every 500 steps (quick subset runs every 100 via eval_steps)
     has_periodic_eval = (full_eval_dataset is not None and full_eval_dataset is not eval_dataset) or traj_eval_dataset is not None
     if has_periodic_eval:
-        from transformers import TrainerCallback
-
         class FullEvalCallback(TrainerCallback):
             def on_step_end(self, args, state, control, **kwargs):
                 if state.global_step > 0 and state.global_step % 500 == 0:
@@ -414,6 +534,17 @@ def train(args):
                         trainer.log(traj_metrics)
 
         trainer.add_callback(FullEvalCallback())
+
+    # Separation probe callback for monitoring embedding separation during training
+    if args.probe_data:
+        probe_cb = SeparationProbeCallback(
+            probe_path=args.probe_data,
+            tokenizer=tokenizer,
+            max_seq_len=args.max_seq_len,
+            output_dir=str(output_dir),
+        )
+        probe_cb.trainer = trainer
+        trainer.add_callback(probe_cb)
 
     logger.info("Starting training...")
     train_result = trainer.train()
@@ -442,6 +573,8 @@ def train(args):
         "lr": args.lr,
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
+        "lora_mlp": args.lora_mlp,
+        "probe_data": args.probe_data,
         "train_examples": len(train_records),
         "trainable_params": trainable_params,
         "total_params": total_params,
@@ -532,6 +665,13 @@ def main():
         help="LoRA alpha (default: %(default)s)",
     )
     parser.add_argument(
+        "--lora-mlp",
+        action="store_true",
+        default=False,
+        help="Also apply LoRA to MLP layers (gate/up/down_proj). "
+        "Recommended for EBM training — MLP LoRA creates L2 norm separation.",
+    )
+    parser.add_argument(
         "--base-subsample",
         type=int,
         default=None,
@@ -554,6 +694,17 @@ def main():
         action="store_true",
         default=False,
         help="Disable sequence packing (use dynamic padding instead)",
+    )
+    parser.add_argument(
+        "--probe-data",
+        default=None,
+        help="Path to separation probe JSON (enables SeparationProbeCallback)",
+    )
+    parser.add_argument(
+        "--save-steps",
+        type=int,
+        default=None,
+        help="Override save_steps (default: 2000 if max_steps>=10000, else 500)",
     )
     args = parser.parse_args()
     args.pack = not args.no_pack
