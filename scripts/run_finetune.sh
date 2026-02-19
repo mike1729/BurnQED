@@ -69,6 +69,7 @@ echo "  Train data:      ${TRAIN_DATA}"
 echo "  LoRA mode:       ${LORA_MODE}"
 echo "  LoRA rank:       ${LORA_R}, alpha: ${LORA_ALPHA}, MLP: ${LORA_MLP:-0}"
 echo "  LR:              ${LR}"
+echo "  Max seq len:     ${MAX_SEQ_LEN:-1024}"
 echo "  Save steps:      ${SAVE_STEPS:-auto}"
 echo "  Probe data:      ${PROBE_DATA:-none}"
 echo "  Batch size:      ${BATCH_SIZE} × ${GRAD_ACCUM} accum"
@@ -94,6 +95,10 @@ SAVE_STEPS_FLAG=""
 PROBE_DATA_FLAG=""
 [ -n "${PROBE_DATA:-}" ] && PROBE_DATA_FLAG="--probe-data $PROBE_DATA"
 
+MAX_SEQ_LEN_FLAG=""
+[ -n "${MAX_SEQ_LEN:-}" ] && MAX_SEQ_LEN_FLAG="--max-seq-len $MAX_SEQ_LEN"
+
+
 STEP_LOG="${LOG_DIR}/iter_${ITER}_finetune.log"
 echo "  Logging to: ${STEP_LOG}"
 
@@ -112,7 +117,7 @@ if [ "$ITER" -eq 0 ]; then
         --output ${CKPT_DIR}/iter_0 \
         --max-steps $MAX_TRAIN_STEPS \
         --lr $LR \
-        $SAVE_STEPS_FLAG $PROBE_DATA_FLAG
+        $SAVE_STEPS_FLAG $PROBE_DATA_FLAG $MAX_SEQ_LEN_FLAG
 else
     # ── Iteration N>0: base + trajectory data ──────────────────────────────
     MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-2000}"
@@ -171,7 +176,7 @@ else
         --batch-size $BATCH_SIZE \
         --gradient-accumulation $GRAD_ACCUM \
         --lr $LR \
-        $SAVE_STEPS_FLAG $PROBE_DATA_FLAG
+        $SAVE_STEPS_FLAG $PROBE_DATA_FLAG $MAX_SEQ_LEN_FLAG
 fi
 
 echo ""
