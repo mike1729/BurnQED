@@ -28,16 +28,24 @@ pub struct ProofStateRecord {
     pub remaining_depth: i32,
     /// Log probability from the LLM policy for the tactic.
     pub llm_log_prob: f64,
+    /// Pantograph state ID for this node.
+    pub state_id: u64,
+    /// State ID of the parent node. None for root nodes.
+    pub parent_state_id: Option<u64>,
 }
 
 /// Index for efficient contrastive sampling.
 ///
 /// Groups record indices by theorem and label for fast negative mining.
+/// Distinguishes sibling negatives (share a parent with a positive) from
+/// non-sibling same-theorem negatives for 3-tier sampling.
 struct ContrastiveIndex {
     /// Positive record indices per theorem.
     pos_by_theorem: HashMap<String, Vec<usize>>,
-    /// Negative record indices per theorem.
-    neg_by_theorem: HashMap<String, Vec<usize>>,
+    /// Sibling negatives: share a parent_state_id with a positive in the same theorem.
+    sibling_neg_by_theorem: HashMap<String, Vec<usize>>,
+    /// Non-sibling negatives: same theorem but not a sibling of any positive.
+    non_sibling_neg_by_theorem: HashMap<String, Vec<usize>>,
     /// All negative record indices (for easy negatives from other theorems).
     all_negatives: Vec<usize>,
     /// Theorems that have BOTH positive AND negative records.
@@ -46,10 +54,18 @@ struct ContrastiveIndex {
 
 impl ContrastiveIndex {
     /// Build the contrastive index from a slice of records.
+    ///
+    /// Two passes: first collects positive parent IDs per theorem, then
+    /// classifies each negative as sibling (shares parent with a positive)
+    /// or non-sibling.
     fn build(records: &[ProofStateRecord]) -> Self {
         let mut pos_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
-        let mut neg_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
         let mut all_negatives = Vec::new();
+        let mut neg_indices_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
+
+        // First pass: index positives and collect all negatives
+        // Also build positive_parents: set of (theorem, parent_state_id) for positives
+        let mut positive_parents: HashSet<(String, u64)> = HashSet::new();
 
         for (i, record) in records.iter().enumerate() {
             match record.label.as_str() {
@@ -58,15 +74,43 @@ impl ContrastiveIndex {
                         .entry(record.theorem_name.clone())
                         .or_default()
                         .push(i);
+                    if let Some(pid) = record.parent_state_id {
+                        positive_parents.insert((record.theorem_name.clone(), pid));
+                    }
                 }
                 "negative" => {
-                    neg_by_theorem
+                    neg_indices_by_theorem
                         .entry(record.theorem_name.clone())
                         .or_default()
                         .push(i);
                     all_negatives.push(i);
                 }
                 _ => {} // skip unknown labels
+            }
+        }
+
+        // Second pass: classify negatives as sibling vs non-sibling
+        let mut sibling_neg_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut non_sibling_neg_by_theorem: HashMap<String, Vec<usize>> = HashMap::new();
+
+        for (theorem, indices) in &neg_indices_by_theorem {
+            for &i in indices {
+                let is_sibling = records[i]
+                    .parent_state_id
+                    .map(|pid| positive_parents.contains(&(theorem.clone(), pid)))
+                    .unwrap_or(false);
+
+                if is_sibling {
+                    sibling_neg_by_theorem
+                        .entry(theorem.clone())
+                        .or_default()
+                        .push(i);
+                } else {
+                    non_sibling_neg_by_theorem
+                        .entry(theorem.clone())
+                        .or_default()
+                        .push(i);
+                }
             }
         }
 
@@ -79,7 +123,8 @@ impl ContrastiveIndex {
 
         ContrastiveIndex {
             pos_by_theorem,
-            neg_by_theorem,
+            sibling_neg_by_theorem,
+            non_sibling_neg_by_theorem,
             all_negatives,
             eligible_theorems,
         }
@@ -99,14 +144,14 @@ pub struct ContrastiveSample {
 
 /// Samples contrastive batches from trajectory data.
 ///
-/// Implements a negative mining strategy with two categories:
-/// - **Hard (70%)**: dead-end states from the same theorem
-/// - **Easy (30%)**: random states from other theorems
+/// Implements a 3-tier negative mining strategy:
+/// - **Hard (30%)**: sibling negatives — share a `parent_state_id` with a positive
+///   (diverge at one tactic choice, most informative for contrastive learning)
+/// - **Medium (40%)**: same-theorem negatives that are NOT siblings of any positive
+/// - **Easy (30%)**: random negatives from other theorems
 ///
-/// Medium negatives (positive states used as negatives) are disabled by default
-/// because tactic pair augmentation adds many positive-only records. Using
-/// positives as negatives creates contradictory gradients and collapses training.
-/// Use `with_ratios()` to override if needed.
+/// When a tier is exhausted for a theorem, overflows into the next tier
+/// (hard → medium → easy → all_negatives).
 pub struct ContrastiveSampler {
     records: Vec<ProofStateRecord>,
     index: ContrastiveIndex,
@@ -135,9 +180,12 @@ impl ContrastiveSampler {
                  Ensure trajectory data contains divergent states (negatives)."
             );
         }
+        let sibling_neg_count: usize = index.sibling_neg_by_theorem.values().map(|v| v.len()).sum();
+        let non_sibling_neg_count: usize = index.non_sibling_neg_by_theorem.values().map(|v| v.len()).sum();
         tracing::info!(
             eligible = index.eligible_theorems.len(),
-            with_hard_neg = index.neg_by_theorem.len(),
+            sibling_neg = sibling_neg_count,
+            non_sibling_neg = non_sibling_neg_count,
             total_neg = index.all_negatives.len(),
             "ContrastiveSampler initialized"
         );
@@ -145,8 +193,8 @@ impl ContrastiveSampler {
             records,
             index,
             k_negatives,
-            hard_ratio: 0.7,
-            medium_ratio: 0.0,
+            hard_ratio: 0.3,
+            medium_ratio: 0.4,
         })
     }
 
@@ -179,7 +227,8 @@ impl ContrastiveSampler {
     /// Sample a single contrastive example.
     ///
     /// Picks a random positive from an eligible theorem, then mines K negatives
-    /// using the hard/medium/easy strategy.
+    /// using the 3-tier hard/medium/easy strategy. If a tier is exhausted,
+    /// overflows into the next tier (hard → medium → easy → all_negatives).
     pub fn sample(&self, rng: &mut impl Rng) -> ContrastiveSample {
         // Pick a random eligible theorem
         let theorem = self.index.eligible_theorems.choose(rng).unwrap();
@@ -196,31 +245,40 @@ impl ContrastiveSampler {
 
         let mut negatives = Vec::with_capacity(self.k_negatives);
 
-        // Hard negatives: dead-end states from SAME theorem
-        if let Some(neg_indices) = self.index.neg_by_theorem.get(theorem) {
-            self.sample_from_pool(neg_indices, n_hard, rng, &mut negatives);
+        // Hard negatives: sibling negatives (share parent_state_id with a positive)
+        let hard_pool = self.index.sibling_neg_by_theorem.get(theorem);
+        if let Some(pool) = hard_pool {
+            self.sample_from_pool(pool, n_hard, rng, &mut negatives);
         }
+        let hard_shortfall = n_hard.saturating_sub(negatives.len());
 
-        // Medium negatives: other positives from same theorem (off-path siblings)
-        // Exclude the current positive
-        let other_pos: Vec<usize> = pos_indices
-            .iter()
-            .filter(|&&i| i != pos_idx)
-            .copied()
-            .collect();
-        self.sample_from_pool(&other_pos, n_medium, rng, &mut negatives);
+        // Medium negatives: same-theorem negatives that are NOT siblings
+        // Also absorbs hard shortfall.
+        let n_medium_total = n_medium + hard_shortfall;
+        let before_medium = negatives.len();
+        if let Some(pool) = self.index.non_sibling_neg_by_theorem.get(theorem) {
+            self.sample_from_pool(pool, n_medium_total, rng, &mut negatives);
+        }
+        let medium_shortfall = n_medium_total.saturating_sub(negatives.len() - before_medium);
 
         // Easy negatives: random states from OTHER theorems
-        let other_negs: Vec<usize> = self
-            .index
-            .all_negatives
-            .iter()
-            .filter(|&&i| self.records[i].theorem_name != *theorem)
-            .copied()
-            .collect();
-        self.sample_from_pool(&other_negs, n_easy, rng, &mut negatives);
+        // Also absorbs medium shortfall.
+        let n_easy_total = n_easy + medium_shortfall;
+        for _ in 0..n_easy_total {
+            if self.index.all_negatives.is_empty() {
+                break;
+            }
+            // Try up to 3 times to find a different theorem, then accept anyway
+            for attempt in 0..3 {
+                let &idx = self.index.all_negatives.choose(rng).unwrap();
+                if attempt == 2 || self.records[idx].theorem_name != *theorem {
+                    negatives.push(self.records[idx].clone());
+                    break;
+                }
+            }
+        }
 
-        // Pad with random negatives if undersupplied
+        // Pad with random negatives if still undersupplied
         while negatives.len() < self.k_negatives {
             if !self.index.all_negatives.is_empty() {
                 let &idx = self.index.all_negatives.choose(rng).unwrap();
@@ -303,6 +361,8 @@ pub fn load_records_from_parquet(
             depth_from_root: r.depth_from_root,
             remaining_depth: r.remaining_depth,
             llm_log_prob: r.llm_log_prob,
+            state_id: r.state_id,
+            parent_state_id: r.parent_state_id,
         })
         .collect();
 
@@ -386,6 +446,8 @@ pub fn load_tactic_pairs(
                 depth_from_root: *depth,
                 remaining_depth,
                 llm_log_prob: 0.0,
+                state_id: 0,
+                parent_state_id: None,
             });
         }
     }
@@ -493,7 +555,13 @@ pub fn load_tactic_pairs_grouped(
 mod tests {
     use super::*;
 
-    fn make_record(theorem: &str, label: &str, depth: u32) -> ProofStateRecord {
+    fn make_record_with_ids(
+        theorem: &str,
+        label: &str,
+        depth: u32,
+        state_id: u64,
+        parent_state_id: Option<u64>,
+    ) -> ProofStateRecord {
         ProofStateRecord {
             theorem_name: theorem.to_string(),
             state_pp: format!("⊢ state_{theorem}_{label}_{depth}"),
@@ -505,25 +573,46 @@ mod tests {
                 -1
             },
             llm_log_prob: -0.5,
+            state_id,
+            parent_state_id,
         }
     }
 
+    fn make_record(theorem: &str, label: &str, depth: u32) -> ProofStateRecord {
+        make_record_with_ids(theorem, label, depth, 0, None)
+    }
+
+    /// Build test records with sibling structure:
+    ///
+    /// Theorem A (parent chain: None→0→1→2):
+    ///   pos depth=0: state_id=100, parent=None
+    ///   pos depth=1: state_id=101, parent=100
+    ///   pos depth=2: state_id=102, parent=101
+    ///   neg depth=0: state_id=200, parent=100  (sibling of pos depth=1)
+    ///   neg depth=1: state_id=201, parent=101  (sibling of pos depth=2)
+    ///   neg depth=2: state_id=202, parent=999  (NOT a sibling — different parent)
+    ///
+    /// Theorem B (parent chain: None→10→11):
+    ///   pos depth=0: state_id=110, parent=None
+    ///   pos depth=1: state_id=111, parent=110
+    ///   neg depth=0: state_id=210, parent=110  (sibling of pos depth=1)
+    ///   neg depth=1: state_id=211, parent=888  (NOT a sibling)
     fn make_test_records() -> Vec<ProofStateRecord> {
         let mut records = Vec::new();
-        // Theorem A: 3 positive, 3 negative
-        for d in 0..3 {
-            records.push(make_record("thm_a", "positive", d));
-        }
-        for d in 0..3 {
-            records.push(make_record("thm_a", "negative", d));
-        }
-        // Theorem B: 2 positive, 2 negative
-        for d in 0..2 {
-            records.push(make_record("thm_b", "positive", d));
-        }
-        for d in 0..2 {
-            records.push(make_record("thm_b", "negative", d));
-        }
+        // Theorem A positives
+        records.push(make_record_with_ids("thm_a", "positive", 0, 100, None));
+        records.push(make_record_with_ids("thm_a", "positive", 1, 101, Some(100)));
+        records.push(make_record_with_ids("thm_a", "positive", 2, 102, Some(101)));
+        // Theorem A negatives: 2 siblings + 1 non-sibling
+        records.push(make_record_with_ids("thm_a", "negative", 0, 200, Some(100)));  // sibling (parent=100)
+        records.push(make_record_with_ids("thm_a", "negative", 1, 201, Some(101)));  // sibling (parent=101)
+        records.push(make_record_with_ids("thm_a", "negative", 2, 202, Some(999)));  // non-sibling
+        // Theorem B positives
+        records.push(make_record_with_ids("thm_b", "positive", 0, 110, None));
+        records.push(make_record_with_ids("thm_b", "positive", 1, 111, Some(110)));
+        // Theorem B negatives: 1 sibling + 1 non-sibling
+        records.push(make_record_with_ids("thm_b", "negative", 0, 210, Some(110)));  // sibling (parent=110)
+        records.push(make_record_with_ids("thm_b", "negative", 1, 211, Some(888)));  // non-sibling
         records
     }
 
@@ -533,9 +622,13 @@ mod tests {
         let index = ContrastiveIndex::build(&records);
 
         assert_eq!(index.pos_by_theorem["thm_a"].len(), 3);
-        assert_eq!(index.neg_by_theorem["thm_a"].len(), 3);
         assert_eq!(index.pos_by_theorem["thm_b"].len(), 2);
-        assert_eq!(index.neg_by_theorem["thm_b"].len(), 2);
+        // Theorem A: 2 siblings (parent=100, parent=101) + 1 non-sibling (parent=999)
+        assert_eq!(index.sibling_neg_by_theorem["thm_a"].len(), 2);
+        assert_eq!(index.non_sibling_neg_by_theorem["thm_a"].len(), 1);
+        // Theorem B: 1 sibling (parent=110) + 1 non-sibling (parent=888)
+        assert_eq!(index.sibling_neg_by_theorem["thm_b"].len(), 1);
+        assert_eq!(index.non_sibling_neg_by_theorem["thm_b"].len(), 1);
         assert_eq!(index.all_negatives.len(), 5); // 3 + 2
         assert_eq!(index.eligible_theorems.len(), 2);
     }
@@ -573,25 +666,39 @@ mod tests {
     }
 
     #[test]
-    fn test_hard_negatives_from_same_theorem() {
-        let records = make_test_records();
+    fn test_hard_negatives_are_siblings() {
+        // Build records where thm_a has enough siblings to fill 100% hard
+        let mut records = Vec::new();
+        // 1 positive with parent=100
+        records.push(make_record_with_ids("thm_a", "positive", 1, 50, Some(100)));
+        // 4 sibling negatives (all share parent=100 with the positive)
+        for i in 0..4 {
+            records.push(make_record_with_ids("thm_a", "negative", 1, 300 + i, Some(100)));
+        }
+        // 1 non-sibling negative (different parent)
+        records.push(make_record_with_ids("thm_a", "negative", 2, 400, Some(999)));
+        // Need at least one other theorem for the sampler
+        records.push(make_record_with_ids("thm_b", "positive", 0, 500, None));
+        records.push(make_record_with_ids("thm_b", "negative", 0, 600, Some(777)));
+
         let sampler =
-            ContrastiveSampler::from_trajectory_records(records, 4)
+            ContrastiveSampler::from_trajectory_records(records.clone(), 4)
                 .unwrap()
-                .with_ratios(1.0, 0.0); // 100% hard negatives
+                .with_ratios(1.0, 0.0); // 100% hard (siblings)
 
         let mut rng = rand::thread_rng();
-        // Sample many times and check that hard negatives come from same theorem
-        for _ in 0..20 {
+        // Sample many times from thm_a and verify all negs are siblings
+        let sibling_ids: HashSet<u64> = [300, 301, 302, 303].into();
+        for _ in 0..50 {
             let sample = sampler.sample(&mut rng);
-            let pos_theorem = &sample.positive.theorem_name;
-            // With hard_ratio=1.0, all negatives should come from same theorem
-            // (they're from neg_by_theorem[theorem])
-            for neg in &sample.negatives {
-                assert_eq!(
-                    &neg.theorem_name, pos_theorem,
-                    "Hard negative should be from same theorem"
-                );
+            if sample.positive.theorem_name == "thm_a" {
+                for neg in &sample.negatives {
+                    assert!(
+                        sibling_ids.contains(&neg.state_id),
+                        "Hard negative should be sibling (state_id={}), not non-sibling",
+                        neg.state_id
+                    );
+                }
             }
         }
     }
@@ -702,9 +809,10 @@ mod tests {
     }
 
     #[test]
-    fn test_default_ratios_no_medium_negatives() {
-        // With default ratios (hard=0.7, medium=0.0), no positive state
-        // should ever appear as a negative.
+    fn test_default_ratios_all_negatives_labeled_negative() {
+        // With default 3-tier ratios (hard=0.3, medium=0.4, easy=0.3),
+        // all sampled negatives should have label="negative" — no positive
+        // states should ever appear as negatives.
         let records = make_test_records();
         let sampler =
             ContrastiveSampler::from_trajectory_records(records, 4).unwrap();
@@ -724,6 +832,37 @@ mod tests {
     }
 
     #[test]
+    fn test_backfill_when_siblings_exhausted() {
+        // Theorem with 1 positive, 0 siblings, 2 non-siblings.
+        // Requesting 4 negatives with hard_ratio=0.5, medium=0.25, easy=0.25
+        // Hard pool is empty → all hard slots overflow to medium, then easy.
+        let mut records = Vec::new();
+        records.push(make_record_with_ids("thm_x", "positive", 0, 10, None));
+        // No sibling negatives (parent IDs don't match any positive's parent)
+        records.push(make_record_with_ids("thm_x", "negative", 1, 20, Some(777)));
+        records.push(make_record_with_ids("thm_x", "negative", 2, 21, Some(888)));
+        // Another theorem for cross-theorem pool
+        records.push(make_record_with_ids("thm_y", "positive", 0, 30, None));
+        records.push(make_record_with_ids("thm_y", "negative", 0, 40, Some(999)));
+
+        let sampler =
+            ContrastiveSampler::from_trajectory_records(records, 4)
+                .unwrap()
+                .with_ratios(0.5, 0.25); // hard=0.5, medium=0.25, easy=0.25
+
+        let mut rng = rand::thread_rng();
+        // Should always produce exactly 4 negatives despite no siblings
+        for _ in 0..50 {
+            let sample = sampler.sample(&mut rng);
+            assert_eq!(
+                sample.negatives.len(),
+                4,
+                "Should backfill to exactly K negatives"
+            );
+        }
+    }
+
+    #[test]
     fn test_unique_states() {
         let mut records = make_test_records(); // 10 records with 10 unique state_pp values
         // Duplicate some state_pp values
@@ -734,6 +873,8 @@ mod tests {
             depth_from_root: 0,
             remaining_depth: 3,
             llm_log_prob: -0.5,
+            state_id: 0,
+            parent_state_id: None,
         });
         records.push(ProofStateRecord {
             theorem_name: "thm_b".to_string(),
@@ -742,6 +883,8 @@ mod tests {
             depth_from_root: 0,
             remaining_depth: -1,
             llm_log_prob: -0.5,
+            state_id: 0,
+            parent_state_id: None,
         });
         let sampler =
             ContrastiveSampler::from_trajectory_records(records, 2).unwrap();

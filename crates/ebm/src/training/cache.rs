@@ -701,6 +701,8 @@ mod tests {
                 depth_from_root: 0,
                 remaining_depth: 1,
                 llm_log_prob: -0.5,
+                state_id: 1,
+                parent_state_id: None,
             },
             super::super::data::ProofStateRecord {
                 theorem_name: "thm".to_string(),
@@ -709,6 +711,8 @@ mod tests {
                 depth_from_root: 1,
                 remaining_depth: -1,
                 llm_log_prob: -0.5,
+                state_id: 2,
+                parent_state_id: Some(1),
             },
             super::super::data::ProofStateRecord {
                 theorem_name: "thm".to_string(),
@@ -717,6 +721,8 @@ mod tests {
                 depth_from_root: 0,
                 remaining_depth: 1,
                 llm_log_prob: -0.5,
+                state_id: 3,
+                parent_state_id: None,
             },
         ];
 
