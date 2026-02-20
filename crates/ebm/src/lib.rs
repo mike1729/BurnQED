@@ -42,7 +42,10 @@ pub use training::data::{
     load_records_from_parquet, load_tactic_pairs, load_tactic_pairs_grouped, ContrastiveSample,
     ContrastiveSampler, ProofStateRecord, TacticStep,
 };
-pub use training::loss::{depth_regression_loss, info_nce_loss};
+pub use training::loss::{
+    contrastive_loss, depth_regression_loss, info_nce_loss, margin_ranking_loss,
+    ContrastiveLossType,
+};
 pub use training::metrics::{EBMMetrics, MetricsHistory};
 pub use training::trainer::{
     lr_schedule, resume_from_checkpoint, train, CheckpointMeta, EBMTrainingConfig,

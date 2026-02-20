@@ -18,7 +18,7 @@ use rand::SeedableRng;
 use crate::model::bridge::embeddings_to_tensor;
 use crate::model::energy_head::{EnergyHead, EnergyHeadConfig};
 use crate::training::data::ContrastiveSampler;
-use crate::training::loss::{depth_regression_loss, info_nce_loss};
+use crate::training::loss::{contrastive_loss, depth_regression_loss, ContrastiveLossType};
 use crate::training::metrics::{EBMMetrics, MetricsHistory};
 
 /// Metadata saved alongside each checkpoint for resuming training.
@@ -65,6 +65,12 @@ pub struct EBMTrainingConfig {
     /// Directory for saving checkpoints.
     #[config(default = "String::from(\"checkpoints/ebm\")")]
     pub checkpoint_dir: String,
+    /// Contrastive loss type: InfoNCE (softmax) or MarginRanking (hinge).
+    #[config(default = "ContrastiveLossType::InfoNCE")]
+    pub loss_type: ContrastiveLossType,
+    /// Margin for margin ranking loss. Ignored when using InfoNCE.
+    #[config(default = 1.0)]
+    pub margin: f64,
 }
 
 /// Compute the learning rate at a given step using warmup + cosine decay.
@@ -94,6 +100,8 @@ fn eval_batch<B: Backend>(
     batch_size: usize,
     k_negatives: usize,
     depth_loss_weight: f64,
+    loss_type: ContrastiveLossType,
+    margin: f64,
     rng: &mut impl rand::Rng,
     device: &B::Device,
 ) -> Option<EBMMetrics> {
@@ -141,10 +149,10 @@ fn eval_batch<B: Backend>(
     let neg_energy_flat = model.forward(neg_tensor);
     let neg_energies = neg_energy_flat.reshape([actual_batch, k]);
 
-    let contrastive_loss = info_nce_loss(pos_energy.clone(), neg_energies.clone());
+    let cl = contrastive_loss(loss_type, pos_energy.clone(), neg_energies.clone(), margin);
     let depth_loss = depth_regression_loss(pos_energy.clone(), remaining_tensor);
 
-    let contrastive_val: f64 = contrastive_loss.clone().into_scalar().elem();
+    let contrastive_val: f64 = cl.clone().into_scalar().elem();
     let depth_val: f64 = depth_loss.clone().into_scalar().elem();
     let total_val = contrastive_val + depth_val * depth_loss_weight;
 
@@ -246,6 +254,18 @@ pub fn train<B: AutodiffBackend>(
 ) -> anyhow::Result<EnergyHead<B>> {
     // Create checkpoint directory
     std::fs::create_dir_all(&config.checkpoint_dir)?;
+
+    tracing::info!(
+        loss_type = %config.loss_type,
+        margin = config.margin,
+        "Contrastive loss: {}{}",
+        config.loss_type,
+        if config.loss_type == ContrastiveLossType::MarginRanking {
+            format!(" (margin={})", config.margin)
+        } else {
+            String::new()
+        }
+    );
 
     // Initialize optimizer
     let optim_config = AdamWConfig::new()
@@ -383,14 +403,14 @@ pub fn train<B: AutodiffBackend>(
         let neg_energies_metrics = neg_energies.clone();
 
         // Compute losses
-        let contrastive_loss = info_nce_loss(pos_energy.clone(), neg_energies);
+        let cl = contrastive_loss(config.loss_type, pos_energy.clone(), neg_energies, config.margin);
         let depth_loss = depth_regression_loss(pos_energy, remaining_tensor);
 
         // Extract scalar values before backward
-        let contrastive_val: f64 = contrastive_loss.clone().into_scalar().elem();
+        let contrastive_val: f64 = cl.clone().into_scalar().elem();
         let depth_val: f64 = depth_loss.clone().into_scalar().elem();
 
-        let total_loss = contrastive_loss + depth_loss * config.depth_loss_weight;
+        let total_loss = cl + depth_loss * config.depth_loss_weight;
         let total_val: f64 = total_loss.clone().into_scalar().elem();
 
         // Backward + optimizer step
@@ -446,6 +466,8 @@ pub fn train<B: AutodiffBackend>(
                         config.batch_size,
                         config.k_negatives,
                         config.depth_loss_weight,
+                        config.loss_type,
+                        config.margin,
                         &mut val_rng,
                         &inner_device,
                     ) {

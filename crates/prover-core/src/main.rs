@@ -252,6 +252,12 @@ enum Command {
         /// If --resume-from is set but this is omitted, auto-detects the latest step.
         #[arg(long)]
         resume_step: Option<usize>,
+        /// Contrastive loss type: "info_nce" (default) or "margin_ranking".
+        #[arg(long, default_value = "info_nce")]
+        loss_type: String,
+        /// Margin for margin ranking loss. Ignored when using info_nce.
+        #[arg(long, default_value_t = 1.0)]
+        margin: f64,
     },
 }
 
@@ -413,6 +419,8 @@ async fn main() -> anyhow::Result<()> {
             encode_concurrency,
             encode_batch_size,
             resume_step,
+            loss_type,
+            margin,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -430,6 +438,8 @@ async fn main() -> anyhow::Result<()> {
                 encode_concurrency,
                 encode_batch_size,
                 resume_step,
+                loss_type,
+                margin,
             })
             .await
         }

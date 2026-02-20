@@ -141,6 +141,10 @@ pub struct TrainEbmArgs {
     /// Explicit step checkpoint to resume from. If None but resume_from is set,
     /// auto-detects the latest step_* subdirectory.
     pub resume_step: Option<usize>,
+    /// Contrastive loss type: "info_nce" or "margin_ranking".
+    pub loss_type: String,
+    /// Margin for margin ranking loss. Ignored for InfoNCE.
+    pub margin: f64,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -2253,12 +2257,16 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 
     // 10. Build training config
     let output_dir_str = args.output_dir.to_string_lossy().to_string();
+    let loss_type: ebm::ContrastiveLossType = args.loss_type.parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
     let training_config = EBMTrainingConfig::new()
         .with_lr(args.lr)
         .with_total_steps(args.steps)
         .with_batch_size(args.batch_size)
         .with_k_negatives(args.k_negatives)
-        .with_checkpoint_dir(output_dir_str.clone());
+        .with_checkpoint_dir(output_dir_str.clone())
+        .with_loss_type(loss_type)
+        .with_margin(args.margin);
 
     // 11. Train
     let _trained = ebm::train(

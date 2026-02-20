@@ -1,10 +1,53 @@
-//! InfoNCE + depth regression losses for EBM training.
+//! Contrastive + depth regression losses for EBM training.
 //!
-//! Both loss functions are generic over `B: Backend` and operate on burn tensors.
+//! Loss functions are generic over `B: Backend` and operate on burn tensors.
 //! Convention: lower energy = more provable state.
+//!
+//! Two contrastive loss variants:
+//! - **InfoNCE**: softmax-based, maximizes probability of positive among K+1 candidates
+//! - **Margin ranking**: pairwise hinge loss, enforces fixed energy gap between pos/neg
 
 use burn::nn::loss::CrossEntropyLossConfig;
 use burn::prelude::*;
+
+/// Which contrastive loss to use during EBM training.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ContrastiveLossType {
+    /// Softmax-based InfoNCE loss. Good at learning relative rankings but can
+    /// cause energy score drift (unbounded separation over long training).
+    InfoNCE,
+    /// Max-margin ranking loss: `L = mean(max(0, margin + E(x+) - E(x-)))`.
+    /// Produces bounded, stable energy scores since loss becomes 0 once the
+    /// margin is satisfied. Focuses gradient on hard negatives only.
+    MarginRanking,
+}
+
+impl Default for ContrastiveLossType {
+    fn default() -> Self {
+        Self::InfoNCE
+    }
+}
+
+impl std::fmt::Display for ContrastiveLossType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InfoNCE => write!(f, "info_nce"),
+            Self::MarginRanking => write!(f, "margin_ranking"),
+        }
+    }
+}
+
+impl std::str::FromStr for ContrastiveLossType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "info_nce" | "infonce" | "InfoNCE" => Ok(Self::InfoNCE),
+            "margin_ranking" | "margin" | "MarginRanking" => Ok(Self::MarginRanking),
+            _ => Err(format!("unknown loss type: {s:?} (expected info_nce or margin_ranking)")),
+        }
+    }
+}
 
 /// InfoNCE contrastive loss.
 ///
@@ -38,6 +81,53 @@ pub fn info_nce_loss<B: Backend>(
     CrossEntropyLossConfig::new()
         .init(&device)
         .forward(logits, labels)
+}
+
+/// Max-margin ranking loss for contrastive EBM training.
+///
+/// For each (positive, negative) pair, computes `max(0, margin + E(x+) - E(x-))`.
+/// Loss is zero once the negative energy exceeds the positive by at least `margin`,
+/// producing stable, bounded energy scores. Gradients focus exclusively on hard
+/// negatives that violate the margin.
+///
+/// # Arguments
+/// - `pos_energy`: shape `(batch,)` — energy of positive (on-path) states
+/// - `neg_energies`: shape `(batch, K)` — energies of K negative states per sample
+/// - `margin`: the required minimum gap E(x-) - E(x+) >= margin
+///
+/// # Returns
+/// Scalar loss tensor of shape `(1,)`.
+pub fn margin_ranking_loss<B: Backend>(
+    pos_energy: Tensor<B, 1>,
+    neg_energies: Tensor<B, 2>,
+    margin: f64,
+) -> Tensor<B, 1> {
+    let [batch_size, k] = neg_energies.dims();
+
+    // Broadcast pos_energy to (batch, K)
+    let pos_expanded = pos_energy.unsqueeze_dim::<2>(1).expand([batch_size, k]);
+
+    // hinge = max(0, margin + E(x+) - E(x-))
+    let diff = pos_expanded - neg_energies + margin;
+    let hinge = diff.clamp_min(0.0);
+
+    // Mean over all pairs
+    hinge.mean()
+}
+
+/// Compute the contrastive loss based on the selected loss type.
+///
+/// Dispatches to either `info_nce_loss` or `margin_ranking_loss`.
+pub fn contrastive_loss<B: Backend>(
+    loss_type: ContrastiveLossType,
+    pos_energy: Tensor<B, 1>,
+    neg_energies: Tensor<B, 2>,
+    margin: f64,
+) -> Tensor<B, 1> {
+    match loss_type {
+        ContrastiveLossType::InfoNCE => info_nce_loss(pos_energy, neg_energies),
+        ContrastiveLossType::MarginRanking => margin_ranking_loss(pos_energy, neg_energies, margin),
+    }
 }
 
 /// Depth regression loss: MSE between energy and normalized remaining depth.
@@ -199,6 +289,129 @@ mod tests {
                 "Negative energy gradient should be negative (SGD will increase energy), got {g}"
             );
         }
+    }
+
+    #[test]
+    fn test_margin_ranking_satisfied() {
+        let device = Default::default();
+        // Positive energy -5, negatives +5 → gap = 10, margin = 1.0 → loss = 0
+        let pos = Tensor::<TestBackend, 1>::from_data(
+            TensorData::from([-5.0_f32, -5.0]),
+            &device,
+        );
+        let neg = Tensor::<TestBackend, 2>::from_data(
+            TensorData::from([[5.0_f32, 5.0], [5.0, 5.0]]),
+            &device,
+        );
+
+        let loss: f32 = margin_ranking_loss(pos, neg, 1.0).into_scalar().elem();
+        assert!(
+            loss.abs() < 1e-6,
+            "Margin satisfied (gap=10, margin=1) should give zero loss, got {loss}"
+        );
+    }
+
+    #[test]
+    fn test_margin_ranking_violated() {
+        let device = Default::default();
+        // Positive energy 0, negatives 0 → hinge = max(0, 1.0 + 0 - 0) = 1.0
+        let pos = Tensor::<TestBackend, 1>::from_data(
+            TensorData::from([0.0_f32, 0.0]),
+            &device,
+        );
+        let neg = Tensor::<TestBackend, 2>::from_data(
+            TensorData::from([[0.0_f32, 0.0], [0.0, 0.0]]),
+            &device,
+        );
+
+        let loss: f32 = margin_ranking_loss(pos, neg, 1.0).into_scalar().elem();
+        assert!(
+            (loss - 1.0).abs() < 0.01,
+            "Equal energies with margin=1.0 should give loss≈1.0, got {loss}"
+        );
+    }
+
+    #[test]
+    fn test_margin_ranking_wrong_order() {
+        let device = Default::default();
+        // Positive energy +10, negatives -10 → hinge = max(0, 1.0 + 10 - (-10)) = 21.0
+        let pos = Tensor::<TestBackend, 1>::from_data(
+            TensorData::from([10.0_f32]),
+            &device,
+        );
+        let neg = Tensor::<TestBackend, 2>::from_data(
+            TensorData::from([[-10.0_f32, -10.0]]),
+            &device,
+        );
+
+        let loss: f32 = margin_ranking_loss(pos, neg, 1.0).into_scalar().elem();
+        assert!(
+            (loss - 21.0).abs() < 0.1,
+            "Wrong order should give high loss≈21.0, got {loss}"
+        );
+    }
+
+    #[test]
+    fn test_margin_ranking_gradient_direction() {
+        let device = Default::default();
+        let pos = Tensor::<TestAutodiffBackend, 1>::from_data(
+            TensorData::from([0.0_f32, 0.0]),
+            &device,
+        )
+        .require_grad();
+        let neg = Tensor::<TestAutodiffBackend, 2>::from_data(
+            TensorData::from([[0.0_f32, 0.0], [0.0, 0.0]]),
+            &device,
+        )
+        .require_grad();
+
+        let loss = margin_ranking_loss(pos.clone(), neg.clone(), 1.0);
+        let grads = loss.backward();
+
+        // Gradient on pos_energy should be positive (SGD decreases it → good)
+        let pos_grad: Vec<f32> = pos.grad(&grads).unwrap().into_data().to_vec().unwrap();
+        for &g in &pos_grad {
+            assert!(
+                g > 0.0,
+                "Positive energy gradient should be positive, got {g}"
+            );
+        }
+
+        // Gradient on neg_energies should be negative (SGD increases it → good)
+        let neg_grad: Vec<f32> = neg.grad(&grads).unwrap().into_data().to_vec().unwrap();
+        for &g in &neg_grad {
+            assert!(
+                g < 0.0,
+                "Negative energy gradient should be negative, got {g}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_contrastive_loss_dispatch() {
+        let device = Default::default();
+        let pos = Tensor::<TestBackend, 1>::from_data(
+            TensorData::from([-5.0_f32, -5.0]),
+            &device,
+        );
+        let neg = Tensor::<TestBackend, 2>::from_data(
+            TensorData::from([[5.0_f32, 5.0], [5.0, 5.0]]),
+            &device,
+        );
+
+        // InfoNCE dispatch
+        let loss_nce: f32 = contrastive_loss(
+            ContrastiveLossType::InfoNCE, pos.clone(), neg.clone(), 1.0,
+        ).into_scalar().elem();
+        let loss_nce_direct: f32 = info_nce_loss(pos.clone(), neg.clone()).into_scalar().elem();
+        assert!((loss_nce - loss_nce_direct).abs() < 1e-6, "Dispatch should match direct call");
+
+        // Margin dispatch
+        let loss_margin: f32 = contrastive_loss(
+            ContrastiveLossType::MarginRanking, pos.clone(), neg.clone(), 1.0,
+        ).into_scalar().elem();
+        let loss_margin_direct: f32 = margin_ranking_loss(pos, neg, 1.0).into_scalar().elem();
+        assert!((loss_margin - loss_margin_direct).abs() < 1e-6, "Dispatch should match direct call");
     }
 
     #[test]
