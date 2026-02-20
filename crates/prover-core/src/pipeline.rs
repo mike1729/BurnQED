@@ -138,6 +138,9 @@ pub struct TrainEbmArgs {
     pub encode_concurrency: usize,
     /// Batch size for batched encode requests (0 = use individual concurrent requests).
     pub encode_batch_size: usize,
+    /// Explicit step checkpoint to resume from. If None but resume_from is set,
+    /// auto-detects the latest step_* subdirectory.
+    pub resume_step: Option<usize>,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -276,8 +279,12 @@ fn load_ebm_scorer(
                 .ok_or_else(|| anyhow::anyhow!("encode_batch returned empty result"))
         });
 
-    // Load EBM scorer from checkpoint
-    let checkpoint_path = ebm_dir.join("final");
+    // Load EBM scorer from checkpoint (new layout: final/model.mpk, old: final.mpk)
+    let checkpoint_path = if ebm_dir.join("final").join("model.mpk").exists() {
+        ebm_dir.join("final").join("model")
+    } else {
+        ebm_dir.join("final")
+    };
     let device = Default::default();
     let scorer =
         EBMScorer::<InferenceBackend>::load(&checkpoint_path, &head_config, encode_fn, device)?;
@@ -1986,6 +1993,29 @@ fn split_records_by_theorem(
     (train, val)
 }
 
+/// Find the latest `step_N` subdirectory in a checkpoint directory.
+/// Returns `Some(N)` if any step subdirectories with `meta.json` are found.
+fn auto_detect_latest_step(dir: &Path) -> Option<usize> {
+    let read_dir = std::fs::read_dir(dir).ok()?;
+    let mut latest: Option<usize> = None;
+    for entry in read_dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Some(step_str) = name.strip_prefix("step_") {
+            if let Ok(step) = step_str.parse::<usize>() {
+                // Only count if it has meta.json (complete checkpoint)
+                if entry.path().join("meta.json").exists() {
+                    latest = Some(latest.map_or(step, |prev: usize| prev.max(step)));
+                }
+            }
+        }
+    }
+    if let Some(step) = latest {
+        tracing::info!(step, dir = %dir.display(), "Auto-detected latest checkpoint step");
+    }
+    latest
+}
+
 /// Train the Energy-Based Model from trajectory data.
 pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let hidden_size = args.hidden_size;
@@ -2003,9 +2033,26 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     // 1. Create or resume energy head
     let head_config = EnergyHeadConfig::new(hidden_size);
     let device: <TrainingBackend as burn::prelude::Backend>::Device = Default::default();
+
+    // Determine resume_step: explicit flag, or auto-detect from latest step_* dir
+    let resume_step = if let Some(step) = args.resume_step {
+        Some(step)
+    } else if args.resume_from.is_some() {
+        // Auto-detect: find the latest step_* subdirectory in the output dir
+        auto_detect_latest_step(&args.output_dir)
+    } else {
+        None
+    };
+
     let model = if let Some(ref resume_path) = args.resume_from {
-        tracing::info!(path = %resume_path.display(), "Resuming from checkpoint");
-        let checkpoint_path = resume_path.join("final");
+        tracing::info!(path = %resume_path.display(), resume_step, "Resuming from checkpoint");
+        // New layout: final/model.mpk; old layout: final.mpk
+        let new_layout = resume_path.join("final").join("model.mpk");
+        let checkpoint_path = if new_layout.exists() {
+            resume_path.join("final").join("model")
+        } else {
+            resume_path.join("final")
+        };
         ebm::resume_from_checkpoint::<TrainingBackend>(&checkpoint_path, &head_config, &device)?
     } else {
         head_config.init::<TrainingBackend>(&device)
@@ -2221,6 +2268,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         &sampler,
         val_sampler.as_ref(),
         &device,
+        resume_step,
     )?;
 
     tracing::info!(

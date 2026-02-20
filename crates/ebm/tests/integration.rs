@@ -651,7 +651,7 @@ fn test_train_small_loop() {
         .with_checkpoint_interval(0) // disable mid-training checkpoints
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let trained = train(&config, model, &encode_fn, &sampler, None, &device);
+    let trained = train(&config, model, &encode_fn, &sampler, None, &device, None);
     assert!(trained.is_ok(), "train() should succeed: {:?}", trained.err());
 
     let trained_model = trained.unwrap();
@@ -667,8 +667,8 @@ fn test_train_small_loop() {
         assert!(v.is_finite(), "Energy[{i}] is not finite after training: {v}");
     }
 
-    // Verify final checkpoint was saved
-    let final_path = checkpoint_dir.join("final.mpk");
+    // Verify final checkpoint was saved (new layout: final/model.mpk)
+    let final_path = checkpoint_dir.join("final").join("model.mpk");
     assert!(
         final_path.exists(),
         "Final checkpoint should exist at {final_path:?}"
@@ -711,15 +711,15 @@ fn test_checkpoint_save_and_resume() {
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
     // Train and save
-    let trained = train(&config, model, &encode_fn, &sampler, None, &device).unwrap();
+    let trained = train(&config, model, &encode_fn, &sampler, None, &device, None).unwrap();
 
     // Get output from trained model on a fixed input
     let probe_data = vec![0.1_f32; d_encoder];
     let probe_tensor = embeddings_to_tensor::<TestAutodiffBackend>(&[probe_data.clone()], &device);
     let energy_before: f32 = trained.forward(probe_tensor).into_scalar().elem();
 
-    // Resume from the saved final checkpoint
-    let final_ckpt = checkpoint_dir.join("final");
+    // Resume from the saved final checkpoint (new layout: final/model)
+    let final_ckpt = checkpoint_dir.join("final").join("model");
     let loaded: ebm::model::energy_head::EnergyHead<TestBackend> =
         resume_from_checkpoint(&final_ckpt, &head_config, &device).unwrap();
 
@@ -777,7 +777,7 @@ fn test_train_encode_failure_recovery() {
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
     // Should NOT panic — skips failed steps and continues
-    let result = train(&config, model, &encode_fn, &sampler, None, &device);
+    let result = train(&config, model, &encode_fn, &sampler, None, &device, None);
     assert!(
         result.is_ok(),
         "train() should handle encode failures gracefully: {:?}",
@@ -831,7 +831,7 @@ fn test_train_depth_loss_weight_effect() {
         .with_d_hidden2(4)
         .with_dropout(0.0)
         .init::<TestAutodiffBackend>(&device);
-    let trained_0 = train(&config_no_depth, model_0, &encode_fn, &sampler, None, &device).unwrap();
+    let trained_0 = train(&config_no_depth, model_0, &encode_fn, &sampler, None, &device, None).unwrap();
 
     // Train with depth_loss_weight = 5.0 (heavy depth regression)
     let ckpt_dir_5 = tmp.path().join("ckpt_dw5");
@@ -850,7 +850,7 @@ fn test_train_depth_loss_weight_effect() {
         .with_d_hidden2(4)
         .with_dropout(0.0)
         .init::<TestAutodiffBackend>(&device);
-    let trained_5 = train(&config_heavy_depth, model_5, &encode_fn, &sampler, None, &device).unwrap();
+    let trained_5 = train(&config_heavy_depth, model_5, &encode_fn, &sampler, None, &device, None).unwrap();
 
     // Compare outputs on same probe input — different weight configs should diverge
     let probe = embeddings_to_tensor::<TestAutodiffBackend>(
@@ -909,10 +909,10 @@ fn test_ebm_scorer_load_from_checkpoint() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    train(&config, model, &encode_fn, &sampler, None, &device).unwrap();
+    train(&config, model, &encode_fn, &sampler, None, &device, None).unwrap();
 
     // Load via EBMScorer::load (inference backend, not autodiff)
-    let final_ckpt = checkpoint_dir.join("final");
+    let final_ckpt = checkpoint_dir.join("final").join("model");
     let scorer: EBMScorer<TestBackend> = EBMScorer::load(
         &final_ckpt,
         &head_config,
@@ -1084,19 +1084,25 @@ fn test_mid_training_checkpoint_roundtrip() {
         .with_checkpoint_interval(5) // save at step 5 and 10
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    train(&config, model, &encode_fn, &sampler, None, &device).unwrap();
+    train(&config, model, &encode_fn, &sampler, None, &device, None).unwrap();
 
-    // Verify mid-training checkpoints exist
-    let step5_path = checkpoint_dir.join("step_5.mpk");
-    let step10_path = checkpoint_dir.join("step_10.mpk");
-    let final_path = checkpoint_dir.join("final.mpk");
+    // Verify mid-training checkpoints exist (new layout: step_N/model.mpk)
+    let step5_path = checkpoint_dir.join("step_5").join("model.mpk");
+    let step10_path = checkpoint_dir.join("step_10").join("model.mpk");
+    let final_path = checkpoint_dir.join("final").join("model.mpk");
 
     assert!(step5_path.exists(), "Step 5 checkpoint should exist at {step5_path:?}");
     assert!(step10_path.exists(), "Step 10 checkpoint should exist at {step10_path:?}");
     assert!(final_path.exists(), "Final checkpoint should exist at {final_path:?}");
 
+    // Verify optimizer and metadata also saved
+    assert!(checkpoint_dir.join("step_5").join("optimizer.mpk").exists(), "Step 5 optimizer should exist");
+    assert!(checkpoint_dir.join("step_5").join("meta.json").exists(), "Step 5 meta.json should exist");
+    assert!(checkpoint_dir.join("final").join("optimizer.mpk").exists(), "Final optimizer should exist");
+    assert!(checkpoint_dir.join("final").join("meta.json").exists(), "Final meta.json should exist");
+
     // Load step-5 checkpoint and verify it produces valid output
-    let step5_ckpt = checkpoint_dir.join("step_5");
+    let step5_ckpt = checkpoint_dir.join("step_5").join("model");
     let loaded: ebm::EnergyHead<TestBackend> =
         resume_from_checkpoint(&step5_ckpt, &head_config, &Default::default()).unwrap();
 
@@ -1311,11 +1317,11 @@ fn test_train_with_cached_embeddings_end_to_end() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let result = train(&config, model, &cache_encode, &sampler, None, &device);
+    let result = train(&config, model, &cache_encode, &sampler, None, &device, None);
     assert!(result.is_ok(), "Training with cached embeddings should succeed: {:?}", result.err());
 
-    // Verify checkpoint saved
-    let final_ckpt = checkpoint_dir.join("final.mpk");
+    // Verify checkpoint saved (new layout: final/model.mpk)
+    let final_ckpt = checkpoint_dir.join("final").join("model.mpk");
     assert!(final_ckpt.exists(), "Final checkpoint should exist");
 
     // Verify trained model produces finite outputs
@@ -1450,7 +1456,7 @@ fn test_cache_partial_encode_failure() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let result = train(&config, model, &cache_encode, &sampler, None, &device);
+    let result = train(&config, model, &cache_encode, &sampler, None, &device, None);
     assert!(result.is_ok(), "train() should handle partial cache gracefully: {:?}", result.err());
 }
 

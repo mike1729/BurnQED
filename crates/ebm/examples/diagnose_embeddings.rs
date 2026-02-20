@@ -357,7 +357,11 @@ fn load_and_score_ebm(
                 .ok_or_else(|| anyhow::anyhow!("not in cache: {state}"))
         });
 
-    let checkpoint_path = ckpt_dir.join("final");
+    let checkpoint_path = if ckpt_dir.join("final").join("model.mpk").exists() {
+        ckpt_dir.join("final").join("model")
+    } else {
+        ckpt_dir.join("final")
+    };
     let device = Default::default();
     let scorer = EBMScorer::<NdArray<f32>>::load(
         &checkpoint_path,

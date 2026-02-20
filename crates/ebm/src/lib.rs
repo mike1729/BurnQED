@@ -44,4 +44,6 @@ pub use training::data::{
 };
 pub use training::loss::{depth_regression_loss, info_nce_loss};
 pub use training::metrics::{EBMMetrics, MetricsHistory};
-pub use training::trainer::{lr_schedule, resume_from_checkpoint, train, EBMTrainingConfig};
+pub use training::trainer::{
+    lr_schedule, resume_from_checkpoint, train, CheckpointMeta, EBMTrainingConfig,
+};

@@ -248,6 +248,10 @@ enum Command {
         /// to SGLang, enabling GPU-optimal batching. Set to 0 for individual requests.
         #[arg(long, default_value_t = 8)]
         encode_batch_size: usize,
+        /// Resume from a specific step checkpoint (e.g., 5000 loads step_5000/).
+        /// If --resume-from is set but this is omitted, auto-detects the latest step.
+        #[arg(long)]
+        resume_step: Option<usize>,
     },
 }
 
@@ -408,6 +412,7 @@ async fn main() -> anyhow::Result<()> {
             tactic_pairs,
             encode_concurrency,
             encode_batch_size,
+            resume_step,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -424,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
                 tactic_pairs,
                 encode_concurrency,
                 encode_batch_size,
+                resume_step,
             })
             .await
         }

@@ -10,7 +10,7 @@ use burn::grad_clipping::GradientClippingConfig;
 use burn::module::AutodiffModule;
 use burn::optim::{AdamWConfig, GradientsParams, Optimizer};
 use burn::prelude::*;
-use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder};
+use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder, Recorder};
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::TensorData;
 use rand::SeedableRng;
@@ -20,6 +20,14 @@ use crate::model::energy_head::{EnergyHead, EnergyHeadConfig};
 use crate::training::data::ContrastiveSampler;
 use crate::training::loss::{depth_regression_loss, info_nce_loss};
 use crate::training::metrics::{EBMMetrics, MetricsHistory};
+
+/// Metadata saved alongside each checkpoint for resuming training.
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct CheckpointMeta {
+    pub step: usize,
+    pub trained_steps: u64,
+    pub skipped_steps: u64,
+}
 
 /// Configuration for EBM training.
 #[derive(Config, Debug)]
@@ -43,7 +51,7 @@ pub struct EBMTrainingConfig {
     #[config(default = 0.3)]
     pub depth_loss_weight: f64,
     /// Steps between metric logging.
-    #[config(default = 500)]
+    #[config(default = 2000)]
     pub log_interval: usize,
     /// Steps between checkpoint saves.
     #[config(default = 5_000)]
@@ -222,6 +230,8 @@ impl RunningAvg {
 /// - `sampler`: provides contrastive training batches from trajectory data
 /// - `val_sampler`: optional validation sampler for overfitting detection
 /// - `device`: burn device for tensor operations
+/// - `resume_step`: if `Some(step)`, load optimizer state and metadata from
+///   `{checkpoint_dir}/step_{step}/` and continue training from that step
 ///
 /// # Returns
 /// The trained EnergyHead model.
@@ -232,6 +242,7 @@ pub fn train<B: AutodiffBackend>(
     sampler: &ContrastiveSampler,
     val_sampler: Option<&ContrastiveSampler>,
     device: &B::Device,
+    resume_step: Option<usize>,
 ) -> anyhow::Result<EnergyHead<B>> {
     // Create checkpoint directory
     std::fs::create_dir_all(&config.checkpoint_dir)?;
@@ -251,8 +262,43 @@ pub fn train<B: AutodiffBackend>(
     let train_start = Instant::now();
     let mut trained_steps: u64 = 0;
     let mut skipped_steps: u64 = 0;
+    let start_step: usize;
 
-    for step in 0..config.total_steps {
+    // Resume from checkpoint if requested
+    if let Some(step) = resume_step {
+        let step_dir = format!("{}/step_{step}", config.checkpoint_dir);
+        let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::new();
+
+        // Load optimizer state
+        let optim_path = format!("{step_dir}/optimizer");
+        let optim_record = recorder
+            .load(optim_path.into(), device)
+            .map_err(|e| anyhow::anyhow!("Failed to load optimizer from {step_dir}: {e}"))?;
+        optimizer = optimizer.load_record(optim_record);
+        tracing::info!(step, "Restored optimizer state");
+
+        // Load metadata
+        let meta_path = format!("{step_dir}/meta.json");
+        let meta: CheckpointMeta = serde_json::from_reader(
+            std::fs::File::open(&meta_path)
+                .map_err(|e| anyhow::anyhow!("Failed to open {meta_path}: {e}"))?,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to parse {meta_path}: {e}"))?;
+        trained_steps = meta.trained_steps;
+        skipped_steps = meta.skipped_steps;
+        start_step = step;
+
+        tracing::info!(
+            start_step,
+            trained_steps,
+            skipped_steps,
+            "Resumed training from checkpoint"
+        );
+    } else {
+        start_step = 0;
+    }
+
+    for step in start_step..config.total_steps {
         let lr = lr_schedule(config.lr, config.warmup_steps, config.total_steps, step);
 
         // Sample contrastive batch
@@ -428,12 +474,31 @@ pub fn train<B: AutodiffBackend>(
 
         // Save checkpoint at intervals
         if config.checkpoint_interval > 0 && step > 0 && step % config.checkpoint_interval == 0 {
-            let path = format!("{}/step_{step}", config.checkpoint_dir);
+            let step_dir = format!("{}/step_{step}", config.checkpoint_dir);
+            std::fs::create_dir_all(&step_dir)?;
+            let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::new();
+
+            // Model weights
+            let model_path = format!("{step_dir}/model");
             model
                 .clone()
-                .save_file(path, &NamedMpkFileRecorder::<FullPrecisionSettings>::new())
-                .map_err(|e| anyhow::anyhow!("Failed to save checkpoint at step {step}: {e}"))?;
-            tracing::info!(step, "Checkpoint saved");
+                .save_file(&model_path, &recorder)
+                .map_err(|e| anyhow::anyhow!("Failed to save model at step {step}: {e}"))?;
+
+            // Optimizer state
+            let optim_path = format!("{step_dir}/optimizer");
+            recorder
+                .record(optimizer.to_record(), optim_path.into())
+                .map_err(|e| anyhow::anyhow!("Failed to save optimizer at step {step}: {e}"))?;
+
+            // Metadata
+            let meta_path = format!("{step_dir}/meta.json");
+            serde_json::to_writer(
+                std::fs::File::create(&meta_path)?,
+                &CheckpointMeta { step, trained_steps, skipped_steps },
+            )?;
+
+            tracing::info!(step, "Checkpoint saved (model + optimizer + meta)");
         }
     }
 
@@ -460,16 +525,36 @@ pub fn train<B: AutodiffBackend>(
         );
     }
 
-    // Save final model
-    let final_path = format!("{}/final", config.checkpoint_dir);
+    // Save final checkpoint (model + optimizer + meta)
+    let final_dir = format!("{}/final", config.checkpoint_dir);
+    std::fs::create_dir_all(&final_dir)?;
+    let recorder = NamedMpkFileRecorder::<FullPrecisionSettings>::new();
+
+    let final_model_path = format!("{final_dir}/model");
     model
         .clone()
         .save_file(
-            final_path,
-            &NamedMpkFileRecorder::<FullPrecisionSettings>::new(),
+            &final_model_path,
+            &recorder,
         )
         .map_err(|e| anyhow::anyhow!("Failed to save final model: {e}"))?;
-    tracing::info!("Training complete. Final model saved.");
+
+    let final_optim_path = format!("{final_dir}/optimizer");
+    recorder
+        .record(optimizer.to_record(), final_optim_path.into())
+        .map_err(|e| anyhow::anyhow!("Failed to save final optimizer: {e}"))?;
+
+    let final_meta_path = format!("{final_dir}/meta.json");
+    serde_json::to_writer(
+        std::fs::File::create(&final_meta_path)?,
+        &CheckpointMeta {
+            step: config.total_steps,
+            trained_steps,
+            skipped_steps,
+        },
+    )?;
+
+    tracing::info!("Training complete. Final checkpoint saved (model + optimizer + meta).");
 
     Ok(model)
 }

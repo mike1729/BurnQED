@@ -369,10 +369,10 @@ fn test_train_ebm_mock_pipeline() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let _trained = ebm::train(&config, model, &encode_fn, &sampler, None, &device).unwrap();
+    let _trained = ebm::train(&config, model, &encode_fn, &sampler, None, &device, None).unwrap();
 
-    // Verify final checkpoint exists
-    let final_ckpt = checkpoint_dir.join("final.mpk");
+    // Verify final checkpoint exists (new layout: final/model.mpk)
+    let final_ckpt = checkpoint_dir.join("final").join("model.mpk");
     assert!(
         final_ckpt.exists(),
         "Final checkpoint should exist at {}",
@@ -452,11 +452,11 @@ fn test_train_ebm_with_cached_embeddings() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let result = ebm::train(&config, model, &cache_encode_fn, &sampler, None, &device);
+    let result = ebm::train(&config, model, &cache_encode_fn, &sampler, None, &device, None);
     assert!(result.is_ok(), "Training with cached embeddings should succeed: {:?}", result.err());
 
-    // Verify checkpoint saved
-    assert!(checkpoint_dir.join("final.mpk").exists());
+    // Verify checkpoint saved (new layout: final/model.mpk)
+    assert!(checkpoint_dir.join("final").join("model.mpk").exists());
 }
 
 /// Create sampler → precompute cache → save → load → train with loaded cache → checkpoint saved.
@@ -525,9 +525,9 @@ fn test_train_ebm_save_embeddings_roundtrip() {
         .with_checkpoint_interval(0)
         .with_checkpoint_dir(checkpoint_dir.to_string_lossy().to_string());
 
-    let result = ebm::train(&config, model, &cache_encode, &sampler, None, &device);
+    let result = ebm::train(&config, model, &cache_encode, &sampler, None, &device, None);
     assert!(result.is_ok(), "Training with loaded cache should succeed: {:?}", result.err());
-    assert!(checkpoint_dir.join("final.mpk").exists(), "Checkpoint should be saved");
+    assert!(checkpoint_dir.join("final").join("model.mpk").exists(), "Checkpoint should be saved");
 }
 
 /// Two-phase training: first run saves checkpoint + cache, second run resumes.
@@ -572,9 +572,9 @@ fn test_train_ebm_resume_with_cache() {
         .with_checkpoint_dir(ckpt_dir1.to_string_lossy().to_string());
 
     let model1 = head_config.init::<TrainBackend>(&device);
-    ebm::train(&config1, model1, &cache_encode, &sampler, None, &device).unwrap();
+    ebm::train(&config1, model1, &cache_encode, &sampler, None, &device, None).unwrap();
 
-    let ckpt1_path = ckpt_dir1.join("final.mpk");
+    let ckpt1_path = ckpt_dir1.join("final").join("model.mpk");
     assert!(ckpt1_path.exists(), "First run checkpoint should exist");
     let ckpt1_size = std::fs::metadata(&ckpt1_path).unwrap().len();
 
@@ -591,10 +591,10 @@ fn test_train_ebm_resume_with_cache() {
 
     // Resume: load weights from first run's checkpoint
     let resumed_model: ebm::EnergyHead<TrainBackend> =
-        ebm::resume_from_checkpoint(&ckpt_dir1.join("final"), &head_config, &device).unwrap();
-    ebm::train(&config2, resumed_model, &cache_encode, &sampler, None, &device).unwrap();
+        ebm::resume_from_checkpoint(&ckpt_dir1.join("final").join("model"), &head_config, &device).unwrap();
+    ebm::train(&config2, resumed_model, &cache_encode, &sampler, None, &device, None).unwrap();
 
-    let ckpt2_path = ckpt_dir2.join("final.mpk");
+    let ckpt2_path = ckpt_dir2.join("final").join("model.mpk");
     assert!(ckpt2_path.exists(), "Second run checkpoint should exist");
     let ckpt2_size = std::fs::metadata(&ckpt2_path).unwrap().len();
 
@@ -603,9 +603,9 @@ fn test_train_ebm_resume_with_cache() {
 
     // Verify both can be loaded back and produce outputs
     let loaded1: ebm::EnergyHead<TestBackend> =
-        ebm::resume_from_checkpoint(&ckpt_dir1.join("final"), &head_config, &Default::default()).unwrap();
+        ebm::resume_from_checkpoint(&ckpt_dir1.join("final").join("model"), &head_config, &Default::default()).unwrap();
     let loaded2: ebm::EnergyHead<TestBackend> =
-        ebm::resume_from_checkpoint(&ckpt_dir2.join("final"), &head_config, &Default::default()).unwrap();
+        ebm::resume_from_checkpoint(&ckpt_dir2.join("final").join("model"), &head_config, &Default::default()).unwrap();
 
     let probe = ebm::bridge::embeddings_to_tensor::<TestBackend>(
         &[vec![0.5_f32; d_encoder]],
