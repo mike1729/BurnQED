@@ -543,8 +543,27 @@ def train(args):
         probe_cb.trainer = trainer
         trainer.add_callback(probe_cb)
 
+    # Resume from checkpoint if requested
+    resume_ckpt = None
+    if args.resume:
+        if args.resume == "auto":
+            # Find latest checkpoint in output dir
+            import re
+            ckpt_dirs = sorted(
+                [d for d in output_dir.iterdir() if d.is_dir() and re.match(r"checkpoint-\d+", d.name)],
+                key=lambda d: int(d.name.split("-")[1]),
+            )
+            if ckpt_dirs:
+                resume_ckpt = str(ckpt_dirs[-1])
+                logger.info("Auto-resuming from latest checkpoint: %s", resume_ckpt)
+            else:
+                logger.warning("--resume auto but no checkpoints found in %s, starting fresh", output_dir)
+        else:
+            resume_ckpt = args.resume
+            logger.info("Resuming from checkpoint: %s", resume_ckpt)
+
     logger.info("Starting training...")
-    train_result = trainer.train()
+    train_result = trainer.train(resume_from_checkpoint=resume_ckpt)
 
     # Save final adapter
     logger.info("Saving LoRA adapter to %s", output_dir)
@@ -696,6 +715,11 @@ def main():
         "--probe-data",
         default=None,
         help="Path to separation probe JSON (enables SeparationProbeCallback)",
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help="Resume from checkpoint: path to checkpoint dir, or 'auto' to find latest",
     )
     parser.add_argument(
         "--save-steps",
