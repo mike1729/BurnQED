@@ -215,7 +215,7 @@ def train(args):
         """
 
         def __init__(self, probe_path: str, tokenizer, max_seq_len: int, output_dir: str,
-                     probe_interval: int = 500, batch_size: int = 8):
+                     probe_interval: int = 1000, batch_size: int = 8):
             super().__init__()
             probe_data = json.load(open(probe_path))
             pos_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "positive"]
@@ -430,7 +430,7 @@ def train(args):
             eval_dataset = build_dataset(eval_subset_records, tokenizer, args.max_seq_len)
             if args.pack:
                 eval_dataset = pack_sequences(eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
-            logger.info("Eval subset: %d / %d examples (quick eval every 100 steps, full eval every 500)",
+            logger.info("Eval subset: %d / %d examples (quick eval every 500 steps, full eval every 2000)",
                         eval_subset_size, len(val_records))
         else:
             eval_dataset = full_eval_dataset
@@ -492,7 +492,7 @@ def train(args):
         save_steps=save_steps,
         save_total_limit=3,
         eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=100 if eval_dataset else None,
+        eval_steps=500 if eval_dataset else None,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to="none",
@@ -516,7 +516,7 @@ def train(args):
     if has_periodic_eval:
         class FullEvalCallback(TrainerCallback):
             def on_step_end(self, args, state, control, **kwargs):
-                if state.global_step > 0 and state.global_step % 500 == 0:
+                if state.global_step > 0 and state.global_step % 2000 == 0:
                     if full_eval_dataset is not None and full_eval_dataset is not eval_dataset:
                         metrics = trainer.evaluate(
                             eval_dataset=full_eval_dataset,
