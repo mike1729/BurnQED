@@ -90,6 +90,10 @@ pub fn info_nce_loss<B: Backend>(
 /// producing stable, bounded energy scores. Gradients focus exclusively on hard
 /// negatives that violate the margin.
 ///
+/// Only pairs that violate the margin (hinge > 0) contribute to the loss average.
+/// This prevents easy negatives (already past the margin) from diluting the gradient
+/// signal on the hard negatives that actually need pushing.
+///
 /// # Arguments
 /// - `pos_energy`: shape `(batch,)` — energy of positive (on-path) states
 /// - `neg_energies`: shape `(batch, K)` — energies of K negative states per sample
@@ -111,8 +115,10 @@ pub fn margin_ranking_loss<B: Backend>(
     let diff = pos_expanded - neg_energies + margin;
     let hinge = diff.clamp_min(0.0);
 
-    // Mean over all pairs
-    hinge.mean()
+    // Mean over only active (margin-violating) pairs to avoid dilution
+    let active = hinge.clone().greater_elem(0.0).float();
+    let num_active = active.clone().sum();
+    hinge.mul(active).sum() / (num_active + 1e-8)
 }
 
 /// Compute the contrastive loss based on the selected loss type.

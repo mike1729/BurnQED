@@ -8,7 +8,8 @@
 #   START_STEP=1 ./scripts/run_iteration_train.sh 1  # Skip pre-eval, start at training
 #   START_STEP=2 ./scripts/run_iteration_train.sh 1  # Skip training, restart + post-eval
 #
-# Steps: 0=pre-eval, 1=LLM fine-tuning, 1b=export, 2=restart server, 3=post-eval
+# Steps: 0=pre-eval, 1=LLM fine-tuning, 1b=export, 2=restart server, 3=post-eval,
+#        4=EBM (encode + train, via run_ebm_train.sh)
 #
 # Prerequisites:
 #   - Python deps installed (pip install -r python/requirements.txt)
@@ -31,6 +32,7 @@ TRAJ_DIR="${REPO_ROOT}/trajectories"
 CKPT_DIR="${REPO_ROOT}/checkpoints/llm"
 TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
 VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
+EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 
 # Pre/post eval model: iter 0 uses base HF model, iter N uses previous iter's export
 if [ "$ITER" -eq 0 ]; then
@@ -71,7 +73,7 @@ echo "  LoRA rank:       ${LORA_R:-16}, alpha: ${LORA_ALPHA:-32}, MLP: ${LORA_ML
 echo "  LR override:     ${LR:-auto}"
 echo "  Save steps:      ${SAVE_STEPS:-auto}"
 echo "  Probe data:      ${PROBE_DATA:-none}"
-echo "  Start step:      ${START_STEP} (0=pre-eval, 1=train, 2=restart, 3=post-eval)"
+echo "  Start step:      ${START_STEP} (0=pre-eval, 1=train, 2=restart, 3=post-eval, 4=EBM)"
 echo "================================================================"
 
 # ── Step 0: Pre-training Eval ────────────────────────────────────────────
@@ -177,6 +179,19 @@ else
     fi
 fi
 
+# ── Step 4: EBM (encode embeddings + train) ──────────────────────────────
+if [ "$START_STEP" -gt 4 ]; then
+    echo ""
+    echo "=== Step 4: EBM Training [SKIPPED — START_STEP=${START_STEP}] ==="
+elif [ "$ITER" -gt 0 ]; then
+    echo ""
+    echo "=== Step 4: EBM Training (encode + train via run_ebm_train.sh) ==="
+    "${REPO_ROOT}/scripts/run_ebm_train.sh" "$ITER"
+else
+    echo ""
+    echo "=== Step 4: EBM Training [SKIPPED — iteration 0] ==="
+fi
+
 echo ""
 echo "================================================================"
 echo "  Training complete!"
@@ -187,6 +202,10 @@ if [ -f "${EVAL_DIR}/iter_${ITER}_pre_train.json" ]; then
 fi
 if [ -f "${EVAL_DIR}/iter_${ITER}_post_train.json" ]; then
     echo "  Post-train eval: ${EVAL_DIR}/iter_${ITER}_post_train.json"
+fi
+if [ "$ITER" -gt 0 ]; then
+    echo "  EBM checkpoint:  ${EBM_DIR}"
+    echo "  Embeddings:      ${EBM_DIR}/embeddings.parquet"
 fi
 echo "================================================================"
 echo ""

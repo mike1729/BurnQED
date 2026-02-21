@@ -163,11 +163,20 @@ async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float
     for i, output in enumerate(outputs):
         hs = output.get("meta_info", {}).get("hidden_states")
         if hs is None:
-            logger.warning("Batch encode prompt %d/%d: no hidden_states", i + 1, len(prompts))
+            logger.warning("Batch encode prompt %d/%d: no hidden_states (len=%d chars, first80=%s)",
+                           i + 1, len(prompts), len(prompts[i]), prompts[i][:80])
             embeddings.append(list(zero))
             continue
         try:
-            embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+            emb = _mean_pool_hidden_states(hs, hidden_size)
+            # Detect zero embeddings from valid hidden_states
+            emb_norm = sum(x * x for x in emb) ** 0.5
+            if emb_norm < 1e-6:
+                logger.warning("Batch encode prompt %d/%d: zero-norm embedding (hs_type=%s, hs_len=%s, len=%d chars, first80=%s)",
+                               i + 1, len(prompts), type(hs).__name__,
+                               getattr(hs, 'shape', None) or len(hs) if hasattr(hs, '__len__') else '?',
+                               len(prompts[i]), prompts[i][:80])
+            embeddings.append(emb)
         except Exception as e:
             logger.warning("Batch encode prompt %d/%d: %s", i + 1, len(prompts), e)
             embeddings.append(list(zero))
@@ -175,37 +184,50 @@ async def _encode_batch(prompts: list[str], hidden_size: int) -> list[list[float
 
 
 async def _encode_sequential(prompts: list[str], hidden_size: int) -> list[list[float]]:
-    """Encode prompts one at a time under Semaphore(1) (safe fallback).
+    """Encode prompts as individual async_generate calls, fired concurrently.
+
+    Each prompt is a separate single-prompt request (hidden_states work correctly
+    for individual requests). All requests are fired concurrently via asyncio.gather
+    so SGLang's continuous batching can still group them on the GPU.
 
     Returns per-prompt results: successful embeddings or zero vectors on failure.
-    Uses a 10s per-prompt timeout to avoid blocking on problematic inputs.
     """
     zero = [0.0] * hidden_size
-    embeddings = []
-    for i, prompt in enumerate(prompts):
+
+    async def _encode_one(prompt: str, idx: int) -> list[float]:
         try:
-            async with _encode_semaphore:
-                output = await asyncio.wait_for(
-                    _engine.async_generate(
-                        [prompt],
-                        sampling_params={"max_new_tokens": 1, "temperature": 0},
-                        return_hidden_states=True,
-                    ),
-                    timeout=10.0,
-                )
+            output = await asyncio.wait_for(
+                _engine.async_generate(
+                    [prompt],
+                    sampling_params={"max_new_tokens": 1, "temperature": 0},
+                    return_hidden_states=True,
+                ),
+                timeout=10.0,
+            )
             hs = output[0].get("meta_info", {}).get("hidden_states")
             if hs is None:
-                logger.warning("Encode prompt %d/%d: no hidden_states (len=%d chars)", i + 1, len(prompts), len(prompt))
-                embeddings.append(list(zero))
-                continue
-            embeddings.append(_mean_pool_hidden_states(hs, hidden_size))
+                logger.warning("Encode prompt %d/%d: no hidden_states (len=%d chars)", idx + 1, len(prompts), len(prompt))
+                return list(zero)
+            emb = _mean_pool_hidden_states(hs, hidden_size)
+            emb_norm = sum(x * x for x in emb) ** 0.5
+            if emb_norm < 1e-6:
+                logger.warning("Encode prompt %d/%d: zero-norm embedding (len=%d chars, first80=%s)",
+                               idx + 1, len(prompts), len(prompt), prompt[:80])
+            return emb
         except asyncio.TimeoutError:
-            logger.warning("Encode prompt %d/%d: timeout (len=%d chars)", i + 1, len(prompts), len(prompt))
-            embeddings.append(list(zero))
+            logger.warning("Encode prompt %d/%d: timeout (len=%d chars)", idx + 1, len(prompts), len(prompt))
+            return list(zero)
         except Exception as e:
-            logger.warning("Encode prompt %d/%d: error %s (len=%d chars)", i + 1, len(prompts), e, len(prompt))
-            embeddings.append(list(zero))
-    return embeddings
+            logger.warning("Encode prompt %d/%d: error %s (len=%d chars)", idx + 1, len(prompts), e, len(prompt))
+            return list(zero)
+
+    # Must serialize: SGLang's continuous batching merges concurrent requests
+    # internally, and return_hidden_states is broken for all but the first
+    # request in an internal batch. asyncio.gather would trigger this.
+    results = []
+    for i, p in enumerate(prompts):
+        results.append(await _encode_one(p, i))
+    return results
 
 
 def _run_batch_selftest(engine, hidden_size: int = 4096) -> bool:
@@ -411,14 +433,14 @@ def main():
     _engine = _build_engine(args.model_path, tp=tp, mem_fraction=mem_fraction)
     _encode_semaphore = asyncio.Semaphore(1)
 
-    # Self-test DISABLED: running async_generate in a separate event loop
-    # (asyncio.new_event_loop) before uvicorn starts corrupts SGLang's
-    # scheduler state, causing it to spin at 100% CPU.  Batch encoding
-    # itself works fine — the self-test was the problem, not batching.
-    _batch_encode_ok = True
+    # Batch return_hidden_states is broken in SGLang — only the first item in
+    # a batch gets valid hidden states, rest are zeros (SGLang #8066).
+    # chunked_prefill_size=-1 does NOT fix this. Use sequential encoding
+    # (individual async_generate calls, one at a time). At ~35 states/sec
+    # this gives ~1h45m for full 217K cache and ~460ms per search expansion.
+    _batch_encode_ok = False
     logger.info(
-        "Self-test skipped (corrupts SGLang scheduler) — "
-        "batch encoding enabled by default"
+        "Batch encoding DISABLED (SGLang #8066) — sequential at ~35 states/sec"
     )
 
     logger.info("Starting server on %s:%d", args.host, port)

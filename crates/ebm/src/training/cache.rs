@@ -181,8 +181,19 @@ impl EmbeddingCache {
                         "Embedding dim mismatch: expected {dim}, got {}",
                         emb.len()
                     );
-                    self.embeddings.insert(state, emb);
-                    encoded += 1;
+                    let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    if norm < 1e-6 {
+                        errors += 1;
+                        let preview: String = state.chars().take(120).collect();
+                        tracing::warn!(
+                            norm,
+                            state = %preview,
+                            "Zero-norm embedding returned by server — skipping"
+                        );
+                    } else {
+                        self.embeddings.insert(state, emb);
+                        encoded += 1;
+                    }
                 }
                 Err(e) => {
                     errors += 1;

@@ -2109,23 +2109,29 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         EmbeddingCache::new(hidden_size)
     };
 
-    // 5. Connect to SGLang and precompute all unique embeddings concurrently
-    let config = SglangConfig {
-        server_url: args.server_url.clone(),
-        temperature: 0.0,
-        top_p: 1.0,
-        max_tactic_tokens: 1,
-        hidden_size,
-    };
-    let client = SglangClient::new(config).await?;
-    let handle = InferenceHandle::new(client);
+    // 5. Check if all states are already cached — skip server connection if so
+    let uncached_count = unique_states.iter().filter(|s| cache.get(s).is_none()).count();
 
     let encode_concurrency = args.encode_concurrency;
     let encode_batch_size = args.encode_batch_size;
-
     let checkpoint_path = args.save_embeddings.as_deref();
 
-    let (newly_encoded, encode_errors) = if encode_batch_size > 0 {
+    let (newly_encoded, encode_errors) = if uncached_count == 0 {
+        tracing::info!("All {} states found in cache — skipping server connection", unique_states.len());
+        (0, 0)
+    } else {
+        tracing::info!(uncached = uncached_count, "Connecting to SGLang to encode missing states");
+        let config = SglangConfig {
+            server_url: args.server_url.clone(),
+            temperature: 0.0,
+            top_p: 1.0,
+            max_tactic_tokens: 1,
+            hidden_size,
+        };
+        let client = SglangClient::new(config).await?;
+        let handle = InferenceHandle::new(client);
+
+        if encode_batch_size > 0 {
         // Batched: send N texts per HTTP request for GPU-optimal batching
         cache
             .precompute_batched_with_checkpoint(
@@ -2165,6 +2171,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
                 10_000,
             )
             .await
+    }
     };
 
     if encode_errors > 0 {

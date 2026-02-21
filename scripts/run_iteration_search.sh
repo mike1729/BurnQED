@@ -1,17 +1,18 @@
 #!/bin/bash
-# Steps 2-5 of an expert iteration: EBM training, proof search, eval, summary.
+# Proof search, eval, and summary for an expert iteration.
 #
-# Run this after run_iteration_train.sh. The server is auto-managed — if it's
-# running with the wrong model (or not running), it will be restarted.
+# Run this after run_iteration_train.sh (which handles LLM training, encoding,
+# and EBM training). The server is auto-managed — if it's running with the
+# wrong model (or not running), it will be restarted.
 #
 # Usage:
 #   ./scripts/run_iteration_search.sh <iteration_number>
 #   ./scripts/run_iteration_search.sh 0
 #   NUM_WORKERS=30 ./scripts/run_iteration_search.sh 1
-#   START_STEP=3 ./scripts/run_iteration_search.sh 2   # skip EBM, start at search
-#   START_STEP=4 ./scripts/run_iteration_search.sh 2   # skip EBM+search, start at eval
+#   START_STEP=3 ./scripts/run_iteration_search.sh 2   # skip search, start at eval
+#   START_STEP=4 ./scripts/run_iteration_search.sh 2   # skip search+eval, start at summary
 #
-# Steps: 2=EBM training, 3=proof search, 4=evaluation, 5=summary
+# Steps: 2=proof search, 3=evaluation, 4=summary
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
@@ -36,10 +37,6 @@ CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 EVAL_MAX_THEOREMS="${EVAL_MAX_THEOREMS:-500}"
-EBM_STEPS="${EBM_STEPS:-50000}"
-ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-64}"
-ENCODE_CONCURRENCY="${ENCODE_CONCURRENCY:-2}"
-EBM_RESUME="${EBM_RESUME:-auto}"
 START_STEP="${START_STEP:-2}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
@@ -62,134 +59,10 @@ echo "  SGLang:          ${SGLANG_URL}"
 echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
 echo "  Max theorems:    ${MAX_THEOREMS} (eval: ${EVAL_MAX_THEOREMS})"
-echo "  EBM steps:       ${EBM_STEPS}"
-echo "  EBM resume:      ${EBM_RESUME}"
-echo "  Encode:          batch_size=${ENCODE_BATCH_SIZE} concurrency=${ENCODE_CONCURRENCY}"
-echo "  Start step:      ${START_STEP} (2=EBM, 3=search, 4=eval, 5=summary)"
+echo "  Start step:      ${START_STEP} (2=search, 3=eval, 4=summary)"
 echo "================================================================"
 
-# ── Step 2: EBM Training (skip iteration 0) ───────────────────────────────
-if [ "$START_STEP" -gt 2 ]; then
-    echo ""
-    echo "=== Step 2: EBM Training [SKIPPED — START_STEP=${START_STEP}] ==="
-elif [ "$ITER" -gt 0 ]; then
-    echo ""
-    echo "=== Step 2a: Preparing EBM Training Data ==="
-
-    # Collect trajectory files from all previous iterations.
-    # Includes: iter_N.parquet, iter_N_noisy.parquet, iter_N_harvest.parquet,
-    #           iter_N_negatives.parquet, etc.
-    # Excludes: *_test.parquet, *_debug.parquet, *_smoke.parquet (tiny artifacts)
-    TRAJ_FILES=()
-    for i in $(seq 0 "$PREV"); do
-        pattern="${TRAJ_DIR}/iter_${i}*.parquet"
-        # shellcheck disable=SC2086
-        for f in $pattern; do
-            base=$(basename "$f")
-            case "$base" in
-                *_test.parquet|*_debug.parquet|*_smoke.parquet) continue ;;
-            esac
-            [ -f "$f" ] && TRAJ_FILES+=("$f")
-        done
-    done
-
-    if [ ${#TRAJ_FILES[@]} -eq 0 ]; then
-        echo "ERROR: No trajectory files found for iterations 0..${PREV}"
-        exit 1
-    fi
-
-    # Data summary: report files, total size, and record stats
-    echo "  Trajectory files (${#TRAJ_FILES[@]}):"
-    TOTAL_SIZE=0
-    for f in "${TRAJ_FILES[@]}"; do
-        fsize=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
-        fsize_mb=$((fsize / 1048576))
-        TOTAL_SIZE=$((TOTAL_SIZE + fsize))
-        echo "    $(basename "$f")  (${fsize_mb}MB)"
-    done
-    echo "  Total: $((TOTAL_SIZE / 1048576))MB across ${#TRAJ_FILES[@]} files"
-
-    # Quick record count via Python (fast — reads only Parquet metadata + label column)
-    python3 -c "
-import pyarrow.parquet as pq
-from collections import Counter
-import sys
-files = sys.argv[1:]
-total, labels = 0, Counter()
-states = set()
-for f in files:
-    t = pq.read_table(f, columns=['label', 'state_pp'])
-    total += len(t)
-    labels.update(t.column('label').to_pylist())
-    states.update(t.column('state_pp').to_pylist())
-print(f'  Records: {total:,} ({labels.get(\"positive\",0):,} pos, {labels.get(\"negative\",0):,} neg)')
-print(f'  Unique states to encode: {len(states):,}')
-print(f'  EBM network: 11M params (4096→2048→1024→512→1)')
-steps = int('${EBM_STEPS}')
-bs = 128
-draws = steps * bs
-print(f'  Training: {steps} steps × {bs} batch = {draws:,} samples')
-print(f'  Effective epochs: ~{draws / max(len(states), 1):.1f}×')
-" "${TRAJ_FILES[@]}"
-
-    # EBM resume logic
-    # EBM_RESUME=auto (default): resume from previous iteration's checkpoint if it exists
-    # EBM_RESUME=none: start from scratch
-    # EBM_RESUME=/path/to/dir: resume from a specific checkpoint directory
-    RESUME_FLAG=""
-    PREV_EBM="${REPO_ROOT}/checkpoints/ebm/iter_${PREV}"
-    if [ "$EBM_RESUME" = "none" ]; then
-        RESUME_FLAG=""
-        echo "  Resume: disabled (EBM_RESUME=none)"
-    elif [ "$EBM_RESUME" = "auto" ]; then
-        if [ -d "$PREV_EBM" ] && [ -f "${PREV_EBM}/final.mpk" ]; then
-            RESUME_FLAG="--resume-from ${PREV_EBM}"
-            echo "  Resume: from ${PREV_EBM} (auto)"
-        else
-            echo "  Resume: none (auto — no previous checkpoint at ${PREV_EBM})"
-        fi
-    elif [ -d "$EBM_RESUME" ] && [ -f "${EBM_RESUME}/final.mpk" ]; then
-        RESUME_FLAG="--resume-from ${EBM_RESUME}"
-        echo "  Resume: from ${EBM_RESUME} (custom path)"
-    else
-        echo "  ERROR: EBM_RESUME=${EBM_RESUME} but no final.mpk found in that directory"
-        ls -la "$EBM_RESUME" 2>/dev/null || echo "    (directory does not exist)"
-        exit 1
-    fi
-
-    EMBEDDINGS_SAVE="${EBM_DIR}/embeddings.parquet"
-
-    # Auto-resume from partial embeddings cache if it exists
-    EMBEDDINGS_CACHE_FLAG=""
-    if [ -f "$EMBEDDINGS_SAVE" ]; then
-        EMBEDDINGS_CACHE_FLAG="--embeddings-cache ${EMBEDDINGS_SAVE}"
-        echo "  Warm start: loading existing embeddings from ${EMBEDDINGS_SAVE}"
-    fi
-
-    echo ""
-    echo "=== Step 2b: EBM Training ==="
-    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_2_ebm.log"
-    echo "  Logging to: ${STEP_LOG}"
-
-    # shellcheck disable=SC2086
-    run_logged "$STEP_LOG" $PROVER train-ebm \
-        --trajectories ${TRAJ_FILES[*]} \
-        --server-url $SGLANG_URL \
-        --hidden-size ${HIDDEN_SIZE:-4096} \
-        --output-dir $EBM_DIR \
-        --steps $EBM_STEPS \
-        --batch-size 256 \
-        --save-embeddings $EMBEDDINGS_SAVE \
-        $EMBEDDINGS_CACHE_FLAG \
-        $RESUME_FLAG \
-        --encode-batch-size $ENCODE_BATCH_SIZE \
-        --encode-concurrency $ENCODE_CONCURRENCY
-else
-    echo ""
-    echo "=== Step 2: Skipping EBM training (iteration 0) ==="
-fi
-
-# ── Step 3: Proof Search ──────────────────────────────────────────────────
+# ── Step 2: Proof Search ──────────────────────────────────────────────────
 
 # EBM flag needed by both search and eval — resolve before skip check
 EBM_FLAG=""
@@ -199,12 +72,12 @@ fi
 
 TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
 
-if [ "$START_STEP" -gt 3 ]; then
+if [ "$START_STEP" -gt 2 ]; then
     echo ""
-    echo "=== Step 3: Proof Search [SKIPPED — START_STEP=${START_STEP}] ==="
+    echo "=== Step 2: Proof Search [SKIPPED — START_STEP=${START_STEP}] ==="
 else
     echo ""
-    echo "=== Step 3: Proof Search ==="
+    echo "=== Step 2: Proof Search ==="
 
     if [ ! -f "$SEARCH_THEOREMS" ]; then
         echo "ERROR: Search theorem file not found: ${SEARCH_THEOREMS}"
@@ -212,7 +85,7 @@ else
         exit 1
     fi
 
-    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_3_search.log"
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_2_search.log"
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
@@ -227,13 +100,13 @@ else
         --max-theorems $MAX_THEOREMS \
         --imports Mathlib
 
-    # ── Step 3b: Noise injection search (iteration 0 only) ────────────────
+    # ── Step 2b: Noise injection search (iteration 0 only) ────────────────
     if [ "$ITER" -eq 0 ]; then
         echo ""
-        echo "=== Step 3b: Noise Injection Search (temperature=1.2) ==="
+        echo "=== Step 2b: Noise Injection Search (temperature=1.2) ==="
 
         NOISY_OUTPUT="${TRAJ_DIR}/iter_0_noisy.parquet"
-        STEP_LOG="${LOG_DIR}/iter_0_step_3b_noisy.log"
+        STEP_LOG="${LOG_DIR}/iter_0_step_2b_noisy.log"
         echo "  Logging to: ${STEP_LOG}"
 
         # shellcheck disable=SC2086
@@ -250,13 +123,13 @@ else
     fi
 fi
 
-# ── Step 4: Evaluation ────────────────────────────────────────────────────
-if [ "$START_STEP" -gt 4 ]; then
+# ── Step 3: Evaluation ────────────────────────────────────────────────────
+if [ "$START_STEP" -gt 3 ]; then
     echo ""
-    echo "=== Step 4: Evaluation [SKIPPED — START_STEP=${START_STEP}] ==="
+    echo "=== Step 3: Evaluation [SKIPPED — START_STEP=${START_STEP}] ==="
 else
     echo ""
-    echo "=== Step 4: Evaluation ==="
+    echo "=== Step 3: Evaluation ==="
 
     if [ -f "$MINIF2F" ]; then
         EVAL_THEOREMS="$MINIF2F"
@@ -266,7 +139,7 @@ else
     fi
 
     # Eval WITH EBM (if available)
-    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_4_eval.log"
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_3_eval.log"
     echo "  Logging to: ${STEP_LOG}"
 
     # shellcheck disable=SC2086
@@ -283,11 +156,11 @@ else
         --num-candidates 16 \
         --imports Mathlib
 
-    # ── Step 4b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────
+    # ── Step 3b: EBM Ablation (iter > 0 — eval WITHOUT EBM) ──────────────
     if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
         echo ""
-        echo "=== Step 4b: EBM Ablation (eval WITHOUT EBM) ==="
-        STEP_LOG="${LOG_DIR}/iter_${ITER}_step_4b_ablation.log"
+        echo "=== Step 3b: EBM Ablation (eval WITHOUT EBM) ==="
+        STEP_LOG="${LOG_DIR}/iter_${ITER}_step_3b_ablation.log"
         echo "  Logging to: ${STEP_LOG}"
 
         # shellcheck disable=SC2086
@@ -305,9 +178,9 @@ else
     fi
 fi
 
-# ── Step 5: Summary ──────────────────────────────────────────────────────
+# ── Step 4: Summary ──────────────────────────────────────────────────────
 echo ""
-echo "=== Step 5: Trajectory Summary ==="
+echo "=== Step 4: Trajectory Summary ==="
 $PROVER summary --input "$TRAJ_OUTPUT"
 
 # Compare with previous iteration if available

@@ -46,6 +46,21 @@ ensure_sglang() {
 # Marker file tracking which model the inference server currently has loaded.
 SERVER_MODEL_MARKER="/tmp/burnqed_server_model"
 
+# Stop the running inference server to free VRAM.
+#
+# Usage:
+#   stop_inference_server
+stop_inference_server() {
+    echo "Stopping inference server..."
+    pkill -f "inference_server.py" 2>/dev/null || true
+    sleep 3
+    pkill -9 -f "inference_server.py" 2>/dev/null || true
+    sleep 2
+
+    rm -f "$SERVER_MODEL_MARKER"
+    echo "Inference server stopped"
+}
+
 # Kill the running inference server, start a new one with the given model,
 # and wait for it to become healthy.
 #
@@ -55,13 +70,7 @@ restart_inference_server() {
     local url="${1:?Usage: restart_inference_server <url> <model_path>}"
     local model="${2:?Usage: restart_inference_server <url> <model_path>}"
 
-    echo "Stopping inference server..."
-    pkill -f "inference_server.py" 2>/dev/null || true
-    sleep 3
-    pkill -9 -f "inference_server.py" 2>/dev/null || true
-    sleep 2
-
-    rm -f "$SERVER_MODEL_MARKER"
+    stop_inference_server
 
     # Start server with new model and wait for health
     ensure_sglang "$url" "$model"
