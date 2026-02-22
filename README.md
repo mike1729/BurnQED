@@ -14,7 +14,7 @@ A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic genera
 ## Architecture
 
 ```
-DeepSeek-Prover-V2-7B (SGLang server)
+DeepSeek-Prover-V2-7B (custom inference server, sgl.Engine)
 ├── Policy head: autoregressive tactic generation (LM head)
 └── Mean-pool hidden states → Vec<f32> via /encode endpoint
                                     │
@@ -42,22 +42,23 @@ BurnQED/
 │   ├── prover-core/     # CLI binary tying everything together
 │   └── burn-contrib/    # Upstream burn-rs PR modules (stub)
 ├── python/
-│   ├── inference_server.py  # Custom SGLang server with in-process mean-pooling
-│   ├── training/            # LoRA fine-tuning (train_llm.py, merge_lora.py)
-│   └── data/                # Mathlib tracing, tactic pair extraction
-├── scripts/             # Setup, baseline, iteration, resume orchestration
+│   ├── inference_server.py  # Custom sgl.Engine server with in-process mean-pooling
+│   ├── encode_embeddings.py # Direct PyTorch encoding (bypasses SGLang batch bug)
+│   ├── training/            # LoRA fine-tuning (train_llm.py, export_llm.py)
+│   └── data/                # Mathlib tracing, tactic pair extraction, miniF2F download
+├── scripts/             # Pipeline orchestration scripts
 ├── configs/             # search.toml, models.toml
-├── data/                # test_theorems.json, theorem indices
-├── vendor/Pantograph/   # Git submodule (Lean 4 REPL)
-└── docs/                # Full plan, phase instructions
+├── data/                # theorem_index.json, minif2f_test.json, tactic_pairs/
+├── vendor/Pantograph/   # Git submodule (Lean 4 REPL, Mathlib v4.26.0)
+└── docs/                # Architecture plan, experiment guide, known issues
 ```
 
 ## Prerequisites
 
 - **Rust** (stable, edition 2021)
 - **Lean 4** via [elan](https://github.com/leanprover/elan)
-- **Python 3.10+** with `torch`, `transformers`, `peft`, `accelerate` (for LLM fine-tuning)
-- **GPU** recommended for LLM inference and training; CPU works for development and EBM-only training
+- **Python 3.10+** with `sglang`, `torch`, `transformers`, `peft`, `accelerate`
+- **GPU** required for LLM inference; EBM training supports both CUDA and CPU
 - **DeepSeek-Prover-V2-7B** weights ([HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-Prover-V2-7B))
 
 ## Quick Start
@@ -84,6 +85,66 @@ bash scripts/setup_runpod.sh   # RunPod (RTX 4090) — recommended
 bash scripts/setup_lambda.sh   # Lambda Labs (A100)
 ```
 
+## Expert Iteration Pipeline
+
+Each iteration has two phases: **train** then **search**.
+
+```
+For iteration i = 0, 1, 2, ...:
+
+  run_iteration_train.sh i
+  ┌───────────────────────────────────────────┐
+  │ Step 0: Pre-training eval (train subset)  │
+  │ Step 1: LLM LoRA fine-tuning (Python)     │
+  │ Step 1b: Export merged safetensors        │
+  │ Step 2: Restart inference server          │
+  │ Step 3: Post-training eval (train subset) │
+  │ Step 4: EBM training (encode + train)     │  ← skip for iter 0
+  │ Step 5: miniF2F evaluation + ablation     │
+  └───────────────────────────────────────────┘
+
+  run_iteration_search.sh i
+  ┌───────────────────────────────────────────┐
+  │ Step 2: Proof search (trajectory collect) │
+  │ Step 3: Trajectory summary                │
+  └───────────────────────────────────────────┘
+```
+
+Both scripts support `START_STEP=N` to skip earlier steps.
+
+```bash
+# Full pipeline
+./scripts/run_iteration_train.sh 1
+./scripts/run_iteration_search.sh 1
+
+# Skip to EBM training + eval
+START_STEP=4 ./scripts/run_iteration_train.sh 1
+
+# Skip to miniF2F eval only
+START_STEP=5 ./scripts/run_iteration_train.sh 1
+```
+
+### EBM Training
+
+EBM training uses pre-computed embeddings (direct PyTorch encoding, bypassing SGLang's broken batch hidden states). The `run_ebm_train.sh` script handles the full cycle: stop server, encode, train, restart server.
+
+```bash
+# Standalone EBM training
+./scripts/run_ebm_train.sh 2
+
+# Environment variables
+EBM_STEPS=50000 EBM_LR=3e-5 LOSS_TYPE=info_nce ./scripts/run_ebm_train.sh 2
+```
+
+### Inference Server
+
+Custom server wrapping `sgl.Engine` with in-process mean-pooling for encoding:
+
+```bash
+./scripts/start_inference_server.sh models/llm/iter_1
+PORT=30000 TP=1 ./scripts/start_inference_server.sh
+```
+
 ## CLI Reference
 
 All commands are subcommands of `cargo run --release -p prover-core --`:
@@ -92,107 +153,49 @@ All commands are subcommands of `cargo run --release -p prover-core --`:
 
 ```bash
 cargo run --release -p prover-core -- search \
+    --config configs/search.toml \
     --server-url http://localhost:30000 \
-    --theorems data/test_theorems.json \
-    --output trajectories/run.parquet \
-    --ebm-path checkpoints/ebm \       # optional: EBM value guidance
-    --resume-from partial.parquet \     # optional: skip already-proved theorems
-    --temperature 0.8 \                 # optional: sampling temperature
-    --concurrency 4 \                   # optional: parallel theorem search
-    --num-workers 64                    # optional: Lean worker pool size
+    --theorems data/iter1_search_theorems.json \
+    --output trajectories/iter_1.parquet \
+    --ebm-path checkpoints/ebm/iter_1 \  # optional: EBM value guidance
+    --concurrency 8 \
+    --num-workers 8 \
+    --imports Mathlib
 ```
-
-Use `--dry-run` to validate environment setup without searching.
-
-### `generate-negatives` — Generate contrastive training data
-
-Walks LeanDojo proof traces in Pantograph, generates LLM candidates at each step, and classifies results as Positive (ground-truth or alternative proof) or Negative (divergent path).
-
-```bash
-cargo run --release -p prover-core -- generate-negatives \
-    --tactic-pairs data/tactic_pairs/train.jsonl \
-    --server-url http://localhost:30000 \
-    --output negatives.parquet \
-    --num-theorems 5000 \             # optional: sample N theorems
-    --min-steps 3 \                   # optional: filter to multi-step proofs
-    --candidates-per-step 8 \         # LLM candidates per proof step
-    --target-negatives 15 \           # early stop per theorem
-    --temperature 1.0
-```
-
-Multi-tactic chains are walked: if the model generates a full proof attempt, intermediate states are buffered and labeled Positive if the chain completes the proof, Negative otherwise.
 
 ### `eval` — Multi-budget evaluation
 
 ```bash
 cargo run --release -p prover-core -- eval \
+    --config configs/search.toml \
     --server-url http://localhost:30000 \
     --theorems data/minif2f_test.json \
-    --budgets 100,300,600 \
-    --pass-n 8 \
+    --budgets 600 \
     --output eval_results/iter_1.json \
-    --ebm-path checkpoints/ebm/iter_1
+    --ebm-path checkpoints/ebm/iter_1 \
+    --num-candidates 16 \
+    --imports Mathlib
 ```
 
 ### `train-ebm` — Train EBM from trajectories
 
 ```bash
 cargo run --release -p prover-core -- train-ebm \
-    --trajectories trajectories/iter_0.parquet \
+    --trajectories trajectories/iter_0.parquet trajectories/iter_1.parquet \
     --server-url http://localhost:30000 \
-    --output-dir checkpoints/ebm/iter_1 \
+    --output-dir checkpoints/ebm/iter_2 \
     --steps 50000 \
-    --save-embeddings checkpoints/ebm/iter_1/embeddings.parquet
+    --embeddings-cache checkpoints/ebm/iter_2/embeddings.parquet \
+    --loss-type info_nce
 ```
 
-### `summary` — Trajectory statistics
+### `summary` / `compare`
 
 ```bash
-cargo run --release -p prover-core -- summary --input trajectories/run.parquet
-```
-
-### `compare` — Cross-iteration comparison
-
-```bash
+cargo run --release -p prover-core -- summary --input trajectories/iter_1.parquet
 cargo run --release -p prover-core -- compare \
-    --results eval_results/iter_0.json eval_results/iter_1.json eval_results/iter_2.json
+    --results eval_results/iter_0.json eval_results/iter_1.json
 ```
-
-## Expert Iteration Workflow
-
-```
-For iteration i = 0, 1, 2, 3, 4:
-
-  ┌──────────────────────────────────────┐
-  │ 1. LLM Fine-tuning (Python, GPU)     │
-  │    Input: tactic pairs + trajectories │
-  │    Output: safetensors checkpoint     │
-  ├──────────────────────────────────────┤
-  │ 2. EBM Training (Rust/burn, GPU)     │
-  │    Input: trajectory Parquet files    │
-  │    Output: burn-rs checkpoint         │  ← skip for iter 0
-  ├──────────────────────────────────────┤
-  │ 3. Search / Trajectory Collection    │
-  │    Input: LLM + EBM checkpoints      │  (Rust, multi-GPU)
-  │    Output: trajectories/iter_i.parquet│
-  ├──────────────────────────────────────┤
-  │ 4. Evaluation                        │
-  │    Input: LLM + EBM + miniF2F        │
-  │    Output: solve rates at budgets    │
-  └──────────────────────────────────────┘
-```
-
-Run the full experiment:
-
-```bash
-# 1. Prepare Mathlib training data
-./scripts/prepare_data.sh
-
-# 2. Run baseline + 5 iterations
-NUM_WORKERS=64 ./scripts/run_all_iterations.sh
-```
-
-Individual iteration: `./scripts/run_iteration.sh 0`
 
 ## Configuration
 
@@ -200,39 +203,20 @@ Individual iteration: `./scripts/run_iteration.sh 0`
 
 ```toml
 [search]
-max_nodes = 600           # Node budget per theorem
-max_depth = 50            # Max proof depth
-beam_width = 8            # Top-k tactics before Lean verification
-alpha = 0.5               # LLM log-prob weight
-beta = 0.5                # EBM score weight
-timeout_per_theorem = 600 # seconds
+max_nodes = 100               # Node budget per theorem
+max_depth = 50                # Max proof depth
+num_candidates = 8            # Tactics generated per node
+alpha = 0.5                   # LLM log-prob weight
+beta = 0.5                    # EBM score weight
+timeout_per_theorem = 120     # seconds
+harvest_siblings = true       # Mine sibling states after proof found
+batch_expansion_size = 8      # Nodes expanded per GPU batch
 
 [lean_pool]
-num_workers = 64
+num_workers = 8
 max_requests_per_worker = 1000
-max_lifetime_secs = 1800  # Worker recycling (memory leak mitigation)
+max_lifetime_secs = 1800      # Worker recycling
 tactic_timeout_secs = 30
-```
-
-### `configs/models.toml`
-
-```toml
-[encoder]
-mode = "shared"           # Use policy backbone for EBM embeddings
-shared_hidden_dim = 4096  # DeepSeek-Prover-V2-7B hidden size
-
-[energy_head]
-d_hidden1 = 2048
-d_hidden2 = 1024
-d_hidden3 = 512
-dropout = 0.1
-n_power_iterations = 5
-
-[llm]
-model_name = "deepseek-ai/DeepSeek-Prover-V2-7B"
-max_seq_len = 2048
-num_candidates = 32
-temperature = 0.8
 ```
 
 ## Testing
@@ -254,11 +238,16 @@ cargo test -p policy -- --ignored --test-threads=1
 
 | Crate | Version | Purpose |
 |-------|---------|---------|
-| `burn` | 0.16 | EBM training and inference (NdArray backend) |
-| `reqwest` | 0.12 | HTTP client for SGLang inference server |
+| `burn` | 0.16 | EBM training and inference |
+| `reqwest` | 0.12 | HTTP client for inference server |
 | `tokio` | 1 | Async runtime for Lean worker pool |
 | `arrow` / `parquet` | 53 | Trajectory data I/O |
 | `clap` | 4 | CLI argument parsing |
+
+## Known Issues
+
+- **SGLang batch hidden states**: `return_hidden_states=True` is broken in batch mode (SGLang #8066). Workaround: `python/encode_embeddings.py` uses direct PyTorch encoding for training data. Search-time encoding uses sequential calls (one at a time), which is correct. See `docs/encoding_bug.md`.
+- **Mathlib version mismatch**: The pre-traced LeanDojo Benchmark 4 (Zenodo) uses Mathlib from July 2024, while Pantograph uses Mathlib v4.26.0 (Dec 2024). ~14% of theorem names don't resolve. Fix: retrace with `python/data/trace_mathlib.py --trace --mathlib-commit v4.26.0`.
 
 ## License
 
@@ -266,4 +255,4 @@ cargo test -p policy -- --ignored --test-threads=1
 
 ---
 
-For the full architecture plan, cost analysis, and implementation details, see [`docs/burn-qed_plan.md`](docs/burn-qed_plan.md).
+For the full architecture plan, see [`docs/burn-qed_plan.md`](docs/burn-qed_plan.md).
