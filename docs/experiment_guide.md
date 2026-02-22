@@ -33,7 +33,14 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 
 ## Throughput Tuning
 
-**Server-side batch generation:** With `batch_generate_size=32`, the search engine pops 32 frontier nodes and generates candidates for all of them in a **single HTTP request**. `SglangClient::generate_candidates_batch()` replicates each state's prompt `n` times into a flat batch (e.g. 32 states × 8 candidates = 256 prompts), and SGLang's RadixAttention caches shared prefixes. This replaces the previous approach of N×N sequential HTTP requests. EBM encode batching is controlled separately by `batch_encode_size` (default 8) to avoid OOM on quantized encode servers.
+**Server-side batch generation:** With `batch_generate_size=32`, the search engine pops 32 frontier nodes and generates candidates for all of them in a **single HTTP request**. `SglangClient::generate_candidates_batch()` replicates each state's prompt `n` times into a flat batch (e.g. 32 states × 8 candidates = 256 prompts), and SGLang's RadixAttention caches shared prefixes. This replaces the previous approach of N×N sequential HTTP requests. EBM encode batching is controlled separately by `batch_encode_size` (default 8) to cap sub-batch sizes sent to the encode server.
+
+**Standalone encode server:** `python/encode_server.py` provides batch encoding via HuggingFace transformers, bypassing SGLang's broken batch `return_hidden_states` (Issue #8066). Key optimizations:
+- **nf4 quantization** via bitsandbytes (~4GB model weights)
+- **SDPA attention** (`attn_implementation="sdpa"`) — uses PyTorch Flash SDP, avoids materializing O(seq²) attention matrices
+- **LM head stripping** — deletes unused `lm_head` after loading, saves ~1.2GB
+- **Sub-batching** — large requests are split into chunks of `--max-batch-size` (default 16) to cap peak VRAM
+- Total VRAM: ~6.9GB idle, ~7GB under load
 
 **Key finding:** Batched decode scales ~linearly in N on this model (not constant as hoped). 32 candidates takes ~19s vs ~2.5s for 4 candidates (~7.5× slower). After dedup at T=0.6, 32 candidates yield only 2-4 unique tactics — same as 4-8 candidates. High candidate counts waste GPU time.
 
@@ -45,6 +52,16 @@ NUM_WORKERS=64 ./scripts/run_all_iterations.sh
 | `num_workers` | 6 | Enough to overlap Lean verification with GPU generation |
 | `concurrency` | 6 | Match workers — each needs one active search |
 | `max_nodes` | 100 | At 4% prove rate, proofs found within 2 nodes. 100 ≈ 3 expansions with backtrack. |
+| `batch_generate_size` | 32 | Frontier nodes popped per LLM generation batch |
+| `batch_encode_size` | 8 | Max states per EBM encode sub-batch |
+
+**Dual-server VRAM budget** (RTX 5090 32GB):
+
+| Component | VRAM | Config |
+|-----------|------|--------|
+| SGLang inference (bf16) | ~18-21GB | `MEM_FRACTION=0.65` |
+| Encode server (nf4+SDPA) | ~6.9GB | `ENCODE_DTYPE=nf4` |
+| Total | ~25-28GB | Fits 32GB with headroom |
 
 The SGLang server handles request batching and scheduling internally. Multiple concurrent search workers can issue generation/encode requests in parallel.
 
@@ -67,6 +84,10 @@ The SGLang server handles request batching and scheduling internally. Multiple c
 | `ENCODE_BATCH_SIZE` | 64 | Texts per HTTP request during embedding precomputation |
 | `ENCODE_CONCURRENCY` | 2 | Concurrent encode HTTP requests |
 | `SGLANG_URL` | `http://localhost:30000` | SGLang inference server URL |
+| `ENCODE_PORT` | `30001` | Standalone encode server port |
+| `ENCODE_DTYPE` | `bfloat16` | Encode server dtype (`bfloat16`, `float16`, `nf4`) |
+| `ENCODE_MAX_MEMORY_GB` | (none) | Optional VRAM cap for encode server |
+| `MEM_FRACTION` | auto (0.75/0.85) | SGLang GPU memory fraction (use 0.65 with encode server) |
 
 ## Experiment Outputs
 

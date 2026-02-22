@@ -33,9 +33,11 @@ These were decided after two external review rounds. Do not revisit without expl
 7. **Worker recycling for Lean.** 1000 requests OR 30 minutes TTL.
 8. **Pantograph protocol:** JSON lines terminated by `\n`. Missing newline hangs process. 30s timeout on all reads.
 9. **ProofHandle pattern.** `stateId` is process-local — hold worker for proof lifetime. Use `ProofHandleOwned` for `tokio::spawn`.
-10. **Batch EBM scoring.** Deferred scoring: collect child states per expansion, then `score_batch()` once. Uses `EBMValueFn::with_batch_encode()` for single HTTP batch call. Falls back to `0.0` on error.
+10. **Batch EBM scoring.** Deferred scoring: collect child states per expansion, then `score_batch()` once. Uses `EBMValueFn::with_batch_encode()` for single HTTP batch call. Falls back to `0.0` on error. Root scoring also falls back to `0.0` on error (consistent with child scoring).
 11. **Server-side batch generation.** `generate_candidates_batch()` sends all `states × n` prompts in one `BatchGenerateRequest`. SGLang RadixAttention caches shared prefixes. No per-state sequential HTTP calls.
 12. **SGLang circuit breaker.** `CircuitBreaker` trips after 3 consecutive transport failures, auto-resets after 60s. Transport errors (timeout, connection refused) fail immediately — only 5xx retries. Timeouts: 30s default, 30s batch generate, encode batch capped at 30s.
+13. **Standalone encode server.** `python/encode_server.py` loads the 7B model via HuggingFace transformers with nf4 quantization + SDPA attention (~6.9GB VRAM). LM head is stripped after loading. Sub-batching caps peak VRAM. Runs on port 30001 alongside SGLang inference on port 30000.
+14. **Separate batch size controls.** `batch_generate_size` (default 32) for LLM tactic generation, `batch_encode_size` (default 8) for EBM embedding. `GlobalEncodeBatcher` chunks requests to prevent encode server OOM.
 
 ## Code Conventions
 
@@ -95,10 +97,15 @@ cargo run -p prover-core -- train-ebm --trajectories FILE --server-url URL --out
 # Generate contrastive training data (see docs/ebm_overhaul.md Part 3 for full design)
 cargo run -p prover-core -- generate-negatives --tactic-pairs FILE --server-url URL --output FILE [--min-steps N]
 
-# Evaluation
-cargo run -p prover-core -- eval --server-url URL --theorems FILE --budgets 50,100,200
+# Evaluation (with separate encode server for EBM)
+cargo run -p prover-core -- eval --server-url URL --theorems FILE --budgets 50,100,200 \
+  [--ebm-path DIR] [--encode-url URL] [--imports Mathlib]
 cargo run -p prover-core -- summary --input FILE
 cargo run -p prover-core -- compare --baseline FILE --experiment FILE
+
+# Servers
+MEM_FRACTION=0.65 ./scripts/start_inference_server.sh models/llm/iter_N  # Port 30000
+ENCODE_DTYPE=nf4 ./scripts/start_encode_server.sh models/llm/iter_N      # Port 30001
 ```
 
 ## Testing Policy

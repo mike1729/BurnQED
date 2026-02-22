@@ -64,9 +64,12 @@ _max_length = 2048
 # Core encode logic (duplicated from encode_embeddings.py to avoid coupling)
 # ---------------------------------------------------------------------------
 
+_max_batch_size = 16  # Default; overridden by --max-batch-size CLI arg
+
+
 @torch.no_grad()
-def encode_batch(prompts: list[str]) -> np.ndarray:
-    """Encode a batch of prompts, return (batch, hidden_size) numpy array."""
+def _encode_chunk(prompts: list[str]) -> np.ndarray:
+    """Encode a single chunk of prompts, return (batch, hidden_size) numpy array."""
     inputs = _tokenizer(
         prompts,
         return_tensors="pt",
@@ -88,6 +91,19 @@ def encode_batch(prompts: list[str]) -> np.ndarray:
     pooled = sum_hidden / count  # (batch, hidden_size)
 
     return pooled.cpu().float().numpy()
+
+
+@torch.no_grad()
+def encode_batch(prompts: list[str]) -> np.ndarray:
+    """Encode prompts in sub-batches to cap peak VRAM usage."""
+    if len(prompts) <= _max_batch_size:
+        return _encode_chunk(prompts)
+    # Process in chunks to avoid VRAM OOM from activation memory
+    chunks = []
+    for i in range(0, len(prompts), _max_batch_size):
+        chunk = prompts[i : i + _max_batch_size]
+        chunks.append(_encode_chunk(chunk))
+    return np.concatenate(chunks, axis=0)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +187,13 @@ def parse_args():
         help="Max token length for truncation (default: 2048)",
     )
     parser.add_argument(
+        "--max-batch-size",
+        type=int,
+        default=16,
+        help="Max prompts per forward pass to cap VRAM usage (default: 16). "
+             "Larger batches are split into sub-batches automatically.",
+    )
+    parser.add_argument(
         "--save-quantized",
         type=str,
         default=None,
@@ -189,8 +212,9 @@ def main():
     port = int(os.environ.get("ENCODE_PORT", args.port))
     dtype_str = os.environ.get("ENCODE_DTYPE", args.dtype)
 
-    global _model, _tokenizer, _device, _max_length
+    global _model, _tokenizer, _device, _max_length, _max_batch_size
     _max_length = args.max_length
+    _max_batch_size = args.max_batch_size
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     logger.info(
@@ -216,6 +240,7 @@ def main():
         _model = AutoModelForCausalLM.from_pretrained(
             args.model_path,
             quantization_config=quantization_config,
+            attn_implementation="sdpa",
             device_map={"": 0},
             max_memory=max_memory,
             low_cpu_mem_usage=True,
@@ -230,6 +255,7 @@ def main():
         _model = AutoModelForCausalLM.from_pretrained(
             args.model_path,
             torch_dtype=dtype_map[dtype_str],
+            attn_implementation="sdpa",
             device_map="auto",
             low_cpu_mem_usage=True,
             trust_remote_code=True,

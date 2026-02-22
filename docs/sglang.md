@@ -308,6 +308,33 @@ Tested with SGLang 0.5.8 + DeepSeek-Prover-V2-7B on GPU.
 - Server requires `--enable-return-hidden-states` flag at launch (or `enable_return_hidden_states=True` for offline Engine)
 - Hidden states include a batch dimension: always index `[0]` before processing
 
+## Standalone Encode Server
+
+SGLang's batch `return_hidden_states` is broken (Issue #8066). Instead of encoding via SGLang, we use a standalone HuggingFace transformers encode server (`python/encode_server.py`) on a separate port:
+
+```bash
+# Start encode server (port 30001, nf4 quantized, ~6.9GB VRAM)
+ENCODE_DTYPE=nf4 ./scripts/start_encode_server.sh models/llm/iter_4
+
+# Start inference server (port 30000, ~18-21GB VRAM)
+MEM_FRACTION=0.65 ./scripts/start_inference_server.sh models/llm/iter_4
+
+# Use both in eval
+cargo run -p prover-core -- eval \
+  --server-url http://localhost:30000 \
+  --encode-url http://localhost:30001 \
+  --ebm-path checkpoints/ebm/iter_4 \
+  --theorems data/minif2f_test.json
+```
+
+**Key features:**
+- **nf4 quantization** via bitsandbytes (~4GB model weights)
+- **SDPA attention** — PyTorch Flash SDP avoids O(seq²) attention memory
+- **LM head stripping** — unused `lm_head` deleted after loading, saves ~1.2GB
+- **Sub-batching** — `--max-batch-size 16` caps per-forward-pass batch to prevent VRAM spikes
+- **POST /encode** — accepts `{"text": ["state1", "state2", ...]}`, returns `{"embeddings": [[f32...], ...]}`
+- **GET /health** — returns `{"status": "ok"}`
+
 ## Edge Cases & Risks
 
 1. **Hidden states not available over HTTP (HIGH).** SGLang Issue #6528 — async engine may not support `return_hidden_states`. Mitigation: `test_hidden_states_support()` probe at startup.
@@ -320,7 +347,7 @@ Tested with SGLang 0.5.8 + DeepSeek-Prover-V2-7B on GPU.
 
 5. **Double model load impossible.** Only one process can hold the GPU model. Mitigation: `InferenceHandle` enum — choose one at startup.
 
-6. **Batched hidden states bugs (Issue #8066).** Mitigation: encode requests are always batch_size=1.
+6. **Batched hidden states bugs (Issue #8066).** Mitigation: standalone encode server (`python/encode_server.py`) replaces SGLang for all encoding. Uses separate VRAM allocation with nf4 quantization.
 
 ## Verification Script
 
