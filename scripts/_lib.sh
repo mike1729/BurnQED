@@ -52,9 +52,16 @@ SERVER_MODEL_MARKER="/tmp/burnqed_server_model"
 #   stop_inference_server
 stop_inference_server() {
     echo "Stopping inference server..."
+    # Kill both legacy inference_server.py and raw SGLang processes
     pkill -f "inference_server.py" 2>/dev/null || true
+    pkill -f "sglang.launch_server" 2>/dev/null || true
+    pkill -f "sglang::scheduler" 2>/dev/null || true
+    pkill -f "sglang::detokenizer" 2>/dev/null || true
     sleep 3
     pkill -9 -f "inference_server.py" 2>/dev/null || true
+    pkill -9 -f "sglang.launch_server" 2>/dev/null || true
+    pkill -9 -f "sglang::scheduler" 2>/dev/null || true
+    pkill -9 -f "sglang::detokenizer" 2>/dev/null || true
     sleep 2
 
     rm -f "$SERVER_MODEL_MARKER"
@@ -122,8 +129,19 @@ ensure_encode_server() {
     local model="${2:-deepseek-prover-v2-7b}"
 
     if curl -sf "${url}/health" > /dev/null 2>&1; then
-        echo "Encode server already running at ${url}"
-        return 0
+        # Check if the running server has the right model
+        if [ -f "$ENCODE_SERVER_MODEL_MARKER" ]; then
+            if [ "$(cat "$ENCODE_SERVER_MODEL_MARKER")" = "$model" ]; then
+                echo "Encode server running with correct model: $model"
+                return 0
+            fi
+            echo "Encode server running but wrong model (want: $model, have: $(cat "$ENCODE_SERVER_MODEL_MARKER"))"
+            stop_encode_server
+        else
+            echo "$model" > "$ENCODE_SERVER_MODEL_MARKER"
+            echo "Encode server running (assuming correct model: $model)"
+            return 0
+        fi
     fi
 
     echo "Encode server not reachable at ${url}, starting..."
