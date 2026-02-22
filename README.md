@@ -241,7 +241,8 @@ alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 timeout_per_theorem = 120     # seconds
 harvest_siblings = true       # Mine sibling states after proof found
-batch_expansion_size = 8      # Nodes expanded per GPU batch
+batch_generate_size = 32      # Nodes expanded per generation batch
+batch_encode_size = 8         # Max states per EBM encode batch
 
 [lean_pool]
 num_workers = 8

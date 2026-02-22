@@ -208,12 +208,11 @@ async fn load_policy_and_ebm(
     let inference_handle = InferenceHandle::new(client);
 
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
-    let exp = toml.search.batch_expansion_size;
-    let n_cands = toml.search.num_candidates;
-    let max_batch = exp * concurrency.max(1); // coalesce across concurrent searches
+    let gen_batch = toml.search.batch_generate_size;
+    let max_gen_batch = gen_batch * concurrency.max(1); // coalesce across concurrent searches
     let batcher = GlobalBatcher::new(
         Arc::new(raw_policy),
-        max_batch,
+        max_gen_batch,
         Duration::from_millis(5),        // linger
     );
     let policy = CachedPolicy::new(batcher, 10_000);
@@ -233,7 +232,7 @@ async fn load_policy_and_ebm(
     } else {
         inference_handle.clone()
     };
-    let encode_batch_limit = exp * n_cands; // e.g. 8×8=64 or 4×8=32
+    let encode_batch_limit = toml.search.batch_encode_size;
     let value_fn = load_ebm_scorer(ebm_path, &encode_handle, encode_batch_limit)?;
 
     Ok((
@@ -284,7 +283,7 @@ fn load_ebm_scorer(
     // GlobalEncodeBatcher: coalesces concurrent encode requests
     let encode_batcher = Arc::new(GlobalEncodeBatcher::new(
         Arc::new(caching_encoder),
-        encode_batch_limit,              // derived from batch_expansion_size × num_candidates
+        encode_batch_limit,              // from config.batch_encode_size
         Duration::from_millis(5),        // linger
     ));
 

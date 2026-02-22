@@ -16,7 +16,7 @@ Usage:
 
 Environment variables (override CLI args):
   ENCODE_PORT   — Server port (default: 30001)
-  ENCODE_DTYPE  — Model dtype: float16, bfloat16, float32 (default: bfloat16)
+  ENCODE_DTYPE  — Model dtype: float16, bfloat16, float32, nf4 (default: bfloat16)
 """
 
 import argparse
@@ -159,9 +159,10 @@ def parse_args():
     )
     parser.add_argument(
         "--dtype",
-        choices=["float16", "bfloat16", "float32"],
+        choices=["float16", "bfloat16", "float32", "nf4"],
         default="bfloat16",
-        help="Model dtype (default: bfloat16, overridden by ENCODE_DTYPE env var)",
+        help="Model dtype (default: bfloat16, overridden by ENCODE_DTYPE env var). "
+             "nf4 uses 4-bit NormalFloat quantization via bitsandbytes (~4GB VRAM).",
     )
     parser.add_argument(
         "--max-length",
@@ -181,13 +182,6 @@ def main():
     port = int(os.environ.get("ENCODE_PORT", args.port))
     dtype_str = os.environ.get("ENCODE_DTYPE", args.dtype)
 
-    dtype_map = {
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-        "float32": torch.float32,
-    }
-    model_dtype = dtype_map[dtype_str]
-
     global _model, _tokenizer, _device, _max_length
     _max_length = args.max_length
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -200,13 +194,34 @@ def main():
     if _tokenizer.pad_token is None:
         _tokenizer.pad_token = _tokenizer.eos_token
 
-    _model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=model_dtype,
-        device_map="auto",
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
-    )
+    if dtype_str == "nf4":
+        from transformers import BitsAndBytesConfig
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        _model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            quantization_config=quantization_config,
+            device_map={"": 0},
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        )
+    else:
+        dtype_map = {
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+        }
+        _model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            torch_dtype=dtype_map[dtype_str],
+            device_map="auto",
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        )
     _model.eval()
 
     hidden_size = _model.config.hidden_size

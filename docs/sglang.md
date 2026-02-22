@@ -44,7 +44,7 @@ Alternatively, use `InferenceHandle::Local(GenerationServiceHandle)` for candle 
 
 ## Server-Side Batch Generation
 
-With `batch_expansion_size=8`, the search engine pops 8 frontier nodes per iteration. Each needs `n` tactic candidates (default 8). Instead of firing `8×8=64` separate HTTP requests, `SglangClient::generate_candidates_batch()` sends a **single** `BatchGenerateRequest` containing all `states×n` prompts replicated into a flat array.
+With `batch_generate_size=32`, the search engine pops 32 frontier nodes per iteration. Each needs `n` tactic candidates (default 8). Instead of firing `32×8=256` separate HTTP requests, `SglangClient::generate_candidates_batch()` sends a **single** `BatchGenerateRequest` containing all `states×n` prompts replicated into a flat array.
 
 **How it works:**
 

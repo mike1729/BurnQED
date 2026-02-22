@@ -63,6 +63,12 @@ def fix_statement(statement: str) -> str:
     statement = re.sub(r"(?<!\w\.)(?<!\w)natAbs\b", "Int.natAbs", statement)
     statement = re.sub(r"(?<!\w\.)(?<!\w)choose\b", "Nat.choose", statement)
 
+    # Fix: Factorial notation `n!` or `n !` is not valid in Lean 4 theorem-type
+    # position. Replace with `(Nat.factorial n)`. Parentheses needed so the result
+    # works as an argument, e.g. `Nat.gcd (Nat.factorial 20) 200000`.
+    statement = re.sub(r"\b(\d+)\s*!", r"(Nat.factorial \1)", statement)
+    statement = re.sub(r"\b([a-z_]\w*)\s*!", r"(Nat.factorial \1)", statement)
+
     return statement
 
 

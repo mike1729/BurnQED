@@ -232,7 +232,7 @@ impl SearchEngine {
             }
 
             // Pop a batch of nodes from the frontier
-            let batch_size = self.config.batch_expansion_size.max(1).min(frontier.len());
+            let batch_size = self.config.batch_generate_size.max(1).min(frontier.len());
             let mut batch: Vec<ScoredNode> = Vec::with_capacity(batch_size);
             for _ in 0..batch_size {
                 if let Some(node) = frontier.pop() {
@@ -1224,7 +1224,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batched_expansion() {
-        // batch_expansion_size = 2 should expand two nodes at once
+        // batch_generate_size = 2 should expand two nodes at once
         let mut env = MockEnvironment::new();
         env.add_response(
             0,
@@ -1253,7 +1253,7 @@ mod tests {
         policy.add_response("⊢ B", vec![]);
 
         let config = SearchConfig {
-            batch_expansion_size: 2,
+            batch_generate_size: 2,
             probe_tactics: vec![],
             ..SearchConfig::default()
         };

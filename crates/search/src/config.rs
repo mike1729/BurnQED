@@ -37,9 +37,16 @@ pub struct SearchConfig {
     #[serde(default)]
     pub harvest_siblings: bool,
 
-    /// Number of nodes to expand per batch (1 = sequential, >1 = batched).
-    #[serde(default = "default_batch_expansion_size")]
-    pub batch_expansion_size: usize,
+    /// Number of nodes to expand per generation batch (1 = sequential, >1 = batched).
+    /// Controls how many frontier nodes are popped and sent to the LLM in one HTTP call.
+    #[serde(default = "default_batch_generate_size", alias = "batch_expansion_size")]
+    pub batch_generate_size: usize,
+
+    /// Maximum states per EBM encode batch. Controls the size of HTTP requests
+    /// to the encode server. Smaller values avoid OOM on quantized encode servers.
+    /// Default: 8.
+    #[serde(default = "default_batch_encode_size")]
+    pub batch_encode_size: usize,
 }
 
 fn default_max_nodes() -> u32 {
@@ -73,8 +80,11 @@ fn default_probe_tactics() -> Vec<String> {
     .map(|s| s.to_string())
     .collect()
 }
-fn default_batch_expansion_size() -> usize {
-    1
+fn default_batch_generate_size() -> usize {
+    32
+}
+fn default_batch_encode_size() -> usize {
+    8
 }
 
 impl SearchConfig {
@@ -104,7 +114,8 @@ impl Default for SearchConfig {
             fallback_tactics: default_fallback_tactics(),
             probe_tactics: default_probe_tactics(),
             harvest_siblings: false,
-            batch_expansion_size: default_batch_expansion_size(),
+            batch_generate_size: default_batch_generate_size(),
+            batch_encode_size: default_batch_encode_size(),
         }
     }
 }
@@ -125,7 +136,8 @@ mod tests {
         assert!(cfg.fallback_tactics.is_empty());
         assert_eq!(cfg.probe_tactics.len(), 17);
         assert!(!cfg.harvest_siblings);
-        assert_eq!(cfg.batch_expansion_size, 1);
+        assert_eq!(cfg.batch_generate_size, 32);
+        assert_eq!(cfg.batch_encode_size, 8);
     }
 
     #[test]
@@ -193,12 +205,31 @@ mod tests {
     }
 
     #[test]
-    fn test_batch_expansion_size() {
+    fn test_batch_generate_size() {
         let toml_str = r#"
-            batch_expansion_size = 8
+            batch_generate_size = 8
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.batch_expansion_size, 8);
+        assert_eq!(cfg.batch_generate_size, 8);
+    }
+
+    #[test]
+    fn test_batch_encode_size() {
+        let toml_str = r#"
+            batch_encode_size = 32
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.batch_encode_size, 32);
+    }
+
+    #[test]
+    fn test_batch_expansion_size_alias() {
+        // Old name should still work via serde alias
+        let toml_str = r#"
+            batch_expansion_size = 16
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.batch_generate_size, 16);
     }
 
     #[test]
