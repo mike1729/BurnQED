@@ -11,7 +11,9 @@
 
 A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic generation (policy) and mean-pooled state embeddings (value), AlphaZero-style. A small EBM head (~11M params) is the only component trained in Rust. LLM fine-tuning runs in Python with LoRA/PEFT.
 
-## Results (miniF2F-test, budget=600)
+## Results
+
+### miniF2F v1 (budget=600, 244 theorems)
 
 | Iteration | LLM + EBM | LLM only | EBM lift |
 |-----------|-----------|----------|----------|
@@ -19,7 +21,26 @@ A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic genera
 | iter 2 | 90/244 (36.9%) | 72/244 (29.5%) | +7.4pp |
 | iter 4 | **235/244 (96.3%)** | 83/244 (34.0%) | **+62.3pp** |
 
-Iter 4 with EBM solves 96.3% of miniF2F-test in avg 2.7 nodes and 9.4 seconds per theorem.
+**Iter 4 node distribution** (proved theorems, budget=600):
+
+| Nodes | With EBM | Without EBM |
+|-------|----------|-------------|
+| Probe (0) | 49 (21%) | 49 (59%) |
+| 1 node | 12 (5%) | 16 (19%) |
+| 2-5 | 170 (72%) | 9 (11%) |
+| 6-50 | 4 (2%) | 9 (11%) |
+| **Total proved** | **235** | **83** |
+
+EBM guides search to proofs in 2-5 node expansions (72% of proved theorems). Mean 2.7 nodes, 9.4s per theorem.
+
+### Benchmarks
+
+| Benchmark | Source | Theorems | Description |
+|-----------|--------|----------|-------------|
+| miniF2F v1 | yangky11/miniF2F | 244 test + 244 valid | Standard math competition (AMC, AIME, etc.) |
+| miniF2F v2s | roozbeh-yz/miniF2F_v2 | 244 test + 244 valid | Harder variant, different problems |
+| IMO-Steps lemmas | roozbeh-yz/IMO-Steps | 1,328 steps | Incremental proof steps from 13 IMO problems |
+| IMO-Steps theorems | roozbeh-yz/IMO-Steps | 21 theorems | Full IMO problem proofs |
 
 ## Architecture
 
@@ -55,7 +76,7 @@ BurnQED/
 │   ├── inference_server.py  # Custom sgl.Engine server with in-process mean-pooling
 │   ├── encode_embeddings.py # Direct PyTorch encoding (bypasses SGLang batch bug)
 │   ├── training/            # LoRA fine-tuning (train_llm.py, export_llm.py)
-│   └── data/                # Mathlib tracing, tactic pair extraction, miniF2F download
+│   └── data/                # Mathlib tracing, tactic pair extraction, benchmark conversion
 ├── scripts/             # Pipeline orchestration scripts
 ├── configs/             # search.toml, models.toml
 ├── data/                # theorem_index.json, minif2f_test.json, tactic_pairs/

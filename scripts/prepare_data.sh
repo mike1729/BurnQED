@@ -190,6 +190,52 @@ else
     fi
 fi
 
+# ── Step 2c: Compile benchmark theorems ────────────────────────────────────
+echo ""
+echo "=== Step 2c: Compile benchmark theorems for Pantograph ==="
+
+PANTOGRAPH_DIR="${REPO_ROOT}/vendor/Pantograph"
+BENCH_GENERATOR="${REPO_ROOT}/python/data/generate_benchmark_lean.py"
+
+# Compile each benchmark JSON into a sorry-file + .olean so that
+# Pantograph can use copyFrom(name) instead of re-elaborating expressions.
+compile_benchmark() {
+    local json_path="$1"
+    local module_name="$2"
+    local lean_file="${PANTOGRAPH_DIR}/${module_name}.lean"
+    local olean_file="${PANTOGRAPH_DIR}/.lake/build/lib/lean/${module_name}.olean"
+
+    if [ ! -f "$json_path" ]; then
+        echo "  SKIP  ${module_name}: input not found (${json_path})"
+        return
+    fi
+
+    if [ -f "$olean_file" ] && [ "$olean_file" -nt "$json_path" ] && [ $FORCE -eq 0 ]; then
+        echo "  SKIP  ${module_name}: .olean up to date"
+        return
+    fi
+
+    echo "  Generating ${module_name}.lean..."
+    python "$BENCH_GENERATOR" \
+        --input "$json_path" \
+        --output "$lean_file" \
+        --module-name "$module_name"
+
+    echo "  Compiling ${module_name} (one-time cost, may take a few minutes)..."
+    if (cd "$PANTOGRAPH_DIR" && lake build "$module_name" 2>&1 | grep -v "^warning:" | head -5); then
+        echo "  DONE  ${module_name}: compiled"
+    else
+        echo "  WARN  ${module_name}: compilation failed (will fall back to expr elaboration)"
+    fi
+}
+
+compile_benchmark "${DATA_DIR}/minif2f_v2s_test.json"  "BenchMinIF2FV2STest"
+compile_benchmark "${DATA_DIR}/minif2f_v2s_valid.json" "BenchMinIF2FV2SValid"
+
+# IMO-Steps benchmarks (if converted)
+compile_benchmark "${DATA_DIR}/imo_steps_lemmas.json"   "BenchIMOStepsLemmas"
+compile_benchmark "${DATA_DIR}/imo_steps_theorems.json" "BenchIMOStepsTheorems"
+
 # ── Step 3: Format tactic pairs ────────────────────────────────────────────
 echo ""
 echo "=== Step 3: Format tactic pairs ==="
