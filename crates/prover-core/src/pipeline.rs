@@ -1587,6 +1587,38 @@ struct EvalOutcome {
 }
 
 /// Evaluate a model at multiple search budgets, printing a formatted table
+/// Query a server for its loaded model path. Tries SGLang `/v1/models` first,
+/// then encode server `/model_info`. Returns "unknown" on failure.
+fn query_server_model(url: &str) -> String {
+    // Try SGLang /v1/models
+    if let Ok(output) = std::process::Command::new("curl")
+        .args(["-sf", &format!("{url}/v1/models")])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                if let Some(id) = body["data"][0]["id"].as_str() {
+                    return id.to_string();
+                }
+            }
+        }
+    }
+    // Try encode server /model_info
+    if let Ok(output) = std::process::Command::new("curl")
+        .args(["-sf", &format!("{url}/model_info")])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                if let Some(path) = body["model_path"].as_str() {
+                    return path.to_string();
+                }
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
 /// and optionally writing JSON results.
 ///
 /// Budgets are processed sequentially (cumulative_solved_set accumulates across
@@ -1603,10 +1635,18 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "unknown".into());
+    // Query servers for their loaded model paths
+    let inference_model = query_server_model(&args.server_url);
+    let encode_model = if let Some(ref url) = args.encode_url {
+        query_server_model(url)
+    } else {
+        "N/A (using inference server)".to_string()
+    };
+
     tracing::info!("=== Eval Configuration ===");
     tracing::info!(commit = %git_commit, "Binary git commit");
-    tracing::info!(server_url = %args.server_url, "Inference server");
-    tracing::info!(encode_url = ?args.encode_url, "Encode server");
+    tracing::info!(server_url = %args.server_url, model = %inference_model, "Inference server");
+    tracing::info!(encode_url = ?args.encode_url, model = %encode_model, "Encode server");
     tracing::info!(ebm_path = ?args.ebm_path, "EBM checkpoint");
     tracing::info!(config = %args.config.display(), "Search config");
     tracing::info!(theorems = %args.theorems.display(), "Theorem file");

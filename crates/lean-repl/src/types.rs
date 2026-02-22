@@ -201,11 +201,45 @@ impl LeanPoolConfig {
             max_requests_per_worker: default_max_requests(),
             max_lifetime_secs: default_max_lifetime(),
             tactic_timeout_secs: default_tactic_timeout(),
-            pantograph_path: PathBuf::from("lake"),
+            pantograph_path: discover_lake(),
             lean_env_path: project_dir,
             imports: default_imports(),
         })
     }
+}
+
+/// Auto-discover the `lake` binary.
+///
+/// Discovery chain (first match wins):
+/// 1. `lake` on PATH (via `which`)
+/// 2. `~/.elan/bin/lake`
+/// 3. Falls back to bare `"lake"` (will fail at spawn time if not on PATH)
+fn discover_lake() -> PathBuf {
+    // 1. Check PATH
+    if let Ok(output) = std::process::Command::new("which")
+        .arg("lake")
+        .output()
+    {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return PathBuf::from(path);
+            }
+        }
+    }
+
+    // 2. ~/.elan/bin/lake (standard elan install location)
+    if let Some(home) = std::env::var_os("HOME") {
+        let elan_lake = PathBuf::from(home).join(".elan").join("bin").join("lake");
+        if elan_lake.is_file() {
+            tracing::info!(path = %elan_lake.display(), "Auto-discovered lake via ~/.elan");
+            return elan_lake;
+        }
+    }
+
+    // 3. Fallback
+    tracing::warn!("Could not discover lake binary; falling back to bare 'lake'");
+    PathBuf::from("lake")
 }
 
 /// Auto-discover the Pantograph project directory.

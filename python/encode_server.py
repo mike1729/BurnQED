@@ -58,6 +58,7 @@ _model = None
 _tokenizer = None
 _device = None
 _max_length = 2048
+_model_path = "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,12 @@ def encode_batch(prompts: list[str]) -> np.ndarray:
 async def health():
     """Health check."""
     return {"status": "ok"}
+
+
+@app.get("/model_info")
+async def model_info():
+    """Return model path and config for reproducibility."""
+    return {"model_path": _model_path}
 
 
 @app.post("/encode")
@@ -212,7 +219,8 @@ def main():
     port = int(os.environ.get("ENCODE_PORT", args.port))
     dtype_str = os.environ.get("ENCODE_DTYPE", args.dtype)
 
-    global _model, _tokenizer, _device, _max_length, _max_batch_size
+    global _model, _tokenizer, _device, _max_length, _max_batch_size, _model_path
+    _model_path = str(os.path.realpath(args.model_path))
     _max_length = args.max_length
     _max_batch_size = args.max_batch_size
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
