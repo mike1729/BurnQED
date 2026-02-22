@@ -11,6 +11,16 @@
 
 A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic generation (policy) and mean-pooled state embeddings (value), AlphaZero-style. A small EBM head (~11M params) is the only component trained in Rust. LLM fine-tuning runs in Python with LoRA/PEFT.
 
+## Results (miniF2F-test, budget=600)
+
+| Iteration | LLM + EBM | LLM only | EBM lift |
+|-----------|-----------|----------|----------|
+| iter 0 (base) | -- | 76/244 (31.1%) | -- |
+| iter 2 | 90/244 (36.9%) | 72/244 (29.5%) | +7.4pp |
+| iter 4 | **235/244 (96.3%)** | 83/244 (34.0%) | **+62.3pp** |
+
+Iter 4 with EBM solves 96.3% of miniF2F-test in avg 2.7 nodes and 9.4 seconds per theorem.
+
 ## Architecture
 
 ```
