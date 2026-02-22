@@ -57,6 +57,27 @@ pub struct TheoremResult {
     pub nodes_used: u32,
     /// Wall-clock time in seconds.
     pub time_secs: f64,
+    /// Tactic sequence used in the proof (empty if not proved).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proof_tactics: Vec<String>,
+    /// Proof depth (number of tactics).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_depth: Option<u32>,
+    /// Total states explored during search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_states: Option<u32>,
+    /// Peak frontier size during search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_frontier: Option<usize>,
+    /// LLM generation time in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gen_time_ms: Option<u64>,
+    /// Lean tactic verification time in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lean_time_ms: Option<u64>,
+    /// EBM scoring time in ms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ebm_time_ms: Option<u64>,
 }
 
 /// Compute the median of a slice of f64 values.
@@ -116,6 +137,13 @@ mod tests {
                     proved: true,
                     nodes_used: 42,
                     time_secs: 3.5,
+                    proof_tactics: vec!["intro n".to_string(), "simp".to_string()],
+                    proof_depth: Some(2),
+                    total_states: Some(50),
+                    peak_frontier: Some(12),
+                    gen_time_ms: Some(1500),
+                    lean_time_ms: Some(800),
+                    ebm_time_ms: Some(200),
                 }],
             }],
             cumulative_solved: 5,

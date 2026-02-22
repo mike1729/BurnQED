@@ -1735,6 +1735,17 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                                 proved: result.proved,
                                 nodes_used: result.nodes_expanded,
                                 time_secs,
+                                proof_tactics: result.proof_tactics.clone(),
+                                proof_depth: if result.proved {
+                                    Some(result.proof_tactics.len() as u32)
+                                } else {
+                                    None
+                                },
+                                total_states: Some(result.total_states),
+                                peak_frontier: Some(result.stats.peak_frontier_size),
+                                gen_time_ms: Some(result.stats.total_generate_time_ms),
+                                lean_time_ms: Some(result.stats.total_lean_time_ms),
+                                ebm_time_ms: Some(result.stats.total_ebm_time_ms),
                             };
                             best = Some(match best {
                                 None => tr,
@@ -1750,6 +1761,13 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                                     proved: false,
                                     nodes_used: 0,
                                     time_secs: 0.0,
+                                    proof_tactics: vec![],
+                                    proof_depth: None,
+                                    total_states: None,
+                                    peak_frontier: None,
+                                    gen_time_ms: None,
+                                    lean_time_ms: None,
+                                    ebm_time_ms: None,
                                 });
                             }
                         }
@@ -1763,6 +1781,13 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                         proved: false,
                         nodes_used: 0,
                         time_secs: 0.0,
+                        proof_tactics: vec![],
+                        proof_depth: None,
+                        total_states: None,
+                        peak_frontier: None,
+                        gen_time_ms: None,
+                        lean_time_ms: None,
+                        ebm_time_ms: None,
                     }),
                     times,
                     total_nodes,
