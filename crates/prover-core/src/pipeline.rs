@@ -1595,6 +1595,30 @@ struct EvalOutcome {
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let concurrency = args.concurrency.max(1);
 
+    // Dump all parameters for reproducibility
+    let git_commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    tracing::info!("=== Eval Configuration ===");
+    tracing::info!(commit = %git_commit, "Binary git commit");
+    tracing::info!(server_url = %args.server_url, "Inference server");
+    tracing::info!(encode_url = ?args.encode_url, "Encode server");
+    tracing::info!(ebm_path = ?args.ebm_path, "EBM checkpoint");
+    tracing::info!(config = %args.config.display(), "Search config");
+    tracing::info!(theorems = %args.theorems.display(), "Theorem file");
+    tracing::info!(budgets = ?args.budgets, "Budgets");
+    tracing::info!(concurrency, "Concurrency");
+    tracing::info!(num_workers = ?args.num_workers, "Lean workers (CLI)");
+    tracing::info!(num_candidates = ?args.num_candidates, "Num candidates (CLI)");
+    tracing::info!(max_theorems = ?args.max_theorems, "Max theorems");
+    tracing::info!(imports = ?args.imports, "Lean imports");
+    tracing::info!(pass_n = args.pass_n, "Pass@N");
+    tracing::info!("==========================");
+
     // EBM-active overrides: more candidates + higher temperature for diversity
     let temperature = if args.ebm_path.is_some() {
         tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
@@ -1623,6 +1647,18 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         tracing::info!("EBM active — defaulting num_candidates to 8");
         base_config.num_candidates = 8;
     }
+
+    // Dump final search config (after all CLI overrides)
+    tracing::info!("=== Final Search Config ===");
+    tracing::info!(max_nodes = base_config.max_nodes, "Max nodes");
+    tracing::info!(max_depth = base_config.max_depth, "Max depth");
+    tracing::info!(num_candidates = base_config.num_candidates, "Num candidates");
+    tracing::info!(alpha = %base_config.alpha, "Alpha (LLM weight)");
+    tracing::info!(beta = %base_config.beta, "Beta (EBM weight)");
+    tracing::info!(timeout = base_config.timeout_per_theorem, "Timeout per theorem (s)");
+    tracing::info!(batch_generate = base_config.batch_generate_size, "Batch generate size");
+    tracing::info!(batch_encode = base_config.batch_encode_size, "Batch encode size");
+    tracing::info!("===========================");
 
     let mut index = TheoremIndex::from_json(&args.theorems)?;
     if let Some(max) = args.max_theorems {
