@@ -25,7 +25,7 @@ use search::{
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
-use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
+use crate::results::{median, BudgetResult, FailureReason, IterationResult, TheoremResult};
 
 /// Arguments for the `search` subcommand.
 #[derive(Debug)]
@@ -1658,12 +1658,12 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(
-                    "{{spinner:.green}} [budget={budget}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) proved={{prefix}}"
+                    "{{spinner:.green}} [budget={budget}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) {{prefix}}"
                 ))
                 .expect("valid progress bar template")
                 .progress_chars("=> "),
         );
-        pb.set_prefix("0");
+        pb.set_prefix("proved=0");
         pb.enable_steady_tick(Duration::from_secs(1));
         let budget_start = Instant::now();
 
@@ -1676,6 +1676,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         let mut solved = 0u32;
         let mut all_times: Vec<f64> = Vec::new();
         let mut total_nodes_sum: f64 = 0.0;
+        let mut failure_counts: HashMap<FailureReason, u32> = HashMap::new();
 
         /// Process one completed eval outcome into accumulators.
         fn collect_eval(
@@ -1684,6 +1685,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             solved: &mut u32,
             all_times: &mut Vec<f64>,
             total_nodes_sum: &mut f64,
+            failure_counts: &mut HashMap<FailureReason, u32>,
             cumulative_solved_set: &mut HashSet<String>,
             pb: &ProgressBar,
             budget_start: Instant,
@@ -1692,12 +1694,23 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             if outcome.best.proved {
                 *solved += 1;
                 cumulative_solved_set.insert(outcome.name);
+            } else if let Some(ref reason) = outcome.best.failure_reason {
+                *failure_counts.entry(reason.clone()).or_default() += 1;
             }
             all_times.extend(outcome.times);
             *total_nodes_sum += outcome.total_nodes;
             per_theorem.push(outcome.best);
             pb.inc(1);
-            pb.set_prefix(format!("{solved}"));
+
+            // Build status suffix: proved=N  budget=M timeout=K ...
+            let mut status_parts = vec![format!("proved={solved}")];
+            for (reason, count) in failure_counts.iter() {
+                if *count > 0 {
+                    status_parts.push(format!("{reason}={count}"));
+                }
+            }
+            pb.set_prefix(status_parts.join(" "));
+
             let done = pb.position() as usize;
             if done > 0 {
                 let elapsed = budget_start.elapsed().as_secs_f64();
@@ -1719,7 +1732,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 match join_result {
                     Ok(outcome) => collect_eval(
                         outcome, &mut per_theorem, &mut solved, &mut all_times,
-                        &mut total_nodes_sum, &mut cumulative_solved_set,
+                        &mut total_nodes_sum, &mut failure_counts, &mut cumulative_solved_set,
                         &pb, budget_start, total,
                     ),
                     Err(e) => tracing::error!(error = %e, "Eval task panicked"),
@@ -1752,11 +1765,22 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                             let time_secs = result.wall_time_ms as f64 / 1000.0;
                             times.push(time_secs);
                             total_nodes += result.nodes_expanded as f64;
+                            let failure_reason = if result.proved {
+                                None
+                            } else {
+                                Some(match result.termination {
+                                    trajectory::TerminationReason::BudgetExhausted => FailureReason::BudgetExhausted,
+                                    trajectory::TerminationReason::Timeout => FailureReason::Timeout,
+                                    trajectory::TerminationReason::FrontierExhausted => FailureReason::FrontierExhausted,
+                                    trajectory::TerminationReason::Proved => unreachable!(),
+                                })
+                            };
                             let tr = TheoremResult {
                                 name: name.clone(),
                                 proved: result.proved,
                                 nodes_used: result.nodes_expanded,
                                 time_secs,
+                                failure_reason,
                                 proof_tactics: result.proof_tactics.clone(),
                                 proof_depth: if result.proved {
                                     Some(result.proof_tactics.len() as u32)
@@ -1777,12 +1801,19 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             tracing::debug!(theorem = name, error = %e, "Eval search failed");
+                            let reason = match &e {
+                                search::SearchError::Lean(_)
+                                | search::SearchError::ProofStart(_) => FailureReason::GoalStartError,
+                                search::SearchError::Policy(_)
+                                | search::SearchError::Scorer(_) => FailureReason::SearchError,
+                            };
                             if best.is_none() {
                                 best = Some(TheoremResult {
                                     name: name.clone(),
                                     proved: false,
                                     nodes_used: 0,
                                     time_secs: 0.0,
+                                    failure_reason: Some(reason),
                                     proof_tactics: vec![],
                                     proof_depth: None,
                                     total_states: None,
@@ -1803,6 +1834,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                         proved: false,
                         nodes_used: 0,
                         time_secs: 0.0,
+                        failure_reason: Some(FailureReason::SearchError),
                         proof_tactics: vec![],
                         proof_depth: None,
                         total_states: None,
@@ -1822,7 +1854,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             match join_result {
                 Ok(outcome) => collect_eval(
                     outcome, &mut per_theorem, &mut solved, &mut all_times,
-                    &mut total_nodes_sum, &mut cumulative_solved_set,
+                    &mut total_nodes_sum, &mut failure_counts, &mut cumulative_solved_set,
                     &pb, budget_start, total,
                 ),
                 Err(e) => tracing::error!(error = %e, "Eval task panicked"),
@@ -1860,18 +1892,44 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         0.0
     };
 
-    // Print formatted table
+    // Print formatted table with failure breakdown
     println!();
-    println!("┌──────────┬───────────┬──────────┬───────────┬───────────┐");
-    println!("│ Budget   │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
-    println!("├──────────┼───────────┼──────────┼───────────┼───────────┤");
+    println!("┌──────────┬───────────┬──────────┬───────────┬───────────┬─────────────────────────────────┐");
+    println!("│ Budget   │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │ Failures                        │");
+    println!("├──────────┼───────────┼──────────┼───────────┼───────────┼─────────────────────────────────┤");
     for br in &budget_results {
+        // Count failure reasons for this budget
+        let mut reasons: HashMap<&FailureReason, u32> = HashMap::new();
+        for t in &br.per_theorem {
+            if let Some(ref r) = t.failure_reason {
+                *reasons.entry(r).or_default() += 1;
+            }
+        }
+        let mut failure_parts: Vec<String> = Vec::new();
+        let order = [
+            FailureReason::BudgetExhausted,
+            FailureReason::Timeout,
+            FailureReason::FrontierExhausted,
+            FailureReason::GoalStartError,
+            FailureReason::SearchError,
+        ];
+        for r in &order {
+            if let Some(&c) = reasons.get(r) {
+                failure_parts.push(format!("{r}={c}"));
+            }
+        }
+        let failure_str = if failure_parts.is_empty() {
+            "none".to_string()
+        } else {
+            failure_parts.join(" ")
+        };
         println!(
-            "│ {:<8} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
-            br.budget, br.solved, br.total, br.rate * 100.0, br.avg_nodes, br.avg_time_secs
+            "│ {:<8} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │ {:<31} │",
+            br.budget, br.solved, br.total, br.rate * 100.0, br.avg_nodes, br.avg_time_secs,
+            failure_str
         );
     }
-    println!("└──────────┴───────────┴──────────┴───────────┴───────────┘");
+    println!("└──────────┴───────────┴──────────┴───────────┴───────────┴─────────────────────────────────┘");
     println!(
         "Cumulative (any budget): {}/{} ({:.1}%)",
         cumulative_solved,

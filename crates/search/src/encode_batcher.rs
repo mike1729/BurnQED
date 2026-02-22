@@ -95,7 +95,7 @@ async fn coalesce_loop(
             None => {
                 // Channel closed — flush remaining and exit
                 if !buffer.is_empty() {
-                    flush(&inner, &mut buffer).await;
+                    flush(&inner, &mut buffer, max_batch_states).await;
                 }
                 return;
             }
@@ -120,7 +120,7 @@ async fn coalesce_loop(
                 }
                 Ok(None) => {
                     // Channel closed — flush remaining and exit
-                    flush(&inner, &mut buffer).await;
+                    flush(&inner, &mut buffer, max_batch_states).await;
                     return;
                 }
                 Err(_timeout) => {
@@ -131,7 +131,7 @@ async fn coalesce_loop(
         }
 
         // 4. Flush the batch
-        flush(&inner, &mut buffer).await;
+        flush(&inner, &mut buffer, max_batch_states).await;
     }
 }
 
@@ -146,7 +146,7 @@ fn drain_available(
 }
 
 /// Merge buffered requests, call inner encoder, distribute result slices.
-async fn flush(inner: &Arc<dyn BatchEncoder>, buffer: &mut Vec<EncodeCoalesceRequest>) {
+async fn flush(inner: &Arc<dyn BatchEncoder>, buffer: &mut Vec<EncodeCoalesceRequest>, max_batch_states: usize) {
     if buffer.is_empty() {
         return;
     }
@@ -163,8 +163,8 @@ async fn flush(inner: &Arc<dyn BatchEncoder>, buffer: &mut Vec<EncodeCoalesceReq
         offsets.push((start, req.states.len()));
     }
 
-    // Call inner encoder with merged batch
-    let result = inner.encode_batch(&all_states).await;
+    // Encode in sub-batches to avoid OOM on quantized servers
+    let result = encode_in_chunks(inner, &all_states, max_batch_states).await;
 
     // Distribute results to waiters
     match result {
@@ -182,6 +182,24 @@ async fn flush(inner: &Arc<dyn BatchEncoder>, buffer: &mut Vec<EncodeCoalesceReq
             }
         }
     }
+}
+
+/// Encode states in chunks of at most `chunk_size`, concatenating results.
+async fn encode_in_chunks(
+    inner: &Arc<dyn BatchEncoder>,
+    states: &[String],
+    chunk_size: usize,
+) -> anyhow::Result<Vec<Vec<f32>>> {
+    if states.len() <= chunk_size {
+        return inner.encode_batch(states).await;
+    }
+
+    let mut all_embeddings = Vec::with_capacity(states.len());
+    for chunk in states.chunks(chunk_size) {
+        let embeddings = inner.encode_batch(chunk).await?;
+        all_embeddings.extend(embeddings);
+    }
+    Ok(all_embeddings)
 }
 
 #[cfg(test)]

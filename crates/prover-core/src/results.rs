@@ -46,6 +46,34 @@ pub struct BudgetResult {
     pub per_theorem: Vec<TheoremResult>,
 }
 
+/// Why a theorem search failed (not set when proved).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureReason {
+    /// Expanded max_nodes without finding a proof.
+    BudgetExhausted,
+    /// Hit timeout_per_theorem wall-clock limit.
+    Timeout,
+    /// Frontier became empty (all branches dead-ended).
+    FrontierExhausted,
+    /// goal.start failed (copyFrom + expr both failed).
+    GoalStartError,
+    /// Other search error (policy, scorer, lean).
+    SearchError,
+}
+
+impl std::fmt::Display for FailureReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BudgetExhausted => write!(f, "budget"),
+            Self::Timeout => write!(f, "timeout"),
+            Self::FrontierExhausted => write!(f, "dead_end"),
+            Self::GoalStartError => write!(f, "goal_err"),
+            Self::SearchError => write!(f, "error"),
+        }
+    }
+}
+
 /// Result for a single theorem at a single budget.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TheoremResult {
@@ -57,6 +85,9 @@ pub struct TheoremResult {
     pub nodes_used: u32,
     /// Wall-clock time in seconds.
     pub time_secs: f64,
+    /// Why the search failed (None when proved).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<FailureReason>,
     /// Tactic sequence used in the proof (empty if not proved).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proof_tactics: Vec<String>,

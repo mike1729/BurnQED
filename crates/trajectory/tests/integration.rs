@@ -6,8 +6,8 @@
 use std::collections::HashMap;
 use tempfile::TempDir;
 use trajectory::{
-    SearchResult, SearchStats, TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
-    TrajectoryWriter,
+    SearchResult, SearchStats, TerminationReason, TheoremIndex, TrajectoryLabel, TrajectoryReader,
+    TrajectoryRecord, TrajectoryWriter,
 };
 
 fn make_record(
@@ -59,6 +59,7 @@ fn test_label_roundtrip_through_parquet() {
     let result = SearchResult {
         theorem_name: "thm_a".to_string(),
         proved: true,
+        termination: TerminationReason::Proved,
         proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
         nodes_expanded: 6,
         total_states: 6,
@@ -201,6 +202,7 @@ fn test_multi_theorem_pipeline() {
     let result1 = SearchResult {
         theorem_name: "proved_thm".to_string(),
         proved: true,
+        termination: TerminationReason::Proved,
         proof_tactics: vec!["intro n".into(), "rfl".into()],
         nodes_expanded: 4,
         total_states: 4,
@@ -219,6 +221,7 @@ fn test_multi_theorem_pipeline() {
     let result2 = SearchResult {
         theorem_name: "failed_thm".to_string(),
         proved: false,
+        termination: TerminationReason::BudgetExhausted,
         proof_tactics: vec![],
         nodes_expanded: 5,
         total_states: 5,
@@ -238,6 +241,7 @@ fn test_multi_theorem_pipeline() {
     let result3 = SearchResult {
         theorem_name: "trivial_thm".to_string(),
         proved: true,
+        termination: TerminationReason::Proved,
         proof_tactics: vec!["trivial".into()],
         nodes_expanded: 2,
         total_states: 2,
@@ -296,6 +300,7 @@ fn test_overlapping_state_ids_across_theorems() {
     let result_a = SearchResult {
         theorem_name: "thm_a".to_string(),
         proved: true,
+        termination: TerminationReason::Proved,
         proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
         nodes_expanded: 3,
         total_states: 3,
@@ -314,6 +319,7 @@ fn test_overlapping_state_ids_across_theorems() {
     let result_b = SearchResult {
         theorem_name: "thm_b".to_string(),
         proved: false,
+        termination: TerminationReason::BudgetExhausted,
         proof_tactics: vec![],
         nodes_expanded: 3,
         total_states: 3,

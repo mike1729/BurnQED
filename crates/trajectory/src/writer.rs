@@ -258,7 +258,7 @@ fn build_record_batch(records: &[TrajectoryRecord]) -> anyhow::Result<RecordBatc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SearchStats, TrajectoryLabel};
+    use crate::types::{SearchStats, TerminationReason, TrajectoryLabel};
     use tempfile::TempDir;
 
     fn make_test_record(state_id: u64, label: TrajectoryLabel) -> TrajectoryRecord {
@@ -347,6 +347,7 @@ mod tests {
         let result = SearchResult {
             theorem_name: "test_theorem".to_string(),
             proved: true,
+            termination: TerminationReason::Proved,
             proof_tactics: vec!["tactic_1".into(), "tactic_2".into(), "tactic_3".into()],
             nodes_expanded: 5,
             total_states: 5,
@@ -390,6 +391,7 @@ mod tests {
         let result = SearchResult {
             theorem_name: "test_theorem".to_string(),
             proved: true,
+            termination: TerminationReason::Proved,
             proof_tactics: vec![],
             nodes_expanded: 0,
             total_states: 1,
@@ -417,6 +419,7 @@ mod tests {
         let result = SearchResult {
             theorem_name: "test_theorem".to_string(),
             proved: true,
+            termination: TerminationReason::Proved,
             proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
             nodes_expanded: 3,
             total_states: 3,
@@ -459,6 +462,7 @@ mod tests {
         let result = SearchResult {
             theorem_name: "test_theorem".to_string(),
             proved: true,
+            termination: TerminationReason::Proved,
             proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
             nodes_expanded: 5,
             total_states: 5,
@@ -498,6 +502,7 @@ mod tests {
         let result = SearchResult {
             theorem_name: "test_theorem".to_string(),
             proved: false,
+            termination: TerminationReason::BudgetExhausted,
             proof_tactics: vec![],
             nodes_expanded: 5,
             total_states: 5,

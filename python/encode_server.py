@@ -170,6 +170,13 @@ def parse_args():
         default=2048,
         help="Max token length for truncation (default: 2048)",
     )
+    parser.add_argument(
+        "--save-quantized",
+        type=str,
+        default=None,
+        help="Save quantized model to this directory (e.g. models/llm/iter_4_nf4). "
+             "Subsequent loads from this path are faster (~10s vs ~70s).",
+    )
     return parser.parse_args()
 
 
@@ -194,6 +201,10 @@ def main():
     if _tokenizer.pad_token is None:
         _tokenizer.pad_token = _tokenizer.eos_token
 
+    # Optional VRAM cap (in GB) via environment variable
+    max_memory_gb = os.environ.get("ENCODE_MAX_MEMORY_GB")
+    max_memory = {0: f"{max_memory_gb}GiB"} if max_memory_gb else None
+
     if dtype_str == "nf4":
         from transformers import BitsAndBytesConfig
         quantization_config = BitsAndBytesConfig(
@@ -206,6 +217,7 @@ def main():
             args.model_path,
             quantization_config=quantization_config,
             device_map={"": 0},
+            max_memory=max_memory,
             low_cpu_mem_usage=True,
             trust_remote_code=True,
         )
@@ -223,6 +235,19 @@ def main():
             trust_remote_code=True,
         )
     _model.eval()
+
+    # Save quantized model if requested (before stripping LM head)
+    if args.save_quantized:
+        logger.info("Saving quantized model to %s", args.save_quantized)
+        _model.save_pretrained(args.save_quantized)
+        _tokenizer.save_pretrained(args.save_quantized)
+        logger.info("Quantized model saved. Re-run with --model-path %s for faster loading.", args.save_quantized)
+
+    # Strip the LM head — we only use the base model for embeddings.
+    # Frees ~1.2GB VRAM (vocab_size × hidden_size in bf16).
+    if hasattr(_model, "lm_head"):
+        del _model.lm_head
+        torch.cuda.empty_cache()
 
     hidden_size = _model.config.hidden_size
     num_params = sum(p.numel() for p in _model.parameters()) / 1e9

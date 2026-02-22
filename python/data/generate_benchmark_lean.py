@@ -68,6 +68,8 @@ def fix_statement(statement: str) -> str:
     # works as an argument, e.g. `Nat.gcd (Nat.factorial 20) 200000`.
     statement = re.sub(r"\b(\d+)\s*!", r"(Nat.factorial \1)", statement)
     statement = re.sub(r"\b([a-z_]\w*)\s*!", r"(Nat.factorial \1)", statement)
+    # Also handle parenthesized expressions like `(n)!` → `(Nat.factorial n)`
+    statement = re.sub(r"\(([a-z_]\w*)\)\s*!", r"(Nat.factorial \1)", statement)
 
     return statement
 

@@ -123,6 +123,19 @@ pub struct SearchStats {
     pub ebm_latencies_us: Vec<u64>,
 }
 
+/// Why the search loop terminated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminationReason {
+    /// A complete proof was found.
+    Proved,
+    /// Expanded max_nodes without finding a proof.
+    BudgetExhausted,
+    /// Hit timeout_per_theorem wall-clock limit.
+    Timeout,
+    /// Frontier became empty (all branches dead-ended).
+    FrontierExhausted,
+}
+
 /// Result of searching for a proof of a single theorem.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -130,6 +143,8 @@ pub struct SearchResult {
     pub theorem_name: String,
     /// Whether a complete proof was found.
     pub proved: bool,
+    /// Why the search loop terminated.
+    pub termination: TerminationReason,
     /// Tactic sequence if proved, empty otherwise.
     pub proof_tactics: Vec<String>,
     /// Number of nodes expanded during search.

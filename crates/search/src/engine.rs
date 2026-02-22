@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 
 use lean_repl::{Goal, ProofState, TacticResult};
 use policy::GeneratedTactic;
-use trajectory::{SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord};
+use trajectory::{SearchResult, SearchStats, TerminationReason, TrajectoryLabel, TrajectoryRecord};
 
 use crate::config::SearchConfig;
 use crate::node::{extract_tactic_sequence, ScoredNode, SearchNode};
@@ -184,6 +184,7 @@ impl SearchEngine {
             return Ok(SearchResult {
                 theorem_name: theorem_name.to_string(),
                 proved: true,
+                termination: TerminationReason::Proved,
                 proof_tactics: vec![],
                 nodes_expanded: 0,
                 total_states: 1,
@@ -194,15 +195,23 @@ impl SearchEngine {
             });
         }
 
-        // Score root with EBM if available
+        // Score root with EBM if available (fall back to 0.0 on error,
+        // consistent with child batch scoring)
         if let Some(scorer) = scorer {
             let ebm_start = Instant::now();
-            let score = scorer.score(&arena[0].state_pp)?;
+            match scorer.score(&arena[0].state_pp) {
+                Ok(score) => {
+                    arena[0].ebm_score = score;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Root scoring failed, using 0.0 default");
+                    arena[0].ebm_score = 0.0;
+                }
+            }
             let ebm_us = ebm_start.elapsed().as_micros() as u64;
             stats.total_ebm_time_ms += ebm_us / 1000;
             stats.ebm_latencies_us.push(ebm_us);
             stats.ebm_score_calls += 1;
-            arena[0].ebm_score = score;
         }
 
         let root_score = arena[0].combined_score(self.config.alpha, self.config.beta);
@@ -215,9 +224,16 @@ impl SearchEngine {
         let mut nodes_expanded: u32 = 0;
         let mut max_depth_reached: u32 = 0;
 
+        let termination;
+
         // Main search loop
         loop {
-            if frontier.is_empty() || nodes_expanded >= self.config.max_nodes {
+            if frontier.is_empty() {
+                termination = TerminationReason::FrontierExhausted;
+                break;
+            }
+            if nodes_expanded >= self.config.max_nodes {
+                termination = TerminationReason::BudgetExhausted;
                 break;
             }
 
@@ -228,6 +244,7 @@ impl SearchEngine {
                     elapsed_s = start_time.elapsed().as_secs(),
                     "Search timed out"
                 );
+                termination = TerminationReason::Timeout;
                 break;
             }
 
@@ -466,6 +483,7 @@ impl SearchEngine {
                             return Ok(SearchResult {
                                 theorem_name: theorem_name.to_string(),
                                 proved: true,
+                                termination: TerminationReason::Proved,
                                 proof_tactics,
                                 nodes_expanded,
                                 total_states,
@@ -542,6 +560,7 @@ impl SearchEngine {
         Ok(SearchResult {
             theorem_name: theorem_name.to_string(),
             proved: false,
+            termination,
             proof_tactics: vec![],
             nodes_expanded,
             total_states,
