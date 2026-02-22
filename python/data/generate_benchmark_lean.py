@@ -56,6 +56,13 @@ def fix_statement(statement: str) -> str:
     # Also handle single-line: `...) : conclusion`
     statement = re.sub(r"\)\s*:\s+(?=[A-Z∃∀¬↑⟨])", "), ", statement)
 
+    # Fix: Qualify bare Nat/Int names when `open Nat` is not used.
+    # These are common in IMO-Steps data. Negative lookbehind avoids
+    # double-qualifying already-qualified names like Nat.succ.
+    statement = re.sub(r"(?<!\w\.)(?<!\w)succ\b", "Nat.succ", statement)
+    statement = re.sub(r"(?<!\w\.)(?<!\w)natAbs\b", "Int.natAbs", statement)
+    statement = re.sub(r"(?<!\w\.)(?<!\w)choose\b", "Nat.choose", statement)
+
     return statement
 
 
@@ -65,7 +72,9 @@ def statement_to_theorem(name: str, statement: str) -> str:
     return f"theorem {name} : {statement} := by sorry"
 
 
-def generate_lean_file(theorems: list[dict], module_name: str) -> str:
+def generate_lean_file(
+    theorems: list[dict], module_name: str, skip_names: set[str] | None = None
+) -> str:
     """Generate a complete Lean 4 file with sorry proofs for all theorems."""
     lines = [
         f"-- Auto-generated benchmark file: {module_name}",
@@ -76,7 +85,7 @@ def generate_lean_file(theorems: list[dict], module_name: str) -> str:
         "",
         "set_option maxHeartbeats 400000",
         "",
-        "open Real Nat",
+        "open Real",
         "",
     ]
 
@@ -84,6 +93,11 @@ def generate_lean_file(theorems: list[dict], module_name: str) -> str:
     for thm in theorems:
         name = thm["name"]
         statement = thm["statement"]
+
+        # Skip theorems explicitly listed (e.g., Mathlib version incompatibilities)
+        if skip_names and name in skip_names:
+            skipped.append((name, "in skip list"))
+            continue
 
         # Skip theorems with obviously broken statements
         if not statement.strip():
@@ -100,6 +114,12 @@ def generate_lean_file(theorems: list[dict], module_name: str) -> str:
         # Skip theorems with `let` bindings — not valid in theorem type position
         if "let " in statement:
             skipped.append((name, "let binding"))
+            continue
+
+        # Skip theorems using APIs that changed between Mathlib versions
+        # (e.g., NNReal.IsConjExponent was renamed/removed in v4.26.0)
+        if "NNReal.IsConjExponent" in statement:
+            skipped.append((name, "NNReal.IsConjExponent (Mathlib version mismatch)"))
             continue
 
         # Write theorem
@@ -129,6 +149,10 @@ def main():
         "--module-name",
         help="Lean module name (default: derived from output filename)",
     )
+    parser.add_argument(
+        "--skip-file",
+        help="File with theorem names to skip (one per line)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -148,7 +172,14 @@ def main():
 
     module_name = args.module_name or output_path.stem
 
-    lean_content = generate_lean_file(theorems, module_name)
+    skip_names = set()
+    if args.skip_file:
+        skip_path = Path(args.skip_file)
+        if skip_path.exists():
+            skip_names = {line.strip() for line in skip_path.read_text().splitlines() if line.strip()}
+            print(f"Loaded {len(skip_names)} skip names from {skip_path}")
+
+    lean_content = generate_lean_file(theorems, module_name, skip_names)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
