@@ -9,7 +9,7 @@
 #   START_STEP=2 ./scripts/run_iteration_train.sh 1  # Skip training, restart + post-eval
 #
 # Steps: 0=pre-eval, 1=LLM fine-tuning, 1b=export, 2=restart server, 3=post-eval,
-#        4=EBM (encode + train, via run_ebm_train.sh)
+#        4=EBM (encode + train, via run_ebm_train.sh), 5=miniF2F eval
 #
 # Prerequisites:
 #   - Python deps installed (pip install -r python/requirements.txt)
@@ -49,6 +49,7 @@ EVAL_MAX_THEOREMS_TRAIN="${EVAL_MAX_THEOREMS_TRAIN:-200}"
 CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 TRAIN_EVAL_THEOREMS="${REPO_ROOT}/data/train_eval_theorems.json"
+MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
@@ -73,7 +74,7 @@ echo "  LoRA rank:       ${LORA_R:-16}, alpha: ${LORA_ALPHA:-32}, MLP: ${LORA_ML
 echo "  LR override:     ${LR:-auto}"
 echo "  Save steps:      ${SAVE_STEPS:-auto}"
 echo "  Probe data:      ${PROBE_DATA:-none}"
-echo "  Start step:      ${START_STEP} (0=pre-eval, 1=train, 2=restart, 3=post-eval, 4=EBM)"
+echo "  Start step:      ${START_STEP} (0=pre-eval, 1=train, 2=restart, 3=post-eval, 4=EBM, 5=miniF2F)"
 echo "================================================================"
 
 # ── Step 0: Pre-training Eval ────────────────────────────────────────────
@@ -192,6 +193,87 @@ else
     echo "=== Step 4: EBM Training [SKIPPED — iteration 0] ==="
 fi
 
+# ── Step 5: miniF2F Evaluation ────────────────────────────────────────────
+if [ "$START_STEP" -gt 5 ]; then
+    echo ""
+    echo "=== Step 5: miniF2F Eval [SKIPPED — START_STEP=${START_STEP}] ==="
+else
+    echo ""
+    echo "=== Step 5: miniF2F Evaluation ==="
+
+    ensure_server "$SGLANG_URL" "$LLM_DIR"
+
+    # Resolve EBM flag
+    EBM_FLAG=""
+    if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
+        EBM_FLAG="--ebm-path ${EBM_DIR}"
+    fi
+
+    if [ -f "$MINIF2F" ]; then
+        EVAL_THEOREMS="$MINIF2F"
+    else
+        echo "Warning: miniF2F file not found at ${MINIF2F}, using theorem_index.json"
+        EVAL_THEOREMS="${REPO_ROOT}/data/theorem_index.json"
+    fi
+
+    # Eval WITH EBM (if available)
+    STEP_LOG="${LOG_DIR}/iter_${ITER}_step_5_minif2f.log"
+    echo "  Logging to: ${STEP_LOG}"
+
+    # shellcheck disable=SC2086
+    run_logged "$STEP_LOG" $PROVER eval \
+        --config $SEARCH_CONFIG \
+        --server-url $SGLANG_URL \
+        $EBM_FLAG \
+        --theorems $EVAL_THEOREMS \
+        --budgets 600 \
+        --output ${EVAL_DIR}/iter_${ITER}.json \
+        --num-workers $NUM_WORKERS \
+        --concurrency $CONCURRENCY \
+        --max-theorems 500 \
+        --num-candidates 16 \
+        --imports Mathlib
+
+    # EBM Ablation (eval WITHOUT EBM)
+    if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
+        echo ""
+        echo "=== Step 5b: EBM Ablation (eval WITHOUT EBM) ==="
+        STEP_LOG="${LOG_DIR}/iter_${ITER}_step_5b_ablation.log"
+        echo "  Logging to: ${STEP_LOG}"
+
+        # shellcheck disable=SC2086
+        run_logged "$STEP_LOG" $PROVER eval \
+            --config $SEARCH_CONFIG \
+            --server-url $SGLANG_URL \
+            --theorems $EVAL_THEOREMS \
+            --budgets 600 \
+            --output ${EVAL_DIR}/iter_${ITER}_no_ebm.json \
+            --num-workers $NUM_WORKERS \
+            --concurrency $CONCURRENCY \
+            --max-theorems 500 \
+            --num-candidates 16 \
+            --imports Mathlib
+    fi
+
+    # Cross-iteration comparison
+    if [ "$ITER" -gt 0 ]; then
+        PREV_EVAL="${EVAL_DIR}/iter_${PREV}.json"
+        CURR_EVAL="${EVAL_DIR}/iter_${ITER}.json"
+        if [ -f "$PREV_EVAL" ] && [ -f "$CURR_EVAL" ]; then
+            echo ""
+            echo "=== Cross-Iteration Comparison ==="
+            $PROVER compare --results "$PREV_EVAL" "$CURR_EVAL"
+        fi
+
+        NO_EBM_EVAL="${EVAL_DIR}/iter_${ITER}_no_ebm.json"
+        if [ -f "$NO_EBM_EVAL" ] && [ -f "$CURR_EVAL" ]; then
+            echo ""
+            echo "=== EBM Ablation Comparison ==="
+            $PROVER compare --results "$NO_EBM_EVAL" "$CURR_EVAL"
+        fi
+    fi
+fi
+
 echo ""
 echo "================================================================"
 echo "  Training complete!"
@@ -202,6 +284,9 @@ if [ -f "${EVAL_DIR}/iter_${ITER}_pre_train.json" ]; then
 fi
 if [ -f "${EVAL_DIR}/iter_${ITER}_post_train.json" ]; then
     echo "  Post-train eval: ${EVAL_DIR}/iter_${ITER}_post_train.json"
+fi
+if [ -f "${EVAL_DIR}/iter_${ITER}.json" ]; then
+    echo "  miniF2F eval:    ${EVAL_DIR}/iter_${ITER}.json"
 fi
 if [ "$ITER" -gt 0 ]; then
     echo "  EBM checkpoint:  ${EBM_DIR}"
