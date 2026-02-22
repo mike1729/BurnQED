@@ -58,6 +58,8 @@ pub struct SearchArgs {
     pub max_theorems: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
+    /// URL of a separate encode server for EBM embedding. If omitted, uses `server_url`.
+    pub encode_url: Option<String>,
 }
 
 /// Arguments for the `summary` subcommand (formerly `eval`).
@@ -98,6 +100,8 @@ pub struct EvalArgs {
     pub num_candidates: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
+    /// URL of a separate encode server for EBM embedding. If omitted, uses `server_url`.
+    pub encode_url: Option<String>,
 }
 
 /// Arguments for the `compare` subcommand.
@@ -145,6 +149,8 @@ pub struct TrainEbmArgs {
     pub loss_type: String,
     /// Margin for margin ranking loss. Ignored for InfoNCE.
     pub margin: f64,
+    /// URL of a separate encode server for EBM embedding. If omitted, uses `server_url`.
+    pub encode_url: Option<String>,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -176,6 +182,7 @@ async fn load_policy_and_ebm(
     max_tactic_tokens: Option<usize>,
     imports: Option<&[String]>,
     concurrency: usize,
+    encode_url: Option<&str>,
 ) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
     let toml = load_search_toml(config_path)?;
@@ -211,9 +218,23 @@ async fn load_policy_and_ebm(
     );
     let policy = CachedPolicy::new(batcher, 10_000);
 
-    // 4. Optional EBM scorer
+    // 4. Optional EBM scorer — use separate encode handle if encode_url is set
+    let encode_handle = if let Some(url) = encode_url {
+        tracing::info!(url, "Using separate encode server for EBM embedding");
+        let encode_config = SglangConfig {
+            server_url: url.to_string(),
+            temperature: 0.0,
+            top_p: 1.0,
+            max_tactic_tokens: 1,
+            hidden_size: 4096,
+        };
+        let encode_client = SglangClient::new(encode_config).await?;
+        InferenceHandle::new(encode_client)
+    } else {
+        inference_handle.clone()
+    };
     let encode_batch_limit = exp * n_cands; // e.g. 8×8=64 or 4×8=32
-    let value_fn = load_ebm_scorer(ebm_path, &inference_handle, encode_batch_limit)?;
+    let value_fn = load_ebm_scorer(ebm_path, &encode_handle, encode_batch_limit)?;
 
     Ok((
         toml.search,
@@ -572,6 +593,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         args.max_tactic_tokens,
         args.imports.as_deref(),
         concurrency,
+        args.encode_url.as_deref(),
     )
     .await?;
 
@@ -1591,6 +1613,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         args.max_tactic_tokens,
         args.imports.as_deref(),
         concurrency,
+        args.encode_url.as_deref(),
     )
     .await?;
 
@@ -2145,9 +2168,10 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         tracing::info!("All {} states found in cache — skipping server connection", unique_states.len());
         (0, 0)
     } else {
-        tracing::info!(uncached = uncached_count, "Connecting to SGLang to encode missing states");
+        let encode_server_url = args.encode_url.as_deref().unwrap_or(&args.server_url);
+        tracing::info!(uncached = uncached_count, url = encode_server_url, "Connecting to encode server");
         let config = SglangConfig {
-            server_url: args.server_url.clone(),
+            server_url: encode_server_url.to_string(),
             temperature: 0.0,
             top_p: 1.0,
             max_tactic_tokens: 1,

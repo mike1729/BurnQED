@@ -203,10 +203,14 @@ else
 
     ensure_server "$SGLANG_URL" "$LLM_DIR"
 
-    # Resolve EBM flag
+    # Resolve EBM flag and encode server
+    ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
     EBM_FLAG=""
+    ENCODE_FLAG=""
     if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
         EBM_FLAG="--ebm-path ${EBM_DIR}"
+        ensure_encode_server "$ENCODE_URL" "$LLM_DIR"
+        ENCODE_FLAG="--encode-url ${ENCODE_URL}"
     fi
 
     if [ -f "$MINIF2F" ]; then
@@ -225,6 +229,7 @@ else
         --config $SEARCH_CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
+        $ENCODE_FLAG \
         --theorems $EVAL_THEOREMS \
         --budgets 600 \
         --output ${EVAL_DIR}/iter_${ITER}.json \
@@ -253,6 +258,11 @@ else
             --max-theorems 500 \
             --num-candidates 16 \
             --imports Mathlib
+    fi
+
+    # Stop encode server if we started one (free VRAM)
+    if [ -n "$ENCODE_FLAG" ]; then
+        stop_encode_server
     fi
 
     # Cross-iteration comparison

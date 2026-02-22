@@ -31,6 +31,7 @@ EVAL_DIR="${REPO_ROOT}/eval_results"
 SEARCH_THEOREMS="${REPO_ROOT}/data/iter${ITER}_search_theorems.json"
 THEOREM_INDEX="${THEOREM_INDEX:-${REPO_ROOT}/data/theorem_index.json}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 ensure_server "$SGLANG_URL" "$LLM_DIR"
 CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
@@ -54,6 +55,7 @@ echo "  Search theorems: ${SEARCH_THEOREMS}"
 echo "  Eval theorems:   ${THEOREM_INDEX}"
 echo "  Config:          ${SEARCH_CONFIG}"
 echo "  SGLang:          ${SGLANG_URL}"
+echo "  Encode server:   ${ENCODE_URL}"
 echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
 echo "  Max theorems:    ${MAX_THEOREMS}"
@@ -64,8 +66,12 @@ echo "================================================================"
 
 # EBM flag needed by both search and eval — resolve before skip check
 EBM_FLAG=""
+ENCODE_FLAG=""
 if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
     EBM_FLAG="--ebm-path ${EBM_DIR}"
+    # Start encode server for EBM embedding (separate from SGLang generation server)
+    ensure_encode_server "$ENCODE_URL" "$LLM_DIR"
+    ENCODE_FLAG="--encode-url ${ENCODE_URL}"
 fi
 
 TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
@@ -91,6 +97,7 @@ else
         --config $SEARCH_CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
+        $ENCODE_FLAG \
         --theorems $SEARCH_THEOREMS \
         --output $TRAJ_OUTPUT \
         --num-workers $NUM_WORKERS \
@@ -125,6 +132,11 @@ fi
 echo ""
 echo "=== Step 3: Trajectory Summary ==="
 $PROVER summary --input "$TRAJ_OUTPUT"
+
+# Stop encode server if we started one (free VRAM for next steps)
+if [ -n "$ENCODE_FLAG" ]; then
+    stop_encode_server
+fi
 
 echo ""
 echo "================================================================"

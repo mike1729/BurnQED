@@ -64,6 +64,10 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
+        /// URL of a separate encode server for EBM embedding (e.g., http://localhost:30001).
+        /// If omitted, encoding uses --server-url.
+        #[arg(long)]
+        encode_url: Option<String>,
     },
     /// Print statistics from a trajectory Parquet file.
     Summary {
@@ -127,6 +131,10 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
+        /// URL of a separate encode server for EBM embedding (e.g., http://localhost:30001).
+        /// If omitted, encoding uses --server-url.
+        #[arg(long)]
+        encode_url: Option<String>,
     },
     /// Compare evaluation results across iterations.
     Compare {
@@ -258,6 +266,10 @@ enum Command {
         /// Margin for margin ranking loss. Ignored when using info_nce.
         #[arg(long, default_value_t = 1.0)]
         margin: f64,
+        /// URL of a separate encode server for EBM embedding (e.g., http://localhost:30001).
+        /// If omitted, encoding uses --server-url.
+        #[arg(long)]
+        encode_url: Option<String>,
     },
 }
 
@@ -287,6 +299,7 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
             max_theorems,
             imports,
+            encode_url,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -303,6 +316,7 @@ async fn main() -> anyhow::Result<()> {
                 concurrency,
                 max_theorems,
                 imports,
+                encode_url,
             })
             .await
         }
@@ -330,6 +344,7 @@ async fn main() -> anyhow::Result<()> {
             max_tactic_tokens,
             num_candidates,
             imports,
+            encode_url,
         } => {
             pipeline::run_eval(EvalArgs {
                 config,
@@ -345,6 +360,7 @@ async fn main() -> anyhow::Result<()> {
                 max_tactic_tokens,
                 num_candidates,
                 imports,
+                encode_url,
             })
             .await
         }
@@ -421,6 +437,7 @@ async fn main() -> anyhow::Result<()> {
             resume_step,
             loss_type,
             margin,
+            encode_url,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -440,6 +457,7 @@ async fn main() -> anyhow::Result<()> {
                 resume_step,
                 loss_type,
                 margin,
+                encode_url,
             })
             .await
         }
