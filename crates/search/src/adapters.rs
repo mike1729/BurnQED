@@ -65,11 +65,17 @@ impl ProofEnvironment for Arc<LeanPool> {
             Err(e) => return Err(SearchError::Lean(e)),
         }
         // Fallback: start proof from expression (works for simple type expressions).
-        let handle = self
-            .start_proof_owned(statement)
-            .await
-            .map_err(SearchError::Lean)?;
-        Ok(Box::new(handle))
+        match self.start_proof_owned(statement).await {
+            Ok(handle) => Ok(Box::new(handle)),
+            Err(e) => {
+                tracing::warn!(
+                    name = name,
+                    error = %e,
+                    "goal.start(expr) fallback also failed"
+                );
+                Err(SearchError::Lean(e))
+            }
+        }
     }
 }
 
