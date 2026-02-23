@@ -772,7 +772,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 if agg.recent_errors.len() > 10 {
                     agg.recent_errors.pop_front();
                 }
-                tracing::debug!(theorem = outcome.name, error = %e, "Search error, skipping");
+                tracing::warn!(theorem = outcome.name, error = %e, "Search error, skipping");
             }
         }
         agg.record_completion();
