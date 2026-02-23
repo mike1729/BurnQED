@@ -195,15 +195,22 @@ impl SearchEngine {
             });
         }
 
-        // Score root with EBM if available
+        // Score root with EBM if available (fall back to 0.0 on error, consistent with child scoring)
         if let Some(scorer) = scorer {
             let ebm_start = Instant::now();
-            let score = scorer.score(&arena[0].state_pp)?;
+            match scorer.score(&arena[0].state_pp) {
+                Ok(score) => {
+                    arena[0].ebm_score = score;
+                }
+                Err(e) => {
+                    tracing::warn!(theorem = theorem_name, error = %e, "Root EBM scoring failed, using 0.0");
+                    arena[0].ebm_score = 0.0;
+                }
+            }
             let ebm_us = ebm_start.elapsed().as_micros() as u64;
             stats.total_ebm_time_ms += ebm_us / 1000;
             stats.ebm_latencies_us.push(ebm_us);
             stats.ebm_score_calls += 1;
-            arena[0].ebm_score = score;
         }
 
         let root_score = arena[0].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);

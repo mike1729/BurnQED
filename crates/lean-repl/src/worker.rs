@@ -124,8 +124,18 @@ impl LeanWorker {
     /// Check whether this worker should be recycled.
     ///
     /// A worker needs recycling if it has handled too many requests
-    /// (Lean processes leak memory) or has been alive too long.
-    pub fn needs_recycling(&self) -> bool {
+    /// (Lean processes leak memory), has been alive too long, or the
+    /// underlying process has exited (e.g. Lean internal panic).
+    pub fn needs_recycling(&mut self) -> bool {
+        // Check if the process has exited (non-blocking)
+        if let Ok(Some(status)) = self.child.try_wait() {
+            tracing::warn!(
+                exit_status = %status,
+                requests = self.requests_handled,
+                "Lean worker process died, will recycle"
+            );
+            return true;
+        }
         self.requests_handled >= self.config.max_requests_per_worker
             || self.started_at.elapsed().as_secs() >= self.config.max_lifetime_secs
     }
@@ -158,11 +168,22 @@ impl LeanWorker {
     /// Send a raw JSON line to Pantograph and read one response line.
     ///
     /// CRITICAL: Appends `\n` after the JSON — Pantograph blocks without it.
+    /// On IO error or process death, the worker is recycled (respawned) so the
+    /// next theorem gets a healthy process. The current request still fails.
     async fn send_line(&mut self, json: &str) -> Result<String, LeanError> {
-        // Write JSON + newline + flush
-        self.stdin.write_all(json.as_bytes()).await?;
-        self.stdin.write_all(b"\n").await?;
-        self.stdin.flush().await?;
+        // Write JSON + newline + flush — broken pipe here means process died
+        if let Err(e) = async {
+            self.stdin.write_all(json.as_bytes()).await?;
+            self.stdin.write_all(b"\n").await?;
+            self.stdin.flush().await?;
+            Ok::<(), std::io::Error>(())
+        }
+        .await
+        {
+            tracing::warn!(error = %e, "Lean worker write failed (process died), recycling");
+            let _ = self.recycle().await; // best-effort recycle
+            return Err(LeanError::ProcessDied);
+        }
 
         // Read response with timeout
         let mut response_line = String::new();
@@ -172,12 +193,20 @@ impl LeanWorker {
             tokio::time::timeout(timeout, self.stdout.read_line(&mut response_line)).await;
 
         match read_result {
-            Ok(Ok(0)) => Err(LeanError::ProcessDied),
+            Ok(Ok(0)) => {
+                tracing::warn!("Lean worker process exited (EOF), recycling");
+                let _ = self.recycle().await; // best-effort recycle
+                Err(LeanError::ProcessDied)
+            }
             Ok(Ok(_)) => {
                 self.requests_handled += 1;
                 Ok(response_line)
             }
-            Ok(Err(e)) => Err(LeanError::Io(e)),
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "Lean worker read error, recycling");
+                let _ = self.recycle().await; // best-effort recycle
+                Err(LeanError::Io(e))
+            }
             Err(_) => {
                 tracing::warn!(
                     timeout_secs = self.config.tactic_timeout_secs,
