@@ -76,10 +76,10 @@ def fix_statement(statement: str) -> str:
     # Fix: Factorial notation `n!` or `n !` is not valid in Lean 4 theorem-type
     # position. Replace with `(Nat.factorial n)`. Parentheses needed so the result
     # works as an argument, e.g. `Nat.gcd (Nat.factorial 20) 200000`.
+    # Handle `(expr)!` first (before simple patterns eat inner variables).
+    statement = _fix_paren_factorials(statement)
     statement = re.sub(r"\b(\d+)\s*!", r"(Nat.factorial \1)", statement)
     statement = re.sub(r"\b([a-z_]\w*)\s*!", r"(Nat.factorial \1)", statement)
-    # Also handle parenthesized expressions like `(n)!` → `(Nat.factorial n)`
-    statement = re.sub(r"\(([a-z_]\w*)\)\s*!", r"(Nat.factorial \1)", statement)
 
     # Fix: Set-builder notation `{x : T | P}` in theorem-type position confuses
     # the Lean parser (conflicts with implicit binder `{x : T}`). Wrapping in
@@ -87,6 +87,32 @@ def fix_statement(statement: str) -> str:
     statement = _parenthesize_set_builders(statement)
 
     return statement
+
+
+def _fix_paren_factorials(s: str) -> str:
+    """Replace `(expr)!` with `(Nat.factorial (expr))`, handling nested parens."""
+    import re
+    while True:
+        m = re.search(r'\)\s*!(?!\w)', s)
+        if not m:
+            break
+        close_pos = m.start()  # position of `)`
+        # Find matching `(`
+        depth = 1
+        j = close_pos - 1
+        while j >= 0 and depth > 0:
+            if s[j] == ')':
+                depth += 1
+            elif s[j] == '(':
+                depth -= 1
+            j -= 1
+        j += 1
+        if depth == 0:
+            inner = s[j:close_pos + 1]
+            s = s[:j] + f'(Nat.factorial {inner})' + s[m.end():]
+        else:
+            break
+    return s
 
 
 def _parenthesize_set_builders(s: str) -> str:
@@ -152,6 +178,13 @@ def generate_lean_file(
             skipped.append((name, "in skip list"))
             continue
 
+        # Clean up name (some v2s entries have trailing colons)
+        name = name.rstrip(":")
+
+        # Fix malformed `∀ IsGreatest/IsLeast` (missing binder variable)
+        if statement.startswith("∀ IsGreatest ") or statement.startswith("∀ IsLeast "):
+            statement = statement[2:]  # strip leading `∀ `
+
         # Skip theorems with obviously broken statements
         if not statement.strip():
             skipped.append((name, "empty statement"))
@@ -166,6 +199,12 @@ def generate_lean_file(
         # (e.g., NNReal.IsConjExponent was renamed/removed in v4.26.0)
         if "NNReal.IsConjExponent" in statement:
             skipped.append((name, "NNReal.IsConjExponent (Mathlib version mismatch)"))
+            continue
+
+        # Skip theorems with EuclideanSpace + ![...] type mismatch (v2s data bug:
+        # ![7, -1] creates Fin n → ℝ, not EuclideanSpace ℝ (Fin n))
+        if "EuclideanSpace" in statement and "![" in statement:
+            skipped.append((name, "EuclideanSpace/matrix notation type mismatch"))
             continue
 
         # Write theorem
