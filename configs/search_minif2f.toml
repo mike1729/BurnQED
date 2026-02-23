@@ -6,19 +6,12 @@ alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
-timeout_per_theorem = 120     # seconds (most theorems exhaust in <30s anyway)
-# No ebm_skip_easy. Always score with EBM when available.
+timeout_per_theorem = 300     # seconds (miniF2F needs more time)
 harvest_siblings = true       # Mine sibling states from proof path after finding proof
 batch_expansion_size = 8      # Pop 8 nodes from frontier per batch (saturates GPU)
 batch_encode_size = 8         # Max states per encode HTTP request (lower for nf4 VRAM)
-# Trimmed probes: removed simp/simp_all (10-20s, mostly produce loops) and decide (30s on complex goals)
+# Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
 probe_tactics = ["ring", "omega", "norm_num", "trivial", "rfl", "tauto", "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left", "right", "ext"]
-
-[search.iteration_0]
-# Run search twice: once normal, once with high temperature for diverse negatives
-normal_temperature = 0.8
-noise_temperature = 1.2
-noise_fraction = 0.3          # 30% of theorems get the high-T run
 
 [lean_pool]
 num_workers = 8               # Matched to concurrency default
