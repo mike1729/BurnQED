@@ -86,6 +86,18 @@ def fix_statement(statement: str) -> str:
     # parentheses `({x : T | P})` disambiguates. Handles nested braces.
     statement = _parenthesize_set_builders(statement)
 
+    # Fix: `![a, b]` doesn't coerce to `EuclideanSpace ℝ (Fin n)` in Mathlib
+    # v4.26.0+. Wrap with `(EuclideanSpace.equiv _ ℝ).symm ![...]`.
+    if "EuclideanSpace" in statement:
+        statement = re.sub(
+            r"= !\[",
+            r"= (EuclideanSpace.equiv _ ℝ).symm ![",
+            statement,
+        )
+
+    # Fix: `let c, =` typo in v2s data → `let c :=`
+    statement = statement.replace("let c, =", "let c :=")
+
     return statement
 
 
@@ -190,21 +202,10 @@ def generate_lean_file(
             skipped.append((name, "empty statement"))
             continue
 
-        # Skip theorems with `let` bindings — not valid in theorem type position
-        if "let " in statement:
-            skipped.append((name, "let binding"))
-            continue
-
         # Skip theorems using APIs that changed between Mathlib versions
         # (e.g., NNReal.IsConjExponent was renamed/removed in v4.26.0)
         if "NNReal.IsConjExponent" in statement:
             skipped.append((name, "NNReal.IsConjExponent (Mathlib version mismatch)"))
-            continue
-
-        # Skip theorems with EuclideanSpace + ![...] type mismatch (v2s data bug:
-        # ![7, -1] creates Fin n → ℝ, not EuclideanSpace ℝ (Fin n))
-        if "EuclideanSpace" in statement and "![" in statement:
-            skipped.append((name, "EuclideanSpace/matrix notation type mismatch"))
             continue
 
         # Write theorem
