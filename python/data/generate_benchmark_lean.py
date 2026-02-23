@@ -36,8 +36,23 @@ def fix_statement(statement: str) -> str:
     """Apply syntax fixes to make a statement valid in theorem-type position."""
     import re
 
-    # Fix: Replace `∑/∏ VAR in S,` with `∑/∏ VAR ∈ S,` because in theorem-type
-    # position, `in` can confuse the parser (conflicts with binder syntax).
+    # Fix: `𝓝` notation requires `open Topology`; use `nhds` instead.
+    statement = statement.replace("𝓝", "nhds")
+
+    # Fix: Strip inline Lean comments `-- ...` that appear in some v1 statements.
+    # Comments run to end-of-line, but may be flattened onto one line.
+    # Match `--` through to the next `(h` (start of next hypothesis binder).
+    statement = re.sub(r" --.*?(?=\(h)", " ", statement)
+
+    # Fix: Malformed `∀ : ∃ f, T → U,` → `∃ f : T → U,` (v1 data bug)
+    statement = re.sub(r"^∀ : (∃ \w+), ([\w→ ]+),", r"\1 : \2,", statement)
+
+    # Fix: Integer division in exponents `^ (1 / 3)` → `^ ((1 : ℝ) / 3)` to
+    # avoid ℕ division truncation (1/3 = 0 in ℕ).
+    statement = re.sub(r"\^ \((\d+) / (\d+)\)", r"^ ((\1 : ℝ) / \2)", statement)
+
+    # Fix: Replace `∑/∏ VAR in S,` with `∑/∏ VAR ∈ S,` — `in` notation was
+    # deprecated in Mathlib 4 in favor of `∈`.
     statement = re.sub(r"([∑∏]) (\w+) in ", r"\1 \2 ∈ ", statement)
 
     # Fix: `∃ x, ℤ,` → `∃ x : ℤ,` (malformed binder in v2s data)
