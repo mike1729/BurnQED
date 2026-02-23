@@ -81,6 +81,9 @@ def fix_statement(statement: str) -> str:
     statement = re.sub(r"\b(\d+)\s*!", r"(Nat.factorial \1)", statement)
     statement = re.sub(r"\b([a-z_]\w*)\s*!", r"(Nat.factorial \1)", statement)
 
+    # Fix: `{x, ℝ | P}` → `{x : ℝ | P}` (malformed set-builder type annotation in v2c)
+    statement = re.sub(r"\{(\w+), (ℤ|ℝ|ℕ|ℂ|ℚ) \|", r"{\1 : \2 |", statement)
+
     # Fix: Set-builder notation `{x : T | P}` in theorem-type position confuses
     # the Lean parser (conflicts with implicit binder `{x : T}`). Wrapping in
     # parentheses `({x : T | P})` disambiguates. Handles nested braces.
@@ -157,8 +160,88 @@ def _parenthesize_set_builders(s: str) -> str:
     return ''.join(result)
 
 
+def _comma_to_colon_in_binders(body: str) -> str:
+    """Convert the last ∀-style `,` conclusion separator to theorem-style `:`.
+
+    In `∀ (x : T) (y : U), conclusion` the `,` separates binders from body.
+    In `theorem name (x : T) (y : U) : conclusion` the `:` does the same.
+    This finds the last `)` at paren-depth 0 followed by `,` and replaces with `:`.
+    """
+    depth = 0
+    last_comma_pos = -1
+    for i, c in enumerate(body):
+        if c == '(':
+            depth += 1
+        elif c == ')':
+            depth -= 1
+            if depth == 0:
+                # Look ahead past whitespace for `,`
+                j = i + 1
+                while j < len(body) and body[j] in ' \t':
+                    j += 1
+                if j < len(body) and body[j] == ',':
+                    last_comma_pos = j
+
+    if last_comma_pos >= 0:
+        return body[:last_comma_pos] + ' :' + body[last_comma_pos + 1:]
+    return body
+
+
+def _handle_compound_statement(name: str, statement: str) -> str:
+    """Handle v2c compound statements with abbrev definitions + theorem.
+
+    v2c data encodes some theorems as:
+        ∀ abbrev solution_name : Type := sorry
+        theorem thm_name (args...), ... = solution_name
+
+    This emits the abbrev(s) as standalone declarations and the theorem
+    with a sorry proof.
+    """
+    import re
+
+    # Strip leading `∀ ` artifact
+    statement = re.sub(r"^∀ ", "", statement)
+
+    # Split into declarations: abbrevs end with `:= sorry`, theorem starts with `theorem`
+    parts = re.split(r"\n\s*(?=(?:noncomputable )?(?:abbrev|theorem) )", statement)
+
+    result_lines = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        if part.startswith("theorem "):
+            # Extract theorem body (everything after `theorem name`)
+            # Apply fix_statement to the body portion
+            m = re.match(r"(theorem \S+)\s*(:?)\s*(.*)", part, re.DOTALL)
+            if m:
+                header = m.group(1)
+                had_colon = bool(m.group(2))
+                body = fix_statement(m.group(3))
+                if had_colon:
+                    # Type-style: `theorem name : type`
+                    result_lines.append(f"{header} : {body} := by sorry")
+                else:
+                    # Binder-style: `theorem name (args...), conclusion`
+                    # Convert ∀-style `,` separator to theorem-style `:`
+                    body = _comma_to_colon_in_binders(body)
+                    result_lines.append(f"{header} {body} := by sorry")
+            else:
+                result_lines.append(f"{part} := by sorry")
+        else:
+            # abbrev / noncomputable abbrev — emit as-is (already has `:= sorry`)
+            result_lines.append(part)
+
+    return "\n\n".join(result_lines)
+
+
 def statement_to_theorem(name: str, statement: str) -> str:
     """Convert a ∀-expression statement to a theorem declaration with sorry proof."""
+    # Handle compound v2c statements with abbrev + theorem
+    if statement.lstrip().startswith("∀ abbrev") or statement.lstrip().startswith("∀ noncomputable"):
+        return _handle_compound_statement(name, statement)
+
     statement = fix_statement(statement)
     return f"theorem {name} : {statement} := by sorry"
 

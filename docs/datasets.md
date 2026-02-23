@@ -46,23 +46,41 @@ Reference: [miniF2F-Lean Revisited](https://arxiv.org/abs/2511.03108) (NeurIPS 2
 Theorems are pre-compiled into `.olean` files so Pantograph can use fast `copyFrom(name)` lookup instead of slow expression elaboration (60s+ for complex types).
 
 ```bash
-python python/data/generate_benchmark_lean.py \
-  --input data/minif2f_v2s_test.json \
-  --output vendor/Pantograph/BenchMinIF2FV2STest.lean \
-  --module-name BenchMinIF2FV2STest
+# Generate all 6 benchmark files:
+for pair in \
+  "minif2f_test.json BenchMinIF2FTest" \
+  "minif2f_valid.json BenchMinIF2FValid" \
+  "minif2f_v2s_test.json BenchMinIF2FV2STest" \
+  "minif2f_v2s_valid.json BenchMinIF2FV2SValid" \
+  "minif2f_v2c_test.json BenchMinIF2FV2CTest" \
+  "minif2f_v2c_valid.json BenchMinIF2FV2CValid"; do
+  set -- $pair
+  python python/data/generate_benchmark_lean.py \
+    --input "data/$1" --output "vendor/Pantograph/$2.lean" --module-name "$2"
+done
 
-cd vendor/Pantograph && lake build BenchMinIF2FV2STest
+cd vendor/Pantograph && lake build \
+  BenchMinIF2FTest BenchMinIF2FValid \
+  BenchMinIF2FV2STest BenchMinIF2FV2SValid \
+  BenchMinIF2FV2CTest BenchMinIF2FV2CValid
 ```
 
 The generator applies syntax fixes for Mathlib v4.26.0 compatibility:
 - `∑ k in S` → `∑ k ∈ S` (deprecated BigOperators notation)
 - `{x | P}` → `({x | P})` (set-builder parser disambiguation)
+- `{x, ℝ | P}` → `{x : ℝ | P}` (malformed set-builder type annotation in v2c)
 - `(n + 2)!` → `(Nat.factorial (n + 2))` (factorial notation)
 - `= ![7, -1]` → `= (EuclideanSpace.equiv _ ℝ).symm ![7, -1]` (coercion fix)
 - `𝓝` → `nhds` (requires `open Topology`)
-- Various v2s data typos (malformed binders, trailing colons)
+- `-- comment` stripping (v1 inline comments)
+- `^ (1/3)` → `^ ((1 : ℝ)/3)` (integer division in exponents)
+- `∃ x, ℤ,` → `∃ x : ℤ,` (malformed binder in v2s)
+- `∀ IsGreatest` → `IsGreatest` (missing binder variable in v2s)
+- `let c, =` → `let c :=` (v2s typo)
+- v2c compound `abbrev` + `theorem` declarations split and emitted correctly
+- v2c `,` conclusion separator → `:` in theorem declarations
 
-All 976 theorems (4 datasets × 244) compile with zero errors.
+All 1,464 theorems (6 datasets × 244) compile with zero errors.
 
 ## Mathlib Corpus
 
