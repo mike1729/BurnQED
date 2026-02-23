@@ -98,9 +98,17 @@ impl CircuitBreaker {
     }
 
     fn record_failure(&self) {
-        self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+        let prev = self.consecutive_failures.fetch_add(1, Ordering::Relaxed);
         self.last_failure_epoch_ms
             .store(Self::now_ms(), Ordering::Relaxed);
+        if prev + 1 >= Self::THRESHOLD {
+            tracing::error!(
+                consecutive_failures = prev + 1,
+                "SGLang circuit breaker TRIPPED — server appears down. \
+                 All requests will fail for {}s.",
+                Self::COOLDOWN_MS / 1000
+            );
+        }
     }
 }
 
@@ -880,6 +888,11 @@ impl SglangClient {
                 Err(e) => {
                     // Transport error (connection refused, timeout): don't retry,
                     // record failure for circuit breaker.
+                    tracing::warn!(
+                        error = %e,
+                        url = %url,
+                        "SGLang transport error (connection refused / timeout)"
+                    );
                     self.circuit.record_failure();
                     anyhow::bail!("SGLang request failed: {e}");
                 }
