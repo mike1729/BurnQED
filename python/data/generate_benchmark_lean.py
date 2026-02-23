@@ -71,7 +71,42 @@ def fix_statement(statement: str) -> str:
     # Also handle parenthesized expressions like `(n)!` → `(Nat.factorial n)`
     statement = re.sub(r"\(([a-z_]\w*)\)\s*!", r"(Nat.factorial \1)", statement)
 
+    # Fix: Set-builder notation `{x : T | P}` in theorem-type position confuses
+    # the Lean parser (conflicts with implicit binder `{x : T}`). Wrapping in
+    # parentheses `({x : T | P})` disambiguates. Handles nested braces.
+    statement = _parenthesize_set_builders(statement)
+
     return statement
+
+
+def _parenthesize_set_builders(s: str) -> str:
+    """Wrap top-level set-builder `{...|...}` in parens, handling nesting."""
+    result = []
+    i = 0
+    while i < len(s):
+        if s[i] == '{' and (i == 0 or s[i-1] != '('):
+            # Find the matching closing brace (handling nesting)
+            depth = 1
+            j = i + 1
+            has_pipe = False
+            while j < len(s) and depth > 0:
+                if s[j] == '{':
+                    depth += 1
+                elif s[j] == '}':
+                    depth -= 1
+                elif s[j] == '|' and depth == 1:
+                    has_pipe = True
+                j += 1
+            if depth == 0 and has_pipe:
+                # Wrap {…|…} in parens
+                result.append('(')
+                result.append(s[i:j])
+                result.append(')')
+                i = j
+                continue
+        result.append(s[i])
+        i += 1
+    return ''.join(result)
 
 
 def statement_to_theorem(name: str, statement: str) -> str:
@@ -112,13 +147,6 @@ def generate_lean_file(
             skipped.append((name, "empty statement"))
             continue
 
-        # Skip theorems with set-builder notation {x : T | ...} — these don't
-        # parse correctly in theorem-type position. They'll fall back to
-        # goal.start(expr) at runtime with the longer timeout.
-        if "{" in statement and "|" in statement:
-            skipped.append((name, "set-builder notation"))
-            continue
-
         # Skip theorems with `let` bindings — not valid in theorem type position
         if "let " in statement:
             skipped.append((name, "let binding"))
@@ -128,6 +156,12 @@ def generate_lean_file(
         # (e.g., NNReal.IsConjExponent was renamed/removed in v4.26.0)
         if "NNReal.IsConjExponent" in statement:
             skipped.append((name, "NNReal.IsConjExponent (Mathlib version mismatch)"))
+            continue
+
+        # Skip theorems with ill-typed statements (e.g., subtraction on ℕ
+        # requires AddGroup which doesn't exist)
+        if name == "amc12a_2010_p22":
+            skipped.append((name, "ill-typed: AddGroup ℕ not synthesizable"))
             continue
 
         # Write theorem
