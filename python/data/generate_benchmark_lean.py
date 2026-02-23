@@ -43,11 +43,6 @@ def fix_statement(statement: str) -> str:
     # Fix: `∃ x, ℤ,` → `∃ x : ℤ,` (malformed binder in v2s data)
     statement = re.sub(r"∃ (\w+(?:\s+\w+)*), (ℤ|ℝ|ℕ|ℂ|ℚ),", r"∃ \1 : \2,", statement)
 
-    # Fix: `∃ x : ℤ,` → `∃ x,` — remove type annotations in ∃ binders
-    # to avoid parser ambiguity. Lean infers these well.
-    statement = re.sub(r"∃ (\w+) : (ℤ|ℝ|ℕ|ℂ|ℚ),", r"∃ \1,", statement)
-    statement = re.sub(r"∃! (\w+) : (ℤ|ℝ|ℕ|ℂ|ℚ),", r"∃! \1,", statement)
-
     # Fix: In `∀ (args) (h : ...) :\n  conclusion`, the `:` conclusion separator
     # after the last `)` is valid in expression context (goal.start) but ambiguous
     # in `theorem name : TYPE` context. Replace with `,`.
@@ -156,12 +151,6 @@ def generate_lean_file(
         # (e.g., NNReal.IsConjExponent was renamed/removed in v4.26.0)
         if "NNReal.IsConjExponent" in statement:
             skipped.append((name, "NNReal.IsConjExponent (Mathlib version mismatch)"))
-            continue
-
-        # Skip theorems with ill-typed statements (e.g., subtraction on ℕ
-        # requires AddGroup which doesn't exist)
-        if name == "amc12a_2010_p22":
-            skipped.append((name, "ill-typed: AddGroup ℕ not synthesizable"))
             continue
 
         # Write theorem
