@@ -26,21 +26,14 @@ impl LeanPool {
             ));
         }
 
-        // Spawn all workers concurrently for faster init (especially with Mathlib)
-        let mut handles = Vec::with_capacity(config.num_workers);
-        for i in 0..config.num_workers {
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..config.num_workers {
             let cfg = config.clone();
-            handles.push(tokio::spawn(async move {
-                let result = LeanWorker::spawn(&cfg).await;
-                tracing::debug!(worker = i, "Worker spawned");
-                result
-            }));
+            set.spawn(async move { LeanWorker::spawn(&cfg).await });
         }
         let mut workers = Vec::with_capacity(config.num_workers);
-        for handle in handles {
-            workers.push(handle.await.map_err(|e| {
-                LeanError::Protocol(format!("Worker spawn task panicked: {e}"))
-            })??);
+        while let Some(result) = set.join_next().await {
+            workers.push(result.map_err(|e| LeanError::Protocol(e.to_string()))??);
         }
 
         let num = config.num_workers;

@@ -8,7 +8,7 @@ use ordered_float::OrderedFloat;
 
 use lean_repl::{Goal, ProofState, TacticResult};
 use policy::GeneratedTactic;
-use trajectory::{SearchResult, SearchStats, TerminationReason, TrajectoryLabel, TrajectoryRecord};
+use trajectory::{SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord};
 
 use crate::config::SearchConfig;
 use crate::node::{extract_tactic_sequence, ScoredNode, SearchNode};
@@ -184,7 +184,6 @@ impl SearchEngine {
             return Ok(SearchResult {
                 theorem_name: theorem_name.to_string(),
                 proved: true,
-                termination: TerminationReason::Proved,
                 proof_tactics: vec![],
                 nodes_expanded: 0,
                 total_states: 1,
@@ -192,29 +191,22 @@ impl SearchEngine {
                 wall_time_ms,
                 all_records: records,
                 stats,
+                failure_reason: "proved".to_string(),
             });
         }
 
-        // Score root with EBM if available (fall back to 0.0 on error,
-        // consistent with child batch scoring)
+        // Score root with EBM if available
         if let Some(scorer) = scorer {
             let ebm_start = Instant::now();
-            match scorer.score(&arena[0].state_pp) {
-                Ok(score) => {
-                    arena[0].ebm_score = score;
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Root scoring failed, using 0.0 default");
-                    arena[0].ebm_score = 0.0;
-                }
-            }
+            let score = scorer.score(&arena[0].state_pp)?;
             let ebm_us = ebm_start.elapsed().as_micros() as u64;
             stats.total_ebm_time_ms += ebm_us / 1000;
             stats.ebm_latencies_us.push(ebm_us);
             stats.ebm_score_calls += 1;
+            arena[0].ebm_score = score;
         }
 
-        let root_score = arena[0].combined_score(self.config.alpha, self.config.beta);
+        let root_score = arena[0].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);
         let mut frontier = BinaryHeap::new();
         frontier.push(ScoredNode {
             node_index: 0,
@@ -224,32 +216,31 @@ impl SearchEngine {
         let mut nodes_expanded: u32 = 0;
         let mut max_depth_reached: u32 = 0;
 
-        let termination;
-
         // Main search loop
+        let exit_reason;
         loop {
             if frontier.is_empty() {
-                termination = TerminationReason::FrontierExhausted;
+                exit_reason = "frontier_exhausted";
                 break;
             }
             if nodes_expanded >= self.config.max_nodes {
-                termination = TerminationReason::BudgetExhausted;
+                exit_reason = "budget_exhausted";
                 break;
             }
 
             let timeout_secs = self.config.timeout_per_theorem;
             if timeout_secs > 0 && start_time.elapsed().as_secs() >= timeout_secs {
+                exit_reason = "timeout";
                 tracing::debug!(
                     theorem = theorem_name,
                     elapsed_s = start_time.elapsed().as_secs(),
                     "Search timed out"
                 );
-                termination = TerminationReason::Timeout;
                 break;
             }
 
             // Pop a batch of nodes from the frontier
-            let batch_size = self.config.batch_generate_size.max(1).min(frontier.len());
+            let batch_size = self.config.batch_expansion_size.max(1).min(frontier.len());
             let mut batch: Vec<ScoredNode> = Vec::with_capacity(batch_size);
             for _ in 0..batch_size {
                 if let Some(node) = frontier.pop() {
@@ -412,7 +403,7 @@ impl SearchEngine {
                             } else {
                                 // No scorer: push to frontier immediately
                                 let child_score =
-                                    arena[child_idx].combined_score(self.config.alpha, self.config.beta);
+                                    arena[child_idx].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);
                                 frontier.push(ScoredNode {
                                     node_index: child_idx,
                                     score: OrderedFloat(child_score),
@@ -483,7 +474,6 @@ impl SearchEngine {
                             return Ok(SearchResult {
                                 theorem_name: theorem_name.to_string(),
                                 proved: true,
-                                termination: TerminationReason::Proved,
                                 proof_tactics,
                                 nodes_expanded,
                                 total_states,
@@ -491,6 +481,7 @@ impl SearchEngine {
                                 wall_time_ms,
                                 all_records: records,
                                 stats,
+                                failure_reason: "proved".to_string(),
                             });
                         }
                         TacticResult::Failed { message } => {
@@ -524,7 +515,7 @@ impl SearchEngine {
                     for ((idx, _), score) in pending_scores.iter().zip(scores) {
                         arena[*idx].ebm_score = score;
                         let child_score =
-                            arena[*idx].combined_score(self.config.alpha, self.config.beta);
+                            arena[*idx].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);
                         frontier.push(ScoredNode {
                             node_index: *idx,
                             score: OrderedFloat(child_score),
@@ -560,7 +551,6 @@ impl SearchEngine {
         Ok(SearchResult {
             theorem_name: theorem_name.to_string(),
             proved: false,
-            termination,
             proof_tactics: vec![],
             nodes_expanded,
             total_states,
@@ -568,6 +558,7 @@ impl SearchEngine {
             wall_time_ms,
             all_records: records,
             stats,
+            failure_reason: exit_reason.to_string(),
         })
     }
 }
@@ -1243,7 +1234,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_batched_expansion() {
-        // batch_generate_size = 2 should expand two nodes at once
+        // batch_expansion_size = 2 should expand two nodes at once
         let mut env = MockEnvironment::new();
         env.add_response(
             0,
@@ -1272,7 +1263,7 @@ mod tests {
         policy.add_response("⊢ B", vec![]);
 
         let config = SearchConfig {
-            batch_generate_size: 2,
+            batch_expansion_size: 2,
             probe_tactics: vec![],
             ..SearchConfig::default()
         };

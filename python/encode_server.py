@@ -71,27 +71,33 @@ _max_batch_size = 16  # Default; overridden by --max-batch-size CLI arg
 @torch.no_grad()
 def _encode_chunk(prompts: list[str]) -> np.ndarray:
     """Encode a single chunk of prompts, return (batch, hidden_size) numpy array."""
-    inputs = _tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=_max_length,
-    ).to(_device)
+    try:
+        inputs = _tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=_max_length,
+        ).to(_device)
 
-    # Use base model (model.model) to get last_hidden_state directly.
-    # Avoids storing all 30+ layers of hidden states (saves ~15GB VRAM).
-    outputs = _model.model(**inputs)
-    hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden_size)
+        # Use base model (model.model) to get last_hidden_state directly.
+        # Avoids storing all 30+ layers of hidden states (saves ~15GB VRAM).
+        outputs = _model.model(**inputs)
+        hidden_states = outputs.last_hidden_state  # (batch, seq_len, hidden_size)
 
-    # Mean pool over non-padding tokens
-    attention_mask = inputs["attention_mask"]  # (batch, seq_len)
-    mask_expanded = attention_mask.unsqueeze(-1).float()  # (batch, seq_len, 1)
-    sum_hidden = (hidden_states * mask_expanded).sum(dim=1)  # (batch, hidden_size)
-    count = mask_expanded.sum(dim=1).clamp(min=1)  # (batch, 1)
-    pooled = sum_hidden / count  # (batch, hidden_size)
+        # Mean pool over non-padding tokens
+        attention_mask = inputs["attention_mask"]  # (batch, seq_len)
+        mask_expanded = attention_mask.unsqueeze(-1).float()  # (batch, seq_len, 1)
+        sum_hidden = (hidden_states * mask_expanded).sum(dim=1)  # (batch, hidden_size)
+        count = mask_expanded.sum(dim=1).clamp(min=1)  # (batch, 1)
+        pooled = sum_hidden / count  # (batch, hidden_size)
+        result = pooled.cpu().float().numpy()
+    finally:
+        # Release activation cache so large batches don't permanently inflate VRAM.
+        # Also recovers from OOM — frees partial allocations so next request can succeed.
+        torch.cuda.empty_cache()
 
-    return pooled.cpu().float().numpy()
+    return result
 
 
 @torch.no_grad()

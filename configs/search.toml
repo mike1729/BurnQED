@@ -1,14 +1,16 @@
 [search]
-max_nodes = 600
+max_nodes = 300
 max_depth = 50
 num_candidates = 8            # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
-timeout_per_theorem = 600     # seconds (most theorems exhaust in <30s anyway)
+llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
+ebm_temperature = 1.0         # Scale EBM scores: score / temperature
+timeout_per_theorem = 120     # seconds (most theorems exhaust in <30s anyway)
 # No ebm_skip_easy. Always score with EBM when available.
 harvest_siblings = true       # Mine sibling states from proof path after finding proof
-batch_generate_size = 16      # Pop 16 nodes per generation batch (balanced for 32GB shared GPU)
-batch_encode_size = 8         # Max states per EBM encode batch (small for nf4 servers)
+batch_expansion_size = 8      # Pop 8 nodes from frontier per batch (saturates GPU)
+batch_encode_size = 8         # Max states per encode HTTP request (lower for nf4 VRAM)
 
 [search.iteration_0]
 # Run search twice: once normal, once with high temperature for diverse negatives
@@ -18,6 +20,6 @@ noise_fraction = 0.3          # 30% of theorems get the high-T run
 
 [lean_pool]
 num_workers = 8               # Matched to concurrency default
-max_requests_per_worker = 10000
+max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
 tactic_timeout_secs = 30

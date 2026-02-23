@@ -159,16 +159,6 @@ impl LeanWorker {
     ///
     /// CRITICAL: Appends `\n` after the JSON — Pantograph blocks without it.
     async fn send_line(&mut self, json: &str) -> Result<String, LeanError> {
-        self.send_line_timeout(json, self.config.tactic_timeout_secs)
-            .await
-    }
-
-    /// Like [`send_line`], but with a custom timeout in seconds.
-    async fn send_line_timeout(
-        &mut self,
-        json: &str,
-        timeout_secs: u64,
-    ) -> Result<String, LeanError> {
         // Write JSON + newline + flush
         self.stdin.write_all(json.as_bytes()).await?;
         self.stdin.write_all(b"\n").await?;
@@ -176,7 +166,7 @@ impl LeanWorker {
 
         // Read response with timeout
         let mut response_line = String::new();
-        let timeout = std::time::Duration::from_secs(timeout_secs);
+        let timeout = std::time::Duration::from_secs(self.config.tactic_timeout_secs);
 
         let read_result =
             tokio::time::timeout(timeout, self.stdout.read_line(&mut response_line)).await;
@@ -190,11 +180,11 @@ impl LeanWorker {
             Ok(Err(e)) => Err(LeanError::Io(e)),
             Err(_) => {
                 tracing::warn!(
-                    timeout_secs,
+                    timeout_secs = self.config.tactic_timeout_secs,
                     "Lean tactic timed out, recycling worker"
                 );
                 self.recycle().await?;
-                Err(LeanError::Timeout(timeout_secs))
+                Err(LeanError::Timeout(self.config.tactic_timeout_secs))
             }
         }
     }
@@ -211,10 +201,7 @@ impl LeanWorker {
             .to_json()
             .map_err(|e| LeanError::Protocol(format!("Serialization error: {e}")))?;
 
-        // Use a longer timeout for goal.start — expression elaboration can take
-        // much longer than tactic application (60s+ for complex types like ℂ, Finset).
-        let goal_start_timeout = self.config.tactic_timeout_secs.max(190);
-        let response_line = self.send_line_timeout(&json, goal_start_timeout).await?;
+        let response_line = self.send_line(&json).await?;
         let response = PantographResponse::parse_goal_start(response_line.trim())?;
 
         match response {

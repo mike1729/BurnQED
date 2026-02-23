@@ -3,7 +3,7 @@
 //! Usage: cargo run -p prover-core --example gen_synthetic_parquet -- trajectories/baseline_raw.parquet
 
 use search::SearchStats;
-use trajectory::{SearchResult, TerminationReason, TrajectoryLabel, TrajectoryRecord, TrajectoryWriter};
+use trajectory::{SearchResult, TrajectoryLabel, TrajectoryRecord, TrajectoryWriter};
 
 fn make_record(
     theorem: &str,
@@ -42,7 +42,6 @@ fn make_proved_result(theorem: &str) -> SearchResult {
     SearchResult {
         theorem_name: theorem.to_string(),
         proved: true,
-        termination: TerminationReason::Proved,
         proof_tactics: vec!["tac_1".into(), "tac_2".into()],
         nodes_expanded: 4,
         total_states: 4,
@@ -60,7 +59,6 @@ fn make_unproved_result(theorem: &str) -> SearchResult {
     SearchResult {
         theorem_name: theorem.to_string(),
         proved: false,
-        termination: TerminationReason::BudgetExhausted,
         proof_tactics: vec![],
         nodes_expanded: 2,
         total_states: 2,

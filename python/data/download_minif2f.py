@@ -24,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MINIF2F_REPO = "https://github.com/roozbeh-yz/miniF2F_v2.git"
+MINIF2F_REPO = "https://github.com/yangky11/miniF2F-lean4.git"
 
 
 def clone_minif2f(dest: Path) -> Path:

@@ -32,8 +32,7 @@ use ebm::{
     lr_schedule, MetricsHistory as MetricsHistoryReexport,
 };
 use trajectory::{
-    SearchResult, SearchStats, TerminationReason, TrajectoryLabel, TrajectoryRecord,
-    TrajectoryWriter,
+    SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord, TrajectoryWriter,
 };
 
 type TestBackend = NdArray<f32>;
@@ -83,7 +82,6 @@ fn write_proved_theorem(dir: &std::path::Path, filename: &str, theorem: &str) ->
     let result = SearchResult {
         theorem_name: theorem.to_string(),
         proved: true,
-        termination: TerminationReason::Proved,
         proof_tactics: vec!["tactic_1".into(), "tactic_2".into()],
         nodes_expanded: 4,
         total_states: 4,
@@ -115,7 +113,6 @@ fn write_unproved_theorem(
     let result = SearchResult {
         theorem_name: theorem.to_string(),
         proved: false,
-        termination: TerminationReason::BudgetExhausted,
         proof_tactics: vec![],
         nodes_expanded: 3,
         total_states: 3,

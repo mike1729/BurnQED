@@ -9,7 +9,7 @@ pub mod writer;
 
 pub use reader::TrajectoryReader;
 pub use types::{
-    SearchResult, SearchStats, TerminationReason, TheoremIndex, TheoremTask, TrajectoryLabel,
-    TrajectoryRecord, TrajectorySummary,
+    SearchResult, SearchStats, TheoremIndex, TheoremTask, TrajectoryLabel, TrajectoryRecord,
+    TrajectorySummary,
 };
 pub use writer::TrajectoryWriter;

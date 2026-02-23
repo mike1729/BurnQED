@@ -604,8 +604,8 @@ impl SglangClient {
         });
 
         let url = self.base_url.join("/encode")?;
-        // Scale timeout with batch size, cap at 120s (large batches on nf4 servers need time)
-        let timeout_secs = (5 * texts.len() as u64).clamp(10, 120);
+        // Scale timeout with batch size, cap at 30s
+        let timeout_secs = (5 * texts.len() as u64).clamp(10, 30);
         let resp = self.post_once(&url, &request, Some(Duration::from_secs(timeout_secs))).await?;
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode /encode batch response: {e}"))?;

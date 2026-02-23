@@ -45,12 +45,11 @@ fi
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 EVAL_DIR="${REPO_ROOT}/eval_results"
 EVAL_BUDGET="${EVAL_BUDGET:-300}"
-EVAL_MAX_THEOREMS_TRAIN="${EVAL_MAX_THEOREMS_TRAIN:-200}"
-CONCURRENCY="${CONCURRENCY:-8}"
+EVAL_MAX_THEOREMS_TRAIN="${EVAL_MAX_THEOREMS_TRAIN:-100}"
+CONCURRENCY="${CONCURRENCY:-4}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 TRAIN_EVAL_THEOREMS="${REPO_ROOT}/data/train_eval_theorems.json"
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
-MINIF2F_V2S="${REPO_ROOT}/data/minif2f_v2s_test.json"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
@@ -102,7 +101,7 @@ else
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
         --max-theorems $EVAL_MAX_THEOREMS_TRAIN \
-        --num-candidates 8 \
+        --num-candidates 16 \
         --imports Mathlib
 
     echo "Pre-training eval saved to: $PRE_EVAL"
@@ -167,7 +166,7 @@ else
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
         --max-theorems $EVAL_MAX_THEOREMS_TRAIN \
-        --num-candidates 8 \
+        --num-candidates 16 \
         --imports Mathlib
 
     echo "Post-training eval saved to: $POST_EVAL"
@@ -204,14 +203,10 @@ else
 
     ensure_server "$SGLANG_URL" "$LLM_DIR"
 
-    # Resolve EBM flag and encode server
-    ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
+    # Resolve EBM flag
     EBM_FLAG=""
-    ENCODE_FLAG=""
     if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
         EBM_FLAG="--ebm-path ${EBM_DIR}"
-        ensure_encode_server "$ENCODE_URL" "$LLM_DIR"
-        ENCODE_FLAG="--encode-url ${ENCODE_URL}"
     fi
 
     if [ -f "$MINIF2F" ]; then
@@ -221,7 +216,7 @@ else
         EVAL_THEOREMS="${REPO_ROOT}/data/theorem_index.json"
     fi
 
-    # Eval WITH EBM (if available) — miniF2F v1
+    # Eval WITH EBM (if available)
     STEP_LOG="${LOG_DIR}/iter_${ITER}_step_5_minif2f.log"
     echo "  Logging to: ${STEP_LOG}"
 
@@ -230,7 +225,6 @@ else
         --config $SEARCH_CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
-        $ENCODE_FLAG \
         --theorems $EVAL_THEOREMS \
         --budgets 600 \
         --output ${EVAL_DIR}/iter_${ITER}.json \
@@ -238,30 +232,7 @@ else
         --concurrency $CONCURRENCY \
         --max-theorems 500 \
         --num-candidates 16 \
-        --imports BenchMinIF2FTest,Mathlib
-
-    # miniF2F v2s evaluation (if data exists)
-    if [ -f "$MINIF2F_V2S" ]; then
-        echo ""
-        echo "=== Step 5a: miniF2F v2s Evaluation ==="
-        STEP_LOG="${LOG_DIR}/iter_${ITER}_step_5a_v2s.log"
-        echo "  Logging to: ${STEP_LOG}"
-
-        # shellcheck disable=SC2086
-        run_logged "$STEP_LOG" $PROVER eval \
-            --config $SEARCH_CONFIG \
-            --server-url $SGLANG_URL \
-            $EBM_FLAG \
-            $ENCODE_FLAG \
-            --theorems $MINIF2F_V2S \
-            --budgets 600 \
-            --output ${EVAL_DIR}/iter_${ITER}_v2s.json \
-            --num-workers $NUM_WORKERS \
-            --concurrency $CONCURRENCY \
-            --max-theorems 500 \
-            --num-candidates 16 \
-            --imports BenchMinIF2FV2STest,Mathlib
-    fi
+        --imports Mathlib
 
     # EBM Ablation (eval WITHOUT EBM)
     if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
@@ -281,12 +252,7 @@ else
             --concurrency $CONCURRENCY \
             --max-theorems 500 \
             --num-candidates 16 \
-            --imports BenchMinIF2FTest,Mathlib
-    fi
-
-    # Stop encode server if we started one (free VRAM)
-    if [ -n "$ENCODE_FLAG" ]; then
-        stop_encode_server
+            --imports Mathlib
     fi
 
     # Cross-iteration comparison

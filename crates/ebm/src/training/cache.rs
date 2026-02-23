@@ -577,12 +577,15 @@ impl EmbeddingCache {
             for i in 0..batch.num_rows() {
                 let state = states.value(i).to_string();
                 let values = lists.value(i);
-                let float_array = values
-                    .as_any()
-                    .downcast_ref::<Float32Array>()
-                    .ok_or_else(|| anyhow::anyhow!("List values are not Float32Array"))?;
-
-                let emb: Vec<f32> = float_array.values().to_vec();
+                let emb: Vec<f32> = if let Some(f32_array) = values.as_any().downcast_ref::<Float32Array>() {
+                    f32_array.values().to_vec()
+                } else if let Some(f64_array) = values.as_any().downcast_ref::<Float64Array>() {
+                    f64_array.values().iter().map(|v| *v as f32).collect()
+                } else if let Some(f16_array) = values.as_any().downcast_ref::<Float16Array>() {
+                    f16_array.values().iter().map(|v| v.to_f32()).collect()
+                } else {
+                    anyhow::bail!("Unsupported embedding dtype (expected f32, f64, or f16)");
+                };
 
                 match dim {
                     None => dim = Some(emb.len()),

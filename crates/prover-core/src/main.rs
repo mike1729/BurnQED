@@ -43,6 +43,9 @@ enum Command {
         /// Path to EBM checkpoint directory for value-guided search.
         #[arg(long)]
         ebm_path: Option<PathBuf>,
+        /// Separate encode server URL for EBM embeddings (e.g., http://localhost:30001).
+        #[arg(long)]
+        encode_url: Option<String>,
         /// Resume from a partial trajectory file — skip already-searched theorems.
         #[arg(long)]
         resume_from: Option<PathBuf>,
@@ -55,6 +58,9 @@ enum Command {
         /// Override number of candidate tactics per expansion.
         #[arg(long)]
         num_candidates: Option<usize>,
+        /// Override max states per encode HTTP request (lower for nf4 VRAM).
+        #[arg(long)]
+        batch_encode_size: Option<usize>,
         /// Number of theorems to search in parallel.
         #[arg(long, default_value_t = 8)]
         concurrency: usize,
@@ -64,10 +70,6 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
-        /// URL of a separate encode server for EBM embedding (e.g., http://localhost:30001).
-        /// If omitted, encoding uses --server-url.
-        #[arg(long)]
-        encode_url: Option<String>,
     },
     /// Print statistics from a trajectory Parquet file.
     Summary {
@@ -101,6 +103,9 @@ enum Command {
         /// Path to EBM checkpoint directory for value-guided search.
         #[arg(long)]
         ebm_path: Option<PathBuf>,
+        /// Separate encode server URL for EBM embeddings (e.g., http://localhost:30001).
+        #[arg(long)]
+        encode_url: Option<String>,
         /// Path to the theorem index JSON file.
         #[arg(long)]
         theorems: PathBuf,
@@ -128,13 +133,12 @@ enum Command {
         /// Override number of candidate tactics per expansion.
         #[arg(long)]
         num_candidates: Option<usize>,
+        /// Override max states per encode HTTP request (lower for nf4 VRAM).
+        #[arg(long)]
+        batch_encode_size: Option<usize>,
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
-        /// URL of a separate encode server for EBM embedding (e.g., http://localhost:30001).
-        /// If omitted, encoding uses --server-url.
-        #[arg(long)]
-        encode_url: Option<String>,
     },
     /// Compare evaluation results across iterations.
     Compare {
@@ -266,10 +270,6 @@ enum Command {
         /// Margin for margin ranking loss. Ignored when using info_nce.
         #[arg(long, default_value_t = 1.0)]
         margin: f64,
-        /// URL of a separate encode server for EBM embedding (e.g., http://localhost:30001).
-        /// If omitted, encoding uses --server-url.
-        #[arg(long)]
-        encode_url: Option<String>,
     },
 }
 
@@ -277,9 +277,7 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
-                .add_directive("hyper_util=warn".parse().unwrap())
-                .add_directive("reqwest=warn".parse().unwrap()),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
@@ -294,14 +292,15 @@ async fn main() -> anyhow::Result<()> {
             num_workers,
             dry_run,
             ebm_path,
+            encode_url,
             resume_from,
             temperature,
             max_tactic_tokens,
             num_candidates,
+            batch_encode_size,
             concurrency,
             max_theorems,
             imports,
-            encode_url,
         } => {
             pipeline::run_search(SearchArgs {
                 config,
@@ -311,14 +310,15 @@ async fn main() -> anyhow::Result<()> {
                 num_workers,
                 dry_run,
                 ebm_path,
+                encode_url,
                 resume_from,
                 temperature,
                 max_tactic_tokens,
                 num_candidates,
+                batch_encode_size,
                 concurrency,
                 max_theorems,
                 imports,
-                encode_url,
             })
             .await
         }
@@ -336,6 +336,7 @@ async fn main() -> anyhow::Result<()> {
             config,
             server_url,
             ebm_path,
+            encode_url,
             theorems,
             budgets,
             pass_n,
@@ -345,13 +346,14 @@ async fn main() -> anyhow::Result<()> {
             max_theorems,
             max_tactic_tokens,
             num_candidates,
+            batch_encode_size,
             imports,
-            encode_url,
         } => {
             pipeline::run_eval(EvalArgs {
                 config,
                 server_url,
                 ebm_path,
+                encode_url,
                 theorems,
                 budgets,
                 pass_n,
@@ -361,8 +363,8 @@ async fn main() -> anyhow::Result<()> {
                 max_theorems,
                 max_tactic_tokens,
                 num_candidates,
+                batch_encode_size,
                 imports,
-                encode_url,
             })
             .await
         }
@@ -439,7 +441,6 @@ async fn main() -> anyhow::Result<()> {
             resume_step,
             loss_type,
             margin,
-            encode_url,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -459,7 +460,6 @@ async fn main() -> anyhow::Result<()> {
                 resume_step,
                 loss_type,
                 margin,
-                encode_url,
             })
             .await
         }

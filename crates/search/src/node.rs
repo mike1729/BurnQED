@@ -29,9 +29,12 @@ pub struct SearchNode {
 }
 
 impl SearchNode {
-    /// Combined score: `alpha * llm_log_prob + beta * ebm_score`.
-    pub fn combined_score(&self, alpha: f64, beta: f64) -> f64 {
-        alpha * self.llm_log_prob + beta * self.ebm_score
+    /// Combined score: `alpha * (llm_log_prob / llm_temp) + beta * (ebm_score / ebm_temp)`.
+    ///
+    /// Temperatures normalize the two signals to comparable scales before
+    /// weighting by alpha/beta.
+    pub fn combined_score(&self, alpha: f64, beta: f64, llm_temp: f64, ebm_temp: f64) -> f64 {
+        alpha * (self.llm_log_prob / llm_temp) + beta * (self.ebm_score / ebm_temp)
     }
 
     /// Concatenate all goal raw strings with `"\n\n"` separators.
@@ -125,16 +128,28 @@ mod tests {
     #[test]
     fn test_combined_score() {
         let node = make_node(0, None, "", 0, -1.0, -2.0, vec!["⊢ True"]);
-        let score = node.combined_score(0.5, 0.5);
+        // temp=1.0: same as before
+        let score = node.combined_score(0.5, 0.5, 1.0, 1.0);
         assert!((score - (-1.5)).abs() < 1e-9);
     }
 
     #[test]
     fn test_combined_score_asymmetric() {
         let node = make_node(0, None, "", 0, -1.0, -3.0, vec!["⊢ True"]);
-        let score = node.combined_score(0.7, 0.3);
+        let score = node.combined_score(0.7, 0.3, 1.0, 1.0);
         // 0.7 * (-1.0) + 0.3 * (-3.0) = -0.7 + -0.9 = -1.6
         assert!((score - (-1.6)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_combined_score_with_temperature() {
+        let node = make_node(0, None, "", 0, -4.0, -20.0, vec!["⊢ True"]);
+        // Without temperature: 0.5 * (-4) + 0.5 * (-20) = -12 (EBM dominates)
+        let no_temp = node.combined_score(0.5, 0.5, 1.0, 1.0);
+        assert!((no_temp - (-12.0)).abs() < 1e-9);
+        // With ebm_temperature=10: 0.5 * (-4) + 0.5 * (-20/10) = -2 + -1 = -3
+        let with_temp = node.combined_score(0.5, 0.5, 1.0, 10.0);
+        assert!((with_temp - (-3.0)).abs() < 1e-9);
     }
 
     #[test]

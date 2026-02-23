@@ -52,16 +52,9 @@ SERVER_MODEL_MARKER="/tmp/burnqed_server_model"
 #   stop_inference_server
 stop_inference_server() {
     echo "Stopping inference server..."
-    # Kill both legacy inference_server.py and raw SGLang processes
     pkill -f "inference_server.py" 2>/dev/null || true
-    pkill -f "sglang.launch_server" 2>/dev/null || true
-    pkill -f "sglang::scheduler" 2>/dev/null || true
-    pkill -f "sglang::detokenizer" 2>/dev/null || true
     sleep 3
     pkill -9 -f "inference_server.py" 2>/dev/null || true
-    pkill -9 -f "sglang.launch_server" 2>/dev/null || true
-    pkill -9 -f "sglang::scheduler" 2>/dev/null || true
-    pkill -9 -f "sglang::detokenizer" 2>/dev/null || true
     sleep 2
 
     rm -f "$SERVER_MODEL_MARKER"
@@ -112,69 +105,6 @@ ensure_server() {
     fi
 
     restart_inference_server "$url" "$model"
-}
-
-# Marker file tracking which model the encode server currently has loaded.
-ENCODE_SERVER_MODEL_MARKER="/tmp/burnqed_encode_server_model"
-
-# Ensure the encode server is reachable, starting it if needed.
-#
-# Usage:
-#   ensure_encode_server "$ENCODE_URL" [model_path]
-#
-# If the server is not reachable, starts it via start_encode_server.sh
-# and waits up to 5 minutes for it to become ready.
-ensure_encode_server() {
-    local url="${1:?Usage: ensure_encode_server <url> [model_path]}"
-    local model="${2:-deepseek-prover-v2-7b}"
-
-    if curl -sf "${url}/health" > /dev/null 2>&1; then
-        # Check if the running server has the right model
-        if [ -f "$ENCODE_SERVER_MODEL_MARKER" ]; then
-            if [ "$(cat "$ENCODE_SERVER_MODEL_MARKER")" = "$model" ]; then
-                echo "Encode server running with correct model: $model"
-                return 0
-            fi
-            echo "Encode server running but wrong model (want: $model, have: $(cat "$ENCODE_SERVER_MODEL_MARKER"))"
-            stop_encode_server
-        else
-            echo "$model" > "$ENCODE_SERVER_MODEL_MARKER"
-            echo "Encode server running (assuming correct model: $model)"
-            return 0
-        fi
-    fi
-
-    echo "Encode server not reachable at ${url}, starting..."
-    _LIB_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-    bash "${_LIB_REPO_ROOT}/scripts/start_encode_server.sh" "${model}" &
-
-    # Wait for server to become ready (up to 5 minutes)
-    for i in $(seq 1 60); do
-        if curl -sf "${url}/health" > /dev/null 2>&1; then
-            echo "Encode server ready"
-            echo "$model" > "$ENCODE_SERVER_MODEL_MARKER"
-            return 0
-        fi
-        sleep 5
-    done
-
-    echo "ERROR: Encode server failed to start within 5 minutes"
-    exit 1
-}
-
-# Stop the running encode server to free VRAM.
-#
-# Usage:
-#   stop_encode_server
-stop_encode_server() {
-    echo "Stopping encode server..."
-    pkill -f "encode_server.py" 2>/dev/null || true
-    sleep 3
-    pkill -9 -f "encode_server.py" 2>/dev/null || true
-    sleep 2
-
-    rm -f "$ENCODE_SERVER_MODEL_MARKER"
-    echo "Encode server stopped"
 }
 
 # Run a command with output logged to a file, preserving TTY features

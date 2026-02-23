@@ -46,4 +46,5 @@ python -m sglang.launch_server \
     --tp "$TP" \
     --trust-remote-code \
     --mem-fraction-static "$MEM_FRACTION" \
+    --enable-return-hidden-states \
     $EXTRA_ARGS

@@ -179,10 +179,14 @@ impl ValueScorer for EBMValueFn {
 /// Checks a thread-safe `HashMap` before calling the underlying
 /// `InferenceHandle::encode_batch`. Cache hits are returned directly;
 /// only misses go to the server. Results are stored back in the cache.
+///
+/// HTTP requests are chunked into sub-batches of `max_batch_size` to prevent
+/// OOM on the encode server. Failed sub-batches are retried once individually.
 pub struct CachingEncoder {
     handle: InferenceHandle,
     cache: Arc<std::sync::Mutex<HashMap<String, Vec<f32>>>>,
     hidden_size: usize,
+    max_batch_size: usize,
 }
 
 impl CachingEncoder {
@@ -190,11 +194,13 @@ impl CachingEncoder {
     ///
     /// - `handle`: the SGLang inference handle for HTTP encode calls
     /// - `hidden_size`: embedding dimension (used for zero-vector fallback)
-    pub fn new(handle: InferenceHandle, hidden_size: usize) -> Self {
+    /// - `max_batch_size`: max states per HTTP request (prevents encode server OOM)
+    pub fn new(handle: InferenceHandle, hidden_size: usize, max_batch_size: usize) -> Self {
         Self {
             handle,
             cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
             hidden_size,
+            max_batch_size,
         }
     }
 }
@@ -222,26 +228,73 @@ impl BatchEncoder for CachingEncoder {
             }
         }
 
-        // Phase 2: batch-encode cache misses via HTTP
-        if !miss_texts.is_empty() {
-            let batch_results = self.handle.encode_batch(&miss_texts).await?;
-            let mut cache = self
-                .cache
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
-            for (j, &idx) in miss_indices.iter().enumerate() {
-                match &batch_results[j] {
-                    Ok(embedding) => {
-                        cache.insert(states[idx].clone(), embedding.data.clone());
-                        results[idx] = Some(embedding.data.clone());
+        // Phase 2: encode cache misses in sub-batches to prevent server OOM
+        for chunk_start in (0..miss_texts.len()).step_by(self.max_batch_size) {
+            let chunk_end = (chunk_start + self.max_batch_size).min(miss_texts.len());
+            let chunk_texts = &miss_texts[chunk_start..chunk_end];
+            let chunk_indices = &miss_indices[chunk_start..chunk_end];
+
+            match self.handle.encode_batch(&chunk_texts.to_vec()).await {
+                Ok(batch_results) => {
+                    let mut cache = self
+                        .cache
+                        .lock()
+                        .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+                    for (j, &idx) in chunk_indices.iter().enumerate() {
+                        match &batch_results[j] {
+                            Ok(embedding) => {
+                                if embedding.data.iter().all(|&v| v == 0.0) {
+                                    tracing::warn!(
+                                        state_idx = idx,
+                                        "Encode server returned all-zero embedding"
+                                    );
+                                }
+                                cache.insert(states[idx].clone(), embedding.data.clone());
+                                results[idx] = Some(embedding.data.clone());
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    state_idx = idx,
+                                    error = %e,
+                                    "Encode failed for individual state, using zero embedding"
+                                );
+                                results[idx] = Some(vec![0.0; self.hidden_size]);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            state_idx = idx,
-                            error = %e,
-                            "Batch encode failed for state, using zero embedding"
-                        );
-                        results[idx] = Some(vec![0.0; self.hidden_size]);
+                }
+                Err(e) => {
+                    // Sub-batch failed (likely OOM). Wait for server to recover, then retry individually.
+                    tracing::warn!(
+                        chunk_size = chunk_texts.len(),
+                        error = %e,
+                        "Sub-batch encode failed, waiting 2s then retrying individually"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    for (j, &idx) in chunk_indices.iter().enumerate() {
+                        let single = vec![chunk_texts[j].clone()];
+                        match self.handle.encode_batch(&single).await {
+                            Ok(single_results) => {
+                                match &single_results[0] {
+                                    Ok(embedding) => {
+                                        let mut cache = self
+                                            .cache
+                                            .lock()
+                                            .map_err(|e| anyhow::anyhow!("Embedding cache lock poisoned: {e}"))?;
+                                        cache.insert(states[idx].clone(), embedding.data.clone());
+                                        results[idx] = Some(embedding.data.clone());
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(state_idx = idx, error = %e, "Individual encode failed");
+                                        results[idx] = Some(vec![0.0; self.hidden_size]);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(state_idx = idx, error = %e, "Individual encode retry failed");
+                                results[idx] = Some(vec![0.0; self.hidden_size]);
+                            }
+                        }
                     }
                 }
             }

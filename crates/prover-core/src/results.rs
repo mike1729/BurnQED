@@ -46,34 +46,6 @@ pub struct BudgetResult {
     pub per_theorem: Vec<TheoremResult>,
 }
 
-/// Why a theorem search failed (not set when proved).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum FailureReason {
-    /// Expanded max_nodes without finding a proof.
-    BudgetExhausted,
-    /// Hit timeout_per_theorem wall-clock limit.
-    Timeout,
-    /// Frontier became empty (all branches dead-ended).
-    FrontierExhausted,
-    /// goal.start failed (copyFrom + expr both failed).
-    GoalStartError,
-    /// Other search error (policy, scorer, lean).
-    SearchError,
-}
-
-impl std::fmt::Display for FailureReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BudgetExhausted => write!(f, "budget"),
-            Self::Timeout => write!(f, "timeout"),
-            Self::FrontierExhausted => write!(f, "dead_end"),
-            Self::GoalStartError => write!(f, "goal_err"),
-            Self::SearchError => write!(f, "error"),
-        }
-    }
-}
-
 /// Result for a single theorem at a single budget.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TheoremResult {
@@ -85,30 +57,10 @@ pub struct TheoremResult {
     pub nodes_used: u32,
     /// Wall-clock time in seconds.
     pub time_secs: f64,
-    /// Why the search failed (None when proved).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_reason: Option<FailureReason>,
-    /// Tactic sequence used in the proof (empty if not proved).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub proof_tactics: Vec<String>,
-    /// Proof depth (number of tactics).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proof_depth: Option<u32>,
-    /// Total states explored during search.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_states: Option<u32>,
-    /// Peak frontier size during search.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub peak_frontier: Option<usize>,
-    /// LLM generation time in ms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gen_time_ms: Option<u64>,
-    /// Lean tactic verification time in ms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lean_time_ms: Option<u64>,
-    /// EBM scoring time in ms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ebm_time_ms: Option<u64>,
+    /// Why search ended: "proved", "budget_exhausted", "frontier_exhausted",
+    /// "timeout", or "error".
+    #[serde(default)]
+    pub failure_reason: String,
 }
 
 /// Compute the median of a slice of f64 values.
@@ -168,13 +120,6 @@ mod tests {
                     proved: true,
                     nodes_used: 42,
                     time_secs: 3.5,
-                    proof_tactics: vec!["intro n".to_string(), "simp".to_string()],
-                    proof_depth: Some(2),
-                    total_states: Some(50),
-                    peak_frontier: Some(12),
-                    gen_time_ms: Some(1500),
-                    lean_time_ms: Some(800),
-                    ebm_time_ms: Some(200),
                 }],
             }],
             cumulative_solved: 5,

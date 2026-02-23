@@ -15,8 +15,8 @@ use lean_repl::TacticResult;
 use search::mocks::{make_tactic, MockEnvironment, MockPolicy};
 use search::{SearchConfig, SearchEngine, ValueScorer};
 use trajectory::{
-    SearchResult, SearchStats, TerminationReason, TheoremIndex, TrajectoryLabel, TrajectoryReader,
-    TrajectoryRecord, TrajectoryWriter,
+    SearchResult, SearchStats, TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
+    TrajectoryWriter,
 };
 
 /// Search theorems using mocks, write Parquet, read back and verify.
@@ -310,7 +310,6 @@ fn write_proved_theorem(dir: &std::path::Path, filename: &str, theorem: &str) ->
     let result = SearchResult {
         theorem_name: theorem.to_string(),
         proved: true,
-        termination: TerminationReason::Proved,
         proof_tactics: vec!["tac_1".into(), "tac_2".into()],
         nodes_expanded: 4,
         total_states: 4,

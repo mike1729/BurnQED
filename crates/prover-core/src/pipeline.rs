@@ -25,7 +25,7 @@ use search::{
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
-use crate::results::{median, BudgetResult, FailureReason, IterationResult, TheoremResult};
+use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
 
 /// Arguments for the `search` subcommand.
 #[derive(Debug)]
@@ -44,6 +44,8 @@ pub struct SearchArgs {
     pub dry_run: bool,
     /// Path to EBM checkpoint directory for value-guided search.
     pub ebm_path: Option<PathBuf>,
+    /// Optional separate encode server URL for EBM embeddings.
+    pub encode_url: Option<String>,
     /// Resume from a partial trajectory file — skip already-searched theorems.
     pub resume_from: Option<PathBuf>,
     /// Override sampling temperature for tactic generation.
@@ -52,14 +54,14 @@ pub struct SearchArgs {
     pub max_tactic_tokens: Option<usize>,
     /// Override number of candidate tactics per expansion.
     pub num_candidates: Option<usize>,
+    /// Override max states per encode HTTP request (lower for nf4 VRAM).
+    pub batch_encode_size: Option<usize>,
     /// Number of theorems to search in parallel (default: 1 = sequential).
     pub concurrency: usize,
     /// Maximum number of theorems to search (truncates the index).
     pub max_theorems: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
-    /// URL of a separate encode server for EBM embedding. If omitted, uses `server_url`.
-    pub encode_url: Option<String>,
 }
 
 /// Arguments for the `summary` subcommand (formerly `eval`).
@@ -80,6 +82,8 @@ pub struct EvalArgs {
     pub server_url: String,
     /// Path to EBM checkpoint directory for value-guided search.
     pub ebm_path: Option<PathBuf>,
+    /// Optional separate encode server URL for EBM embeddings.
+    pub encode_url: Option<String>,
     /// Path to the theorem index JSON file.
     pub theorems: PathBuf,
     /// Node budgets to evaluate at (sorted ascending).
@@ -98,10 +102,10 @@ pub struct EvalArgs {
     pub max_tactic_tokens: Option<usize>,
     /// Override number of candidate tactics per expansion.
     pub num_candidates: Option<usize>,
+    /// Override max states per encode HTTP request (lower for nf4 VRAM).
+    pub batch_encode_size: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
-    /// URL of a separate encode server for EBM embedding. If omitted, uses `server_url`.
-    pub encode_url: Option<String>,
 }
 
 /// Arguments for the `compare` subcommand.
@@ -149,8 +153,6 @@ pub struct TrainEbmArgs {
     pub loss_type: String,
     /// Margin for margin ranking loss. Ignored for InfoNCE.
     pub margin: f64,
-    /// URL of a separate encode server for EBM embedding. If omitted, uses `server_url`.
-    pub encode_url: Option<String>,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -177,12 +179,13 @@ async fn load_policy_and_ebm(
     config_path: &Path,
     server_url: &str,
     ebm_path: Option<&Path>,
+    encode_url: Option<&str>,
     num_workers: Option<usize>,
     temperature: Option<f64>,
     max_tactic_tokens: Option<usize>,
     imports: Option<&[String]>,
     concurrency: usize,
-    encode_url: Option<&str>,
+    batch_encode_size: Option<usize>,
 ) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
     let toml = load_search_toml(config_path)?;
@@ -208,18 +211,20 @@ async fn load_policy_and_ebm(
     let inference_handle = InferenceHandle::new(client);
 
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
-    let gen_batch = toml.search.batch_generate_size;
-    let max_gen_batch = gen_batch * concurrency.max(1); // coalesce across concurrent searches
+    let exp = toml.search.batch_expansion_size;
+    let batch_gen_limit = exp * concurrency.max(1); // coalesce across concurrent searches
     let batcher = GlobalBatcher::new(
         Arc::new(raw_policy),
-        max_gen_batch,
+        batch_gen_limit,
         Duration::from_millis(5),        // linger
     );
     let policy = CachedPolicy::new(batcher, 10_000);
 
-    // 4. Optional EBM scorer — use separate encode handle if encode_url is set
+    // 4. Optional EBM scorer (uses separate encode server if provided)
+    let encode_batch_limit = batch_encode_size.unwrap_or(toml.search.batch_encode_size);
+    tracing::info!(batch_gen_limit, encode_batch_limit, "Batch size limits (generate / encode)");
     let encode_handle = if let Some(url) = encode_url {
-        tracing::info!(url, "Using separate encode server for EBM embedding");
+        tracing::info!(url, "Connecting to separate encode server for EBM");
         let encode_config = SglangConfig {
             server_url: url.to_string(),
             temperature: 0.0,
@@ -232,7 +237,6 @@ async fn load_policy_and_ebm(
     } else {
         inference_handle.clone()
     };
-    let encode_batch_limit = toml.search.batch_encode_size;
     let value_fn = load_ebm_scorer(ebm_path, &encode_handle, encode_batch_limit)?;
 
     Ok((
@@ -277,13 +281,13 @@ fn load_ebm_scorer(
 
     let hidden_size = head_config.d_encoder;
 
-    // CachingEncoder: handles embedding cache + HTTP encode calls
-    let caching_encoder = CachingEncoder::new(inference_handle.clone(), hidden_size);
+    // CachingEncoder: handles embedding cache + HTTP encode calls + sub-batching
+    let caching_encoder = CachingEncoder::new(inference_handle.clone(), hidden_size, encode_batch_limit);
 
     // GlobalEncodeBatcher: coalesces concurrent encode requests
     let encode_batcher = Arc::new(GlobalEncodeBatcher::new(
         Arc::new(caching_encoder),
-        encode_batch_limit,              // from config.batch_encode_size
+        encode_batch_limit,              // derived from batch_expansion_size × num_candidates
         Duration::from_millis(5),        // linger
     ));
 
@@ -399,6 +403,7 @@ struct SearchAggregator {
     searched_count: u32,
     proved_count: u32,
     failed_count: u32,
+    timeout_count: u32,
     error_count: u32,
     total_nodes: u64,
     total_lean_ms: u64,
@@ -587,12 +592,13 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         &args.config,
         &args.server_url,
         args.ebm_path.as_deref(),
+        args.encode_url.as_deref(),
         args.num_workers,
         temperature,
         args.max_tactic_tokens,
         args.imports.as_deref(),
         concurrency,
-        args.encode_url.as_deref(),
+        args.batch_encode_size,
     )
     .await?;
 
@@ -734,6 +740,10 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                     );
                 } else {
                     agg.failed_count += 1;
+                    match result.failure_reason.as_str() {
+                        "timeout" => agg.timeout_count += 1,
+                        _ => {}
+                    }
                 }
 
                 // Per-theorem structured profile log
@@ -767,11 +777,11 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         }
         agg.record_completion();
         pb.inc(1);
-        if agg.error_count > 0 {
-            pb.set_prefix(format!("proved={} err={}", agg.proved_count, agg.error_count));
-        } else {
-            pb.set_prefix(format!("proved={}", agg.proved_count));
-        }
+        let fail = agg.failed_count - agg.timeout_count;
+        pb.set_prefix(format!(
+            "proved={} fail={} timeout={} err={}",
+            agg.proved_count, fail, agg.timeout_count, agg.error_count
+        ));
         let done = agg.searched_count + agg.error_count;
         let remaining = total.saturating_sub(done);
         pb.set_message(agg.format_eta(remaining));
@@ -1587,38 +1597,6 @@ struct EvalOutcome {
 }
 
 /// Evaluate a model at multiple search budgets, printing a formatted table
-/// Query a server for its loaded model path. Tries SGLang `/v1/models` first,
-/// then encode server `/model_info`. Returns "unknown" on failure.
-fn query_server_model(url: &str) -> String {
-    // Try SGLang /v1/models
-    if let Ok(output) = std::process::Command::new("curl")
-        .args(["-sf", &format!("{url}/v1/models")])
-        .output()
-    {
-        if output.status.success() {
-            if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                if let Some(id) = body["data"][0]["id"].as_str() {
-                    return id.to_string();
-                }
-            }
-        }
-    }
-    // Try encode server /model_info
-    if let Ok(output) = std::process::Command::new("curl")
-        .args(["-sf", &format!("{url}/model_info")])
-        .output()
-    {
-        if output.status.success() {
-            if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                if let Some(path) = body["model_path"].as_str() {
-                    return path.to_string();
-                }
-            }
-        }
-    }
-    "unknown".to_string()
-}
-
 /// and optionally writing JSON results.
 ///
 /// Budgets are processed sequentially (cumulative_solved_set accumulates across
@@ -1626,38 +1604,6 @@ fn query_server_model(url: &str) -> String {
 /// the `concurrency` semaphore.
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let concurrency = args.concurrency.max(1);
-
-    // Dump all parameters for reproducibility
-    let git_commit = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".into());
-    // Query servers for their loaded model paths
-    let inference_model = query_server_model(&args.server_url);
-    let encode_model = if let Some(ref url) = args.encode_url {
-        query_server_model(url)
-    } else {
-        "N/A (using inference server)".to_string()
-    };
-
-    tracing::info!("=== Eval Configuration ===");
-    tracing::info!(commit = %git_commit, "Binary git commit");
-    tracing::info!(server_url = %args.server_url, model = %inference_model, "Inference server");
-    tracing::info!(encode_url = ?args.encode_url, model = %encode_model, "Encode server");
-    tracing::info!(ebm_path = ?args.ebm_path, "EBM checkpoint");
-    tracing::info!(config = %args.config.display(), "Search config");
-    tracing::info!(theorems = %args.theorems.display(), "Theorem file");
-    tracing::info!(budgets = ?args.budgets, "Budgets");
-    tracing::info!(concurrency, "Concurrency");
-    tracing::info!(num_workers = ?args.num_workers, "Lean workers (CLI)");
-    tracing::info!(num_candidates = ?args.num_candidates, "Num candidates (CLI)");
-    tracing::info!(max_theorems = ?args.max_theorems, "Max theorems");
-    tracing::info!(imports = ?args.imports, "Lean imports");
-    tracing::info!(pass_n = args.pass_n, "Pass@N");
-    tracing::info!("==========================");
 
     // EBM-active overrides: more candidates + higher temperature for diversity
     let temperature = if args.ebm_path.is_some() {
@@ -1671,12 +1617,13 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         &args.config,
         &args.server_url,
         args.ebm_path.as_deref(),
+        args.encode_url.as_deref(),
         args.num_workers,
         temperature,
         args.max_tactic_tokens,
         args.imports.as_deref(),
         concurrency,
-        args.encode_url.as_deref(),
+        args.batch_encode_size,
     )
     .await?;
 
@@ -1687,18 +1634,6 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         tracing::info!("EBM active — defaulting num_candidates to 8");
         base_config.num_candidates = 8;
     }
-
-    // Dump final search config (after all CLI overrides)
-    tracing::info!("=== Final Search Config ===");
-    tracing::info!(max_nodes = base_config.max_nodes, "Max nodes");
-    tracing::info!(max_depth = base_config.max_depth, "Max depth");
-    tracing::info!(num_candidates = base_config.num_candidates, "Num candidates");
-    tracing::info!(alpha = %base_config.alpha, "Alpha (LLM weight)");
-    tracing::info!(beta = %base_config.beta, "Beta (EBM weight)");
-    tracing::info!(timeout = base_config.timeout_per_theorem, "Timeout per theorem (s)");
-    tracing::info!(batch_generate = base_config.batch_generate_size, "Batch generate size");
-    tracing::info!(batch_encode = base_config.batch_encode_size, "Batch encode size");
-    tracing::info!("===========================");
 
     let mut index = TheoremIndex::from_json(&args.theorems)?;
     if let Some(max) = args.max_theorems {
@@ -1734,7 +1669,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         pb.set_style(
             ProgressStyle::default_bar()
                 .template(&format!(
-                    "{{spinner:.green}} [budget={budget}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) {{prefix}}"
+                    "{{spinner:.green}} [{{elapsed_precise}}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) {{prefix}}"
                 ))
                 .expect("valid progress bar template")
                 .progress_chars("=> "),
@@ -1750,18 +1685,20 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
 
         let mut per_theorem = Vec::new();
         let mut solved = 0u32;
+        let mut errors = 0u32;
+        let mut timeouts = 0u32;
         let mut all_times: Vec<f64> = Vec::new();
         let mut total_nodes_sum: f64 = 0.0;
-        let mut failure_counts: HashMap<FailureReason, u32> = HashMap::new();
 
         /// Process one completed eval outcome into accumulators.
         fn collect_eval(
             outcome: EvalOutcome,
             per_theorem: &mut Vec<TheoremResult>,
             solved: &mut u32,
+            errors: &mut u32,
+            timeouts: &mut u32,
             all_times: &mut Vec<f64>,
             total_nodes_sum: &mut f64,
-            failure_counts: &mut HashMap<FailureReason, u32>,
             cumulative_solved_set: &mut HashSet<String>,
             pb: &ProgressBar,
             budget_start: Instant,
@@ -1770,23 +1707,30 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             if outcome.best.proved {
                 *solved += 1;
                 cumulative_solved_set.insert(outcome.name);
-            } else if let Some(ref reason) = outcome.best.failure_reason {
-                *failure_counts.entry(reason.clone()).or_default() += 1;
+            } else {
+                match outcome.best.failure_reason.as_str() {
+                    "error" => *errors += 1,
+                    "timeout" => *timeouts += 1,
+                    _ => {} // budget_exhausted, frontier_exhausted counted as regular fails
+                }
             }
             all_times.extend(outcome.times);
             *total_nodes_sum += outcome.total_nodes;
             per_theorem.push(outcome.best);
             pb.inc(1);
-
-            // Build status suffix: proved=N  budget=M timeout=K ...
-            let mut status_parts = vec![format!("proved={solved}")];
-            for (reason, count) in failure_counts.iter() {
-                if *count > 0 {
-                    status_parts.push(format!("{reason}={count}"));
-                }
+            // Build compact status prefix
+            let mut prefix = format!("proved={solved}");
+            let failed = pb.position() as u32 - *solved - *errors - *timeouts;
+            if failed > 0 {
+                prefix.push_str(&format!(" fail={failed}"));
             }
-            pb.set_prefix(status_parts.join(" "));
-
+            if *timeouts > 0 {
+                prefix.push_str(&format!(" timeout={timeouts}"));
+            }
+            if *errors > 0 {
+                prefix.push_str(&format!(" err={errors}"));
+            }
+            pb.set_prefix(prefix);
             let done = pb.position() as usize;
             if done > 0 {
                 let elapsed = budget_start.elapsed().as_secs_f64();
@@ -1807,9 +1751,9 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             while let Some(join_result) = join_set.try_join_next() {
                 match join_result {
                     Ok(outcome) => collect_eval(
-                        outcome, &mut per_theorem, &mut solved, &mut all_times,
-                        &mut total_nodes_sum, &mut failure_counts, &mut cumulative_solved_set,
-                        &pb, budget_start, total,
+                        outcome, &mut per_theorem, &mut solved, &mut errors,
+                        &mut timeouts, &mut all_times, &mut total_nodes_sum,
+                        &mut cumulative_solved_set, &pb, budget_start, total,
                     ),
                     Err(e) => tracing::error!(error = %e, "Eval task panicked"),
                 }
@@ -1829,7 +1773,6 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 let mut best: Option<TheoremResult> = None;
                 let mut times = Vec::new();
                 let mut total_nodes = 0.0;
-
                 for _ in 0..pass_n {
                     let scorer_ref: Option<&dyn search::ValueScorer> =
                         value_fn.as_deref().map(|v| v as &dyn search::ValueScorer);
@@ -1841,33 +1784,12 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                             let time_secs = result.wall_time_ms as f64 / 1000.0;
                             times.push(time_secs);
                             total_nodes += result.nodes_expanded as f64;
-                            let failure_reason = if result.proved {
-                                None
-                            } else {
-                                Some(match result.termination {
-                                    trajectory::TerminationReason::BudgetExhausted => FailureReason::BudgetExhausted,
-                                    trajectory::TerminationReason::Timeout => FailureReason::Timeout,
-                                    trajectory::TerminationReason::FrontierExhausted => FailureReason::FrontierExhausted,
-                                    trajectory::TerminationReason::Proved => unreachable!(),
-                                })
-                            };
                             let tr = TheoremResult {
                                 name: name.clone(),
                                 proved: result.proved,
                                 nodes_used: result.nodes_expanded,
                                 time_secs,
-                                failure_reason,
-                                proof_tactics: result.proof_tactics.clone(),
-                                proof_depth: if result.proved {
-                                    Some(result.proof_tactics.len() as u32)
-                                } else {
-                                    None
-                                },
-                                total_states: Some(result.total_states),
-                                peak_frontier: Some(result.stats.peak_frontier_size),
-                                gen_time_ms: Some(result.stats.total_generate_time_ms),
-                                lean_time_ms: Some(result.stats.total_lean_time_ms),
-                                ebm_time_ms: Some(result.stats.total_ebm_time_ms),
+                                failure_reason: result.failure_reason.clone(),
                             };
                             best = Some(match best {
                                 None => tr,
@@ -1877,26 +1799,13 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                         }
                         Err(e) => {
                             tracing::debug!(theorem = name, error = %e, "Eval search failed");
-                            let reason = match &e {
-                                search::SearchError::Lean(_)
-                                | search::SearchError::ProofStart(_) => FailureReason::GoalStartError,
-                                search::SearchError::Policy(_)
-                                | search::SearchError::Scorer(_) => FailureReason::SearchError,
-                            };
                             if best.is_none() {
                                 best = Some(TheoremResult {
                                     name: name.clone(),
                                     proved: false,
                                     nodes_used: 0,
                                     time_secs: 0.0,
-                                    failure_reason: Some(reason),
-                                    proof_tactics: vec![],
-                                    proof_depth: None,
-                                    total_states: None,
-                                    peak_frontier: None,
-                                    gen_time_ms: None,
-                                    lean_time_ms: None,
-                                    ebm_time_ms: None,
+                                    failure_reason: "error".to_string(),
                                 });
                             }
                         }
@@ -1910,14 +1819,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                         proved: false,
                         nodes_used: 0,
                         time_secs: 0.0,
-                        failure_reason: Some(FailureReason::SearchError),
-                        proof_tactics: vec![],
-                        proof_depth: None,
-                        total_states: None,
-                        peak_frontier: None,
-                        gen_time_ms: None,
-                        lean_time_ms: None,
-                        ebm_time_ms: None,
+                        failure_reason: "error".to_string(),
                     }),
                     times,
                     total_nodes,
@@ -1929,9 +1831,9 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         while let Some(join_result) = join_set.join_next().await {
             match join_result {
                 Ok(outcome) => collect_eval(
-                    outcome, &mut per_theorem, &mut solved, &mut all_times,
-                    &mut total_nodes_sum, &mut failure_counts, &mut cumulative_solved_set,
-                    &pb, budget_start, total,
+                    outcome, &mut per_theorem, &mut solved, &mut errors,
+                    &mut timeouts, &mut all_times, &mut total_nodes_sum,
+                    &mut cumulative_solved_set, &pb, budget_start, total,
                 ),
                 Err(e) => tracing::error!(error = %e, "Eval task panicked"),
             }
@@ -1968,44 +1870,18 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         0.0
     };
 
-    // Print formatted table with failure breakdown
+    // Print formatted table
     println!();
-    println!("┌──────────┬───────────┬──────────┬───────────┬───────────┬─────────────────────────────────┐");
-    println!("│ Budget   │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │ Failures                        │");
-    println!("├──────────┼───────────┼──────────┼───────────┼───────────┼─────────────────────────────────┤");
+    println!("┌──────────┬───────────┬──────────┬───────────┬───────────┐");
+    println!("│ Budget   │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
+    println!("├──────────┼───────────┼──────────┼───────────┼───────────┤");
     for br in &budget_results {
-        // Count failure reasons for this budget
-        let mut reasons: HashMap<&FailureReason, u32> = HashMap::new();
-        for t in &br.per_theorem {
-            if let Some(ref r) = t.failure_reason {
-                *reasons.entry(r).or_default() += 1;
-            }
-        }
-        let mut failure_parts: Vec<String> = Vec::new();
-        let order = [
-            FailureReason::BudgetExhausted,
-            FailureReason::Timeout,
-            FailureReason::FrontierExhausted,
-            FailureReason::GoalStartError,
-            FailureReason::SearchError,
-        ];
-        for r in &order {
-            if let Some(&c) = reasons.get(r) {
-                failure_parts.push(format!("{r}={c}"));
-            }
-        }
-        let failure_str = if failure_parts.is_empty() {
-            "none".to_string()
-        } else {
-            failure_parts.join(" ")
-        };
         println!(
-            "│ {:<8} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │ {:<31} │",
-            br.budget, br.solved, br.total, br.rate * 100.0, br.avg_nodes, br.avg_time_secs,
-            failure_str
+            "│ {:<8} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
+            br.budget, br.solved, br.total, br.rate * 100.0, br.avg_nodes, br.avg_time_secs
         );
     }
-    println!("└──────────┴───────────┴──────────┴───────────┴───────────┴─────────────────────────────────┘");
+    println!("└──────────┴───────────┴──────────┴───────────┴───────────┘");
     println!(
         "Cumulative (any budget): {}/{} ({:.1}%)",
         cumulative_solved,
@@ -2300,11 +2176,14 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let (newly_encoded, encode_errors) = if uncached_count == 0 {
         tracing::info!("All {} states found in cache — skipping server connection", unique_states.len());
         (0, 0)
+    } else if uncached_count <= 50 && args.embeddings_cache.is_some() {
+        tracing::warn!(uncached = uncached_count, total = unique_states.len(),
+            "Skipping encode for small number of uncached states (will be filtered out)");
+        (0, uncached_count)
     } else {
-        let encode_server_url = args.encode_url.as_deref().unwrap_or(&args.server_url);
-        tracing::info!(uncached = uncached_count, url = encode_server_url, "Connecting to encode server");
+        tracing::info!(uncached = uncached_count, "Connecting to SGLang to encode missing states");
         let config = SglangConfig {
-            server_url: encode_server_url.to_string(),
+            server_url: args.server_url.clone(),
             temperature: 0.0,
             top_p: 1.0,
             max_tactic_tokens: 1,
