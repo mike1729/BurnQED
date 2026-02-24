@@ -35,7 +35,7 @@ ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 ensure_server "$SGLANG_URL" "$LLM_DIR"
 CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
-MAX_THEOREMS="${MAX_THEOREMS:-2000}"
+MAX_THEOREMS="${MAX_THEOREMS:-}"
 START_STEP="${START_STEP:-2}"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 
@@ -57,7 +57,7 @@ echo "  Config:          ${SEARCH_CONFIG}"
 echo "  SGLang:          ${SGLANG_URL}"
 echo "  Workers:         ${NUM_WORKERS}"
 echo "  Concurrency:     ${CONCURRENCY}"
-echo "  Max theorems:    ${MAX_THEOREMS}"
+echo "  Max theorems:    ${MAX_THEOREMS:-all}"
 echo "  Start step:      ${START_STEP} (2=search, 3=summary)"
 echo "================================================================"
 
@@ -89,6 +89,11 @@ else
     STEP_LOG="${LOG_DIR}/iter_${ITER}_step_2_search.log"
     echo "  Logging to: ${STEP_LOG}"
 
+    MAX_FLAG=""
+    if [ -n "$MAX_THEOREMS" ]; then
+        MAX_FLAG="--max-theorems $MAX_THEOREMS"
+    fi
+
     # shellcheck disable=SC2086
     run_logged "$STEP_LOG" $PROVER search \
         --config $SEARCH_CONFIG \
@@ -99,7 +104,7 @@ else
         --output $TRAJ_OUTPUT \
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
-        --max-theorems $MAX_THEOREMS \
+        $MAX_FLAG \
         --imports Mathlib
 
     # ── Step 2b: Noise injection search (iteration 0 only) ────────────────
@@ -120,7 +125,7 @@ else
             --output $NOISY_OUTPUT \
             --num-workers $NUM_WORKERS \
             --concurrency $CONCURRENCY \
-            --max-theorems $MAX_THEOREMS \
+            $MAX_FLAG \
             --imports Mathlib
     fi
 fi
