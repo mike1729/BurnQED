@@ -2,9 +2,8 @@
 """Standalone encode server for BurnQED.
 
 Loads the model directly via HuggingFace transformers (no SGLang) and serves
-true batch encoding over HTTP. This bypasses SGLang's broken batch
-return_hidden_states (Issue #8066) and provides much higher throughput than
-the serialized fallback in inference_server.py.
+true batch encoding over HTTP. Concurrent requests are coalesced server-side
+via an asyncio queue + background batch worker for GPU-efficient batching.
 
 Two endpoints:
   POST /encode  — Returns mean-pooled (hidden_size,) embeddings
@@ -20,6 +19,7 @@ Environment variables (override CLI args):
 """
 
 import argparse
+import asyncio
 import logging
 import os
 import time
@@ -42,7 +42,7 @@ logger = logging.getLogger("encode_server")
 # ---------------------------------------------------------------------------
 
 class EncodeRequest(BaseModel):
-    """Matches inference_server.py /encode request format."""
+    """Encode request: single text or batch of texts."""
     text: Union[str, list[str]]
     hidden_size: int = 4096
 
@@ -59,6 +59,10 @@ _tokenizer = None
 _device = None
 _max_length = 2048
 _model_path = "unknown"
+
+# Dynamic batching state (initialized in startup event)
+_request_queue: asyncio.Queue = None
+_linger_ms: int = 5
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +118,78 @@ def encode_batch(prompts: list[str]) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Dynamic batching: queue + background worker
+# ---------------------------------------------------------------------------
+
+async def _batch_worker():
+    """Background task that coalesces concurrent encode requests.
+
+    1. Wait for the first request
+    2. Linger briefly to accumulate concurrent requests
+    3. Merge all prompts into a flat batch
+    4. Run encode_batch() via run_in_executor() (non-blocking)
+    5. Distribute result slices back via asyncio.Future
+    """
+    loop = asyncio.get_event_loop()
+
+    while True:
+        # 1. Wait for first request
+        first_prompts, first_future = await _request_queue.get()
+        pending = [(first_prompts, first_future)]
+
+        # 2. Linger to accumulate more requests
+        deadline = loop.time() + _linger_ms / 1000.0
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                item = await asyncio.wait_for(
+                    _request_queue.get(), timeout=remaining
+                )
+                pending.append(item)
+            except asyncio.TimeoutError:
+                break
+
+        # 3. Merge all prompts into flat batch
+        all_prompts = []
+        offsets = []  # (start, length) for each request
+        for prompts, _ in pending:
+            start = len(all_prompts)
+            all_prompts.extend(prompts)
+            offsets.append((start, len(prompts)))
+
+        logger.info(
+            "Batch worker: coalesced %d request(s), %d total prompts",
+            len(pending), len(all_prompts),
+        )
+
+        # 4. Run encode on thread pool (non-blocking for event loop)
+        try:
+            embeddings = await loop.run_in_executor(None, encode_batch, all_prompts)
+            embeddings_list = embeddings.tolist()
+
+            # 5. Distribute result slices
+            for (start, length), (_, future) in zip(offsets, pending):
+                if not future.cancelled():
+                    future.set_result(embeddings_list[start : start + length])
+        except Exception as e:
+            # Propagate error to all waiters
+            for _, future in pending:
+                if not future.cancelled():
+                    future.set_exception(e)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the background batch worker."""
+    global _request_queue
+    _request_queue = asyncio.Queue()
+    asyncio.create_task(_batch_worker())
+    logger.info("Batch worker started (linger_ms=%d)", _linger_ms)
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -133,7 +209,10 @@ async def model_info():
 async def encode(request: EncodeRequest):
     """Encode text to mean-pooled embeddings.
 
-    Returns same format as inference_server.py:
+    Requests are enqueued and coalesced by the background batch worker
+    for GPU-efficient batching. Each caller awaits its own Future.
+
+    Returns:
       - Single text: {"embedding": [floats...]}
       - Batch text:  {"embeddings": [[floats...], ...]}
     """
@@ -141,22 +220,25 @@ async def encode(request: EncodeRequest):
     prompts = request.text if is_batch else [request.text]
 
     t0 = time.time()
-    embeddings = encode_batch(prompts)
-    elapsed = time.time() - t0
 
+    # Enqueue and wait for batch worker to process
+    loop = asyncio.get_event_loop()
+    future = loop.create_future()
+    await _request_queue.put((prompts, future))
+    embeddings_list = await future
+
+    elapsed = time.time() - t0
     logger.info(
         "Encoded %d prompt(s) in %.3fs (%.1f states/sec)",
         len(prompts), elapsed, len(prompts) / elapsed if elapsed > 0 else 0,
     )
 
     # Validate hidden_size
-    if embeddings.shape[-1] != request.hidden_size:
+    if embeddings_list and len(embeddings_list[0]) != request.hidden_size:
         logger.warning(
             "Hidden size mismatch: model=%d, requested=%d",
-            embeddings.shape[-1], request.hidden_size,
+            len(embeddings_list[0]), request.hidden_size,
         )
-
-    embeddings_list = embeddings.tolist()
 
     if is_batch:
         return {"embeddings": embeddings_list}
@@ -207,6 +289,12 @@ def parse_args():
              "Larger batches are split into sub-batches automatically.",
     )
     parser.add_argument(
+        "--linger-ms",
+        type=int,
+        default=5,
+        help="Milliseconds to wait for additional requests before flushing a batch (default: 5).",
+    )
+    parser.add_argument(
         "--save-quantized",
         type=str,
         default=None,
@@ -225,10 +313,11 @@ def main():
     port = int(os.environ.get("ENCODE_PORT", args.port))
     dtype_str = os.environ.get("ENCODE_DTYPE", args.dtype)
 
-    global _model, _tokenizer, _device, _max_length, _max_batch_size, _model_path
+    global _model, _tokenizer, _device, _max_length, _max_batch_size, _model_path, _linger_ms
     _model_path = str(os.path.realpath(args.model_path))
     _max_length = args.max_length
     _max_batch_size = args.max_batch_size
+    _linger_ms = args.linger_ms
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     logger.info(
@@ -295,7 +384,7 @@ def main():
         "Model loaded: hidden_size=%d, params=%.1fB", hidden_size, num_params,
     )
 
-    logger.info("Starting encode server on %s:%d", args.host, port)
+    logger.info("Starting encode server on %s:%d (linger_ms=%d)", args.host, port, _linger_ms)
     uvicorn.run(app, host=args.host, port=port, log_level="info")
 
 

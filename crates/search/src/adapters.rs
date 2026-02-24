@@ -9,7 +9,6 @@ use policy::{GeneratedTactic, InferenceHandle};
 
 use ebm::inference::EBMValueFn;
 
-use crate::encode_batcher::BatchEncoder;
 use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner, ValueScorer};
 
 // ---------------------------------------------------------------------------
@@ -209,11 +208,13 @@ impl CachingEncoder {
             max_batch_size,
         }
     }
-}
 
-#[async_trait]
-impl BatchEncoder for CachingEncoder {
-    async fn encode_batch(&self, states: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+    /// Encode multiple proof states into embedding vectors.
+    ///
+    /// Cache hits are returned directly; misses are sent to the encode server
+    /// in sub-batches of `max_batch_size`. The encode server handles concurrent
+    /// requests efficiently via server-side dynamic batching.
+    pub async fn encode_batch(&self, states: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
         let mut results: Vec<Option<Vec<f32>>> = vec![None; states.len()];
         let mut miss_indices: Vec<usize> = Vec::new();
         let mut miss_texts: Vec<String> = Vec::new();
@@ -234,13 +235,17 @@ impl BatchEncoder for CachingEncoder {
             }
         }
 
-        // Phase 2: encode cache misses in sub-batches to prevent server OOM
+        // Phase 2: encode cache misses in sub-batches.
+        // The encode server coalesces concurrent requests server-side, so we
+        // use batch encode calls (one per sub-batch) rather than sequential singles.
         for chunk_start in (0..miss_texts.len()).step_by(self.max_batch_size) {
             let chunk_end = (chunk_start + self.max_batch_size).min(miss_texts.len());
             let chunk_texts = &miss_texts[chunk_start..chunk_end];
             let chunk_indices = &miss_indices[chunk_start..chunk_end];
 
-            match self.handle.encode_batch(&chunk_texts.to_vec()).await {
+            let batch_result = self.handle.encode_batch(chunk_texts).await;
+
+            match batch_result {
                 Ok(batch_results) => {
                     let mut cache = self
                         .cache

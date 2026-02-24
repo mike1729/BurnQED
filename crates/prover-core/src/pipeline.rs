@@ -19,7 +19,7 @@ use ebm::{
 use lean_repl::{LeanPool, TacticResult};
 use policy::{InferenceHandle, SglangClient, SglangConfig};
 use search::{
-    CachedPolicy, CachingEncoder, GlobalBatcher, GlobalEncodeBatcher, InferencePolicyProvider,
+    CachedPolicy, CachingEncoder, InferencePolicyProvider,
     SearchConfig, SearchEngine,
 };
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
@@ -161,7 +161,7 @@ type TrainingBackend = Autodiff<CudaJit>;
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
-    policy: CachedPolicy<GlobalBatcher>,
+    policy: CachedPolicy<InferencePolicyProvider>,
     value_fn: Option<EBMValueFn>,
     /// Display string for the inference backend (model path or server URL).
     inference_label: String,
@@ -207,17 +207,16 @@ async fn load_policy_and_ebm(
 
     let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
     let exp = toml.search.batch_expansion_size;
-    let batch_gen_limit = exp * concurrency.max(1); // coalesce across concurrent searches
-    let batcher = GlobalBatcher::new(
-        Arc::new(raw_policy),
-        batch_gen_limit,
-        Duration::from_millis(5),        // linger
-    );
-    let policy = CachedPolicy::new(batcher, 10_000);
+    // Each search thread sends /generate directly — SGLang's continuous batching
+    // handles request coalescing more efficiently than Rust-side pre-batching.
+    let policy = CachedPolicy::new(raw_policy, 10_000);
 
     // 4. Optional EBM scorer (uses separate encode server if provided)
-    let encode_batch_limit = batch_encode_size.unwrap_or(toml.search.batch_encode_size);
-    tracing::info!(batch_gen_limit, encode_batch_limit, "Batch size limits (generate / encode)");
+    // Encode batcher coalesce limit scales with concurrency (like generation).
+    // CachingEncoder internally sub-batches HTTP calls to the server's max batch size.
+    let encode_batch_limit = (batch_encode_size.unwrap_or(toml.search.batch_encode_size))
+        .max(exp * concurrency.max(1));
+    tracing::info!(encode_batch_limit, "Encode batch size limit");
     let encode_handle = if let Some(url) = encode_url {
         tracing::info!(url, "Connecting to separate encode server for EBM");
         let encode_config = SglangConfig {
@@ -247,10 +246,9 @@ async fn load_policy_and_ebm(
 
 /// Load an optional EBM scorer using the provided inference handle for encoding.
 ///
-/// Sets up a `CachingEncoder` → `GlobalEncodeBatcher` pipeline so concurrent
-/// search tasks coalesce their encode requests into GPU-efficient batches.
-/// The `EBMValueFn` encodes **outside** its internal Mutex, so only the fast
-/// MLP forward pass holds the lock.
+/// Sets up a `CachingEncoder` with direct `tokio::spawn` + `oneshot` bridging
+/// from sync closures to async encode calls. The encode server handles request
+/// coalescing server-side, so no Rust-side batcher is needed.
 fn load_ebm_scorer(
     ebm_path: Option<&Path>,
     inference_handle: &InferenceHandle,
@@ -277,29 +275,28 @@ fn load_ebm_scorer(
     let hidden_size = head_config.d_encoder;
 
     // CachingEncoder: handles embedding cache + HTTP encode calls + sub-batching
-    let caching_encoder = CachingEncoder::new(inference_handle.clone(), hidden_size, encode_batch_limit);
+    let caching_encoder = Arc::new(CachingEncoder::new(inference_handle.clone(), hidden_size, encode_batch_limit));
 
-    // GlobalEncodeBatcher: coalesces concurrent encode requests
-    let encode_batcher = Arc::new(GlobalEncodeBatcher::new(
-        Arc::new(caching_encoder),
-        encode_batch_limit,              // derived from batch_expansion_size × num_candidates
-        Duration::from_millis(5),        // linger
-    ));
-
-    // Batch encode closure routed through the batcher (used by EBMValueFn)
-    let batcher_ref = encode_batcher.clone();
+    // Bridge sync → async via tokio::spawn + oneshot (safe from block_in_place)
+    let enc = caching_encoder.clone();
     let batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync> =
-        Box::new(move |states: &[&str]| batcher_ref.encode_batch_blocking(states));
+        Box::new(move |states: &[&str]| {
+            let owned: Vec<String> = states.iter().map(|s| s.to_string()).collect();
+            let encoder = enc.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move { let _ = tx.send(encoder.encode_batch(&owned).await); });
+            rx.blocking_recv().map_err(|_| anyhow::anyhow!("encode task dropped"))?
+        });
 
-    // Single encode closure routed through the batcher (batch of 1, used by EBMScorer::score_state)
-    let batcher_ref2 = encode_batcher.clone();
+    let enc2 = caching_encoder.clone();
     let encode_fn: Box<dyn Fn(&str) -> anyhow::Result<Vec<f32>> + Send + Sync> =
         Box::new(move |state: &str| {
-            let results = batcher_ref2.encode_batch_blocking(&[state])?;
-            results
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("encode_batch returned empty result"))
+            let owned = state.to_string();
+            let e = enc2.clone();
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            tokio::spawn(async move { let _ = tx.send(e.encode_batch(&[owned]).await); });
+            rx.blocking_recv().map_err(|_| anyhow::anyhow!("encode task dropped"))??
+                .into_iter().next().ok_or_else(|| anyhow::anyhow!("empty result"))
         });
 
     // Load EBM scorer from checkpoint (new layout: final/model.mpk, old: final.mpk)
@@ -325,7 +322,7 @@ fn load_ebm_scorer(
 struct SearchSetup {
     config: SearchConfig,
     pool: Arc<LeanPool>,
-    policy: Arc<CachedPolicy<GlobalBatcher>>,
+    policy: Arc<CachedPolicy<InferencePolicyProvider>>,
     value_fn: Option<Arc<EBMValueFn>>,
     index: TheoremIndex,
     inference_label: String,
