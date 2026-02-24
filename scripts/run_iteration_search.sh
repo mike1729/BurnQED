@@ -64,7 +64,7 @@ echo "================================================================"
 
 # EBM flag needed by both search and eval — resolve before skip check
 EBM_FLAG=""
-if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
+if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final/model.mpk" ]; then
     EBM_FLAG="--ebm-path ${EBM_DIR}"
 fi
 

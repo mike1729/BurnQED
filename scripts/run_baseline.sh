@@ -33,6 +33,8 @@ EBM_STEPS="${EBM_STEPS:-2000}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
+MINIF2F_CONFIG="${REPO_ROOT}/configs/search_minif2f.toml"
+MINIF2F_IMPORT="BenchMinIF2FTest"  # olean lib matching minif2f_test.json
 BASELINES_DIR="${REPO_ROOT}/baselines"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 
@@ -89,7 +91,7 @@ MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 
 if [ -f "$MINIF2F" ]; then
     $PROVER eval \
-        --config "$SEARCH_CONFIG" \
+        --config "$MINIF2F_CONFIG" \
         --server-url "$SGLANG_URL" \
         --theorems "$MINIF2F" \
         --budgets 600 \
@@ -98,7 +100,7 @@ if [ -f "$MINIF2F" ]; then
         --concurrency "$CONCURRENCY" \
         --max-theorems "$MAX_THEOREMS" \
         --num-candidates 16 \
-        --imports Mathlib
+        --imports Mathlib,$MINIF2F_IMPORT
 else
     echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
     echo "Run: python python/data/trace_mathlib.py --output-dir data/"

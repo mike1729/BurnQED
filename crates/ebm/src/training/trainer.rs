@@ -54,7 +54,7 @@ pub struct EBMTrainingConfig {
     #[config(default = 2000)]
     pub log_interval: usize,
     /// Steps between checkpoint saves.
-    #[config(default = 5_000)]
+    #[config(default = 10_000)]
     pub checkpoint_interval: usize,
     /// Number of negative samples per positive.
     #[config(default = 7)]
@@ -554,8 +554,9 @@ pub fn train<B: AutodiffBackend>(
                 }
                 match val_avg.avg_metrics() {
                     Some(vm) => format!(
-                        " | val({}): loss={:.4} gap={:.2} rank={:.2}",
-                        val_avg.count, vm.loss, vm.energy_gap, vm.rank_accuracy
+                        " | val({}): loss={:.4} gap={:.2} rank={:.2} pair={:.2} active={:.2}",
+                        val_avg.count, vm.loss, vm.energy_gap, vm.rank_accuracy,
+                        vm.pairwise_acc, vm.active_fraction
                     ),
                     None => String::new(),
                 }

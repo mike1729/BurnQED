@@ -50,6 +50,8 @@ CONCURRENCY="${CONCURRENCY:-4}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 TRAIN_EVAL_THEOREMS="${REPO_ROOT}/data/train_eval_theorems.json"
 MINIF2F="${REPO_ROOT}/data/minif2f_v2s_test.json"
+MINIF2F_IMPORT="BenchMinIF2FV2STest"  # olean lib matching MINIF2F data file
+MINIF2F_CONFIG="${REPO_ROOT}/configs/search_minif2f.toml"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 # Default: always run separation probe during fine-tuning
 PROBE_DATA="${PROBE_DATA:-${REPO_ROOT}/data/separation_probe.json}"
@@ -208,7 +210,7 @@ else
 
     # Resolve EBM flag
     EBM_FLAG=""
-    if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final.mpk" ]; then
+    if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final/model.mpk" ]; then
         EBM_FLAG="--ebm-path ${EBM_DIR}"
     fi
 
@@ -225,7 +227,7 @@ else
 
     # shellcheck disable=SC2086
     run_logged "$STEP_LOG" $PROVER eval \
-        --config $SEARCH_CONFIG \
+        --config $MINIF2F_CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
         --theorems $EVAL_THEOREMS \
@@ -235,7 +237,7 @@ else
         --concurrency $CONCURRENCY \
         --max-theorems 500 \
         --num-candidates 16 \
-        --imports Mathlib
+        --imports Mathlib,$MINIF2F_IMPORT
 
     # EBM Ablation (eval WITHOUT EBM)
     if [ "$ITER" -gt 0 ] && [ -n "$EBM_FLAG" ]; then
@@ -246,7 +248,7 @@ else
 
         # shellcheck disable=SC2086
         run_logged "$STEP_LOG" $PROVER eval \
-            --config $SEARCH_CONFIG \
+            --config $MINIF2F_CONFIG \
             --server-url $SGLANG_URL \
             --theorems $EVAL_THEOREMS \
             --budgets 600 \
@@ -255,7 +257,7 @@ else
             --concurrency $CONCURRENCY \
             --max-theorems 500 \
             --num-candidates 16 \
-            --imports Mathlib
+            --imports Mathlib,$MINIF2F_IMPORT
     fi
 
     # Cross-iteration comparison

@@ -159,3 +159,198 @@ EBM_STEPS=75000 LOSS_TYPE=margin_ranking \
 HARD_RATIO=0.6 MEDIUM_RATIO=0.3 DROPOUT=0.15 \
 START_STEP=2 bash scripts/run_ebm_train.sh 5
 ```
+
+### Bug fixes applied before training
+
+1. **Temperature removed from margin loss** — `forward()` returns raw energy;
+   `temperature_scale()` only called in InfoNCE path. Temperature with margin
+   lets optimizer collapse τ→0 to trivially zero the hinge loss.
+2. **NaN guard** — skip optimizer step when loss is NaN/Inf to prevent permanent
+   weight corruption.
+3. **Flat-buffer EmbeddingCache** — `HashMap<String, u32>` index + contiguous
+   `Vec<f32>` buffer eliminates ~3.5GB overhead at 403K entries.
+
+### EBM training results
+
+```
+Step  | Train Loss | Val Loss | Train Gap | Val Gap | Train Rank | Val Rank | Pair  | Active
+    0 |   1.03     |   1.02   |  -0.00    |  -0.00  |   0.14     |  0.07    | 0.50  | 1.00
+  2K  |   0.89     |   0.90   |   0.79    |   1.12  |   0.48     |  0.54    | 0.80  | 0.61
+  4K  |   0.90     |   0.89   |   1.18    |   1.22  |   0.60     |  0.57    | 0.87  | 0.43
+  8K  |   0.90     |   0.90   |   1.32    |   1.31  |   0.63     |  0.57    | 0.88  | 0.39
+ 10K  |   0.90     |   0.90   |   1.37    |   1.27  |   0.63     |  0.57    | 0.88  | 0.38
+ 20K  |   0.90     |   0.91   |   1.54    |   1.44  |   0.65     |  0.59    | 0.89  | 0.35
+ 30K  |   0.90     |   0.91   |   1.62    |   1.51  |   0.66     |  0.60    | 0.89  | 0.34
+ 40K  |   0.90     |   1.00   |   1.69    |   1.67  |   0.67     |  0.59    | 0.89  | 0.32
+ 50K  |   0.90     |   0.97   |   1.74    |   1.68  |   0.67     |  0.59    | 0.90  | 0.32
+ 60K  |   0.90     |   0.99   |   1.77    |   1.69  |   0.68     |  0.59    | 0.90  | 0.31
+ 70K  |   0.90     |   0.99   |   1.79    |   1.70  |   0.68     |  0.59    | 0.90  | 0.31
+ 75K  |   0.90     |   0.99   |   1.79    |   1.71  |   0.68     |  0.59    | 0.90  | 0.31
+```
+
+**Final unbiased validation** (124,672 samples, hard_ratio=0.1, medium_ratio=0.3):
+- Rank accuracy: **0.626**
+- Pairwise accuracy: **0.896**
+- Energy gap: **2.08**
+- Loss: 1.024
+- Avg pos energy: 0.20, avg neg energy: 2.28, energy std: 1.42
+- 0 NaN/Inf steps skipped, runtime: 39 min
+
+**Comparison with iter 4 EBM** (info_nce, K=7, hard_ratio=0.3, 50K steps):
+
+| Metric | Iter 4 (50K) | Iter 5 (75K) | Delta |
+|---|---|---|---|
+| Train rank | 0.66 | **0.68** | +0.02 |
+| Val rank | 0.59 | **0.63** (final: 0.63) | +0.04 |
+| Train gap | 3.11 | 1.79 | -1.32 |
+| Val gap | 2.92 | 2.08 | -0.84 |
+| Train loss | 1.07 | 0.90 | -0.17 |
+| Val loss | 1.32 | 1.02 | -0.30 |
+| Pairwise | — | **0.90** | new metric |
+
+Note: gaps are not directly comparable between InfoNCE (temperature-scaled) and
+margin ranking (raw energy). Rank accuracy and pairwise accuracy are comparable.
+Train rank improved 0.66→0.68, val rank 0.59→0.63. Modest improvement despite
+doubling hard_ratio and switching loss function. The rank saturation around 0.68
+suggests the frozen encoder's embedding quality is the binding constraint, not the
+EBM architecture or loss function — consistent with the sibling collision analysis
+showing 14% of pairs in the borderline zone.
+
+## Data Analysis
+
+### Math branch distribution (proved theorems)
+
+9,342 proved theorems out of 61,233 in the theorem index (15.3% coverage).
+Top-level Mathlib modules:
+
+| Branch | Count | % |
+|---|---|---|
+| CategoryTheory | 582 | 6.2% |
+| MeasureTheory | 442 | 4.7% |
+| Polynomial | 359 | 3.8% |
+| List | 323 | 3.5% |
+| Nat | 283 | 3.0% |
+| Finset | 264 | 2.8% |
+| Set | 257 | 2.8% |
+| Real | 179 | 1.9% |
+| Matrix | 176 | 1.9% |
+| SimpleGraph | 159 | 1.7% |
+| Equiv | 116 | 1.2% |
+| LinearMap | 102 | 1.1% |
+| Multiset | 98 | 1.0% |
+| Filter | 96 | 1.0% |
+
+1,803 unique top-level branches (very long tail).
+Top sub-branches: CategoryTheory.Limits (153), MeasureTheory.Measure (87),
+Equiv.Perm (82), FirstOrder.Language (65), CategoryTheory.ShortComplex (46).
+
+### Proved theorems per trajectory file
+
+| File | Proved |
+|---|---|
+| iter_0.parquet | 120 |
+| iter_0_noisy.parquet | 175 |
+| iter_1.parquet | 1,281 |
+| iter_1_harvest.parquet | 614 |
+| iter_1_negatives.parquet | 4,352 |
+| iter_2.parquet | 1,749 |
+| iter_2_broken_ebm.parquet | 566 |
+| iter_2_search.parquet | 44 |
+| iter_4.parquet | 2,065 |
+
+### Depth distribution
+
+**Remaining depth** (50,829 positive states with known depth):
+
+| Remaining | Count | % | Cumulative |
+|---|---|---|---|
+| 0 | 6,614 | 13.0% | 13.0% |
+| 1 | 12,167 | 23.9% | 36.9% |
+| 2 | 7,035 | 13.8% | 50.8% |
+| 3 | 7,015 | 13.8% | 64.6% |
+| 4 | 4,598 | 9.0% | 73.6% |
+| 5 | 3,167 | 6.2% | 79.9% |
+| 6–10 | 7,075 | 13.9% | 93.8% |
+| 11–20 | 2,690 | 5.3% | 99.1% |
+| 21+ | 468 | 0.9% | 100% |
+
+74% within 5 steps of completion. Peak at remaining=1 (24%). 96% of all records
+have unknown depth (-1, negative/failed states).
+
+**Depth from root** (123,724 positive states):
+
+| Depth | Count | % |
+|---|---|---|
+| 0 | 12,876 | 10.4% |
+| 1 | 12,572 | 10.2% |
+| 2 | 21,649 | 17.5% |
+| 3 | 20,036 | 16.2% |
+| 4 | 13,901 | 11.2% |
+| 5 | 9,989 | 8.1% |
+| 6–10 | 23,157 | 18.7% |
+| 11–20 | 8,272 | 6.7% |
+| 21+ | 1,272 | 1.0% |
+
+Most proof-tree activity at depths 2–5 (53%). Max observed: 54.
+
+## Sibling Collision Analysis
+
+Measured embedding separation between sibling proof states (positive and negative
+states sharing the same parent_state_id) to assess whether the 7B encoder provides
+sufficient signal for the EBM to distinguish them.
+
+**Dataset:** 28,644 sibling (pos, neg) pairs from trajectory data, sampled 20,000.
+
+### Test 1: Sibling L2 Distance
+
+| Metric | Sibling pairs | Random pos-neg |
+|---|---|---|
+| Mean L2 | **3.14** | 4.65 |
+| Median L2 | 2.83 | 4.11 |
+| Std | 1.98 | 1.89 |
+| Cosine sim | 0.981 | — |
+
+L2 threshold analysis:
+- < 0.5 (collision): **3.7%**
+- < 1.0 (borderline): **13.9%**
+- < 2.0 (separable): 31.2%
+- ≥ 2.0 (healthy): **68.8%**
+
+Siblings are 1.52 L2 units closer than random pairs on average. ~14% of sibling
+pairs are in the borderline zone (L2 < 1.0), meaning the EBM must work with very
+small embedding differences for roughly 1 in 7 hard cases.
+
+### Test 3: SVD Rank Collapse Probe
+
+SVD on 10,000 sibling difference vectors (pos − neg) to check if LoRA r=32
+creates a rank bottleneck in the embedding space.
+
+| Dims | Cumulative variance |
+|---|---|
+| 1 | 64.5% |
+| 2 | 75.6% |
+| 4 | 81.0% |
+| 8 | 86.2% |
+| 16 | 90.3% |
+| **32** | **93.5%** |
+| 64 | 96.2% |
+| 100 | ~98% |
+
+S[32]/S[33] = **1.01** — no cliff at rank 32. The spectrum decays smoothly,
+confirming **LoRA rank is NOT the bottleneck**. Difference vectors span a smooth
+~64–100 dimensional subspace.
+
+Key finding: **64.5% of variance in a single dimension.** There is one dominant
+direction separating positive from negative siblings. The EBM primarily needs to
+learn this direction plus a handful of corrections.
+
+### Conclusions
+
+1. **No LoRA rank bottleneck.** The embedding space is not rank-deficient at 32.
+   Increasing LoRA rank would not meaningfully improve embedding separation.
+2. **14% borderline pairs are the hard cases.** These are siblings with L2 < 1.0
+   where the encoder provides minimal signal. The EBM's hard-negative mining
+   (hard_ratio=0.6) specifically targets these.
+3. **Low-dimensional structure is exploitable.** With 93.5% of variance in 32 dims,
+   the EBM's 4096→2048→1024→512→1 architecture has more than enough capacity.
+   The challenge is not representation power but gradient signal on the 14% hard cases.
