@@ -43,6 +43,7 @@ fi
 
 # Eval configuration
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 EVAL_DIR="${REPO_ROOT}/eval_results"
 EVAL_BUDGET="${EVAL_BUDGET:-300}"
 EVAL_MAX_THEOREMS_TRAIN="${EVAL_MAX_THEOREMS_TRAIN:-100}"
@@ -208,10 +209,12 @@ else
 
     ensure_server "$SGLANG_URL" "$LLM_DIR"
 
-    # Resolve EBM flag
+    # Resolve EBM flag + encode URL
     EBM_FLAG=""
+    ENCODE_FLAG=""
     if [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final/model.mpk" ]; then
         EBM_FLAG="--ebm-path ${EBM_DIR}"
+        ENCODE_FLAG="--encode-url ${ENCODE_URL}"
     fi
 
     if [ -f "$MINIF2F" ]; then
@@ -230,6 +233,7 @@ else
         --config $MINIF2F_CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
+        $ENCODE_FLAG \
         --theorems $EVAL_THEOREMS \
         --budgets 600 \
         --output ${EVAL_DIR}/iter_${ITER}.json \
