@@ -270,6 +270,15 @@ enum Command {
         /// Margin for margin ranking loss. Ignored when using info_nce.
         #[arg(long, default_value_t = 1.0)]
         margin: f64,
+        /// Fraction of negatives sampled as hard (sibling) negatives.
+        #[arg(long, default_value_t = 0.3)]
+        hard_ratio: f64,
+        /// Fraction of negatives sampled as medium (same-theorem) negatives.
+        #[arg(long, default_value_t = 0.4)]
+        medium_ratio: f64,
+        /// Dropout probability for the energy head MLP.
+        #[arg(long, default_value_t = 0.1)]
+        dropout: f64,
     },
 }
 
@@ -441,6 +450,9 @@ async fn main() -> anyhow::Result<()> {
             resume_step,
             loss_type,
             margin,
+            hard_ratio,
+            medium_ratio,
+            dropout,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -460,6 +472,9 @@ async fn main() -> anyhow::Result<()> {
                 resume_step,
                 loss_type,
                 margin,
+                hard_ratio,
+                medium_ratio,
+                dropout,
             })
             .await
         }

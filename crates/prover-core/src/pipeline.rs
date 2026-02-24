@@ -153,6 +153,12 @@ pub struct TrainEbmArgs {
     pub loss_type: String,
     /// Margin for margin ranking loss. Ignored for InfoNCE.
     pub margin: f64,
+    /// Fraction of negatives sampled as hard (sibling) negatives.
+    pub hard_ratio: f64,
+    /// Fraction of negatives sampled as medium (same-theorem) negatives.
+    pub medium_ratio: f64,
+    /// Dropout probability for the energy head MLP.
+    pub dropout: f64,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -2092,7 +2098,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     );
 
     // 1. Create or resume energy head
-    let head_config = EnergyHeadConfig::new(hidden_size);
+    let head_config = EnergyHeadConfig::new(hidden_size).with_dropout(args.dropout);
     let device: <TrainingBackend as burn::prelude::Backend>::Device = Default::default();
 
     // Determine resume_step: explicit flag, or auto-detect from latest step_* dir
@@ -2281,7 +2287,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 
     // 8. Build samplers from filtered records
     let sampler = match ContrastiveSampler::from_trajectory_records(train_records, args.k_negatives) {
-        Ok(s) => s,
+        Ok(s) => s.with_ratios(args.hard_ratio, args.medium_ratio),
         Err(e) => {
             tracing::warn!(error = %e, "Cannot train EBM — not enough contrastive data after filtering");
             println!();
@@ -2298,6 +2304,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let val_sampler = if !val_records.is_empty() {
         match ContrastiveSampler::from_trajectory_records(val_records, args.k_negatives) {
             Ok(s) => {
+                let s = s.with_ratios(args.hard_ratio, args.medium_ratio);
                 tracing::info!(
                     val_records = num_val,
                     val_eligible = s.num_eligible_theorems(),

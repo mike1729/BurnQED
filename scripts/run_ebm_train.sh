@@ -20,6 +20,9 @@
 #   ENCODE_BATCH_SIZE  Batch size for encoding (default: 32)
 #   ENCODE_URL         Encode server URL (default: http://localhost:30001)
 #   HIDDEN_SIZE        Model hidden size (default: 4096)
+#   HARD_RATIO         Fraction of hard (sibling) negatives (default: 0.3)
+#   MEDIUM_RATIO       Fraction of medium (same-theorem) negatives (default: 0.4)
+#   DROPOUT            Dropout probability for energy head (default: 0.1)
 #   START_STEP         Skip steps: 1=encode+train, 2=train only (default: 1)
 
 set -euo pipefail
@@ -49,6 +52,9 @@ ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-32}"
 HIDDEN_SIZE="${HIDDEN_SIZE:-4096}"
 LOSS_TYPE="${LOSS_TYPE:-info_nce}"
 MARGIN="${MARGIN:-1}"
+HARD_RATIO="${HARD_RATIO:-0.3}"
+MEDIUM_RATIO="${MEDIUM_RATIO:-0.4}"
+DROPOUT="${DROPOUT:-0.1}"
 START_STEP="${START_STEP:-1}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
@@ -89,6 +95,9 @@ echo "  EBM steps:       ${EBM_STEPS}"
 echo "  EBM LR:          ${EBM_LR}"
 echo "  EBM resume:      ${EBM_RESUME}"
 echo "  Loss type:       ${LOSS_TYPE} (margin: ${MARGIN})"
+echo "  Hard ratio:      ${HARD_RATIO}"
+echo "  Medium ratio:    ${MEDIUM_RATIO}"
+echo "  Dropout:         ${DROPOUT}"
 echo "  Encode batch:    ${ENCODE_BATCH_SIZE}"
 echo "  Encode server:   ${ENCODE_URL}"
 echo "  Start step:      ${START_STEP} (1=encode, 2=train)"
@@ -216,7 +225,10 @@ run_logged "$STEP_LOG" $PROVER train-ebm \
     --encode-batch-size $ENCODE_BATCH_SIZE \
     --encode-concurrency 1 \
     --loss-type $LOSS_TYPE \
-    --margin $MARGIN
+    --margin $MARGIN \
+    --hard-ratio $HARD_RATIO \
+    --medium-ratio $MEDIUM_RATIO \
+    --dropout $DROPOUT
 
 echo ""
 echo "================================================================"
