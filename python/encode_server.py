@@ -130,7 +130,7 @@ async def _batch_worker():
     4. Run encode_batch() via run_in_executor() (non-blocking)
     5. Distribute result slices back via asyncio.Future
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     while True:
         # 1. Wait for first request
@@ -222,7 +222,7 @@ async def encode(request: EncodeRequest):
     t0 = time.time()
 
     # Enqueue and wait for batch worker to process
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     future = loop.create_future()
     await _request_queue.put((prompts, future))
     embeddings_list = await future
