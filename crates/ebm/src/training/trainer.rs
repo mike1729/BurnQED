@@ -17,7 +17,7 @@ use rand::SeedableRng;
 
 use crate::model::bridge::embeddings_to_tensor;
 use crate::model::energy_head::{EnergyHead, EnergyHeadConfig};
-use crate::training::data::ContrastiveSampler;
+use crate::training::data::{ContrastiveSample, ContrastiveSampler};
 use crate::training::loss::{contrastive_loss, depth_regression_loss, ContrastiveLossType};
 use crate::training::metrics::{EBMMetrics, MetricsHistory};
 
@@ -71,6 +71,15 @@ pub struct EBMTrainingConfig {
     /// Margin for margin ranking loss. Ignored when using InfoNCE.
     #[config(default = 1.0)]
     pub margin: f64,
+    /// Number of validation batches to evaluate at each log interval.
+    #[config(default = 40)]
+    pub val_batches: usize,
+    /// Hard ratio for final full-validation evaluation (natural search distribution).
+    #[config(default = 0.1)]
+    pub final_val_hard_ratio: f64,
+    /// Medium ratio for final full-validation evaluation.
+    #[config(default = 0.3)]
+    pub final_val_medium_ratio: f64,
 }
 
 /// Compute the learning rate at a given step using warmup + cosine decay.
@@ -90,28 +99,24 @@ pub fn lr_schedule(base_lr: f64, warmup_steps: usize, total_steps: usize, step: 
     }
 }
 
-/// Evaluate a batch of contrastive samples and return metrics (no gradients).
+/// Evaluate pre-sampled contrastive examples and return metrics (no gradients).
 ///
-/// Used for both train metrics (after backward) and validation.
-fn eval_batch<B: Backend>(
+/// Core evaluation logic shared by training-time validation and full final eval.
+fn eval_samples<B: Backend>(
     model: &EnergyHead<B>,
     encode_fn: &dyn Fn(&str) -> anyhow::Result<Vec<f32>>,
-    sampler: &ContrastiveSampler,
-    batch_size: usize,
+    samples: &[ContrastiveSample],
     k_negatives: usize,
     depth_loss_weight: f64,
     loss_type: ContrastiveLossType,
     margin: f64,
-    rng: &mut impl rand::Rng,
     device: &B::Device,
 ) -> Option<EBMMetrics> {
-    let samples = sampler.sample_batch(batch_size, rng);
-
     // Encode positive states
-    let mut pos_embeddings = Vec::with_capacity(batch_size);
-    let mut remaining_depths = Vec::with_capacity(batch_size);
+    let mut pos_embeddings = Vec::with_capacity(samples.len());
+    let mut remaining_depths = Vec::with_capacity(samples.len());
 
-    for sample in &samples {
+    for sample in samples {
         match encode_fn(&sample.positive.state_pp) {
             Ok(emb) => {
                 pos_embeddings.push(emb);
@@ -125,8 +130,8 @@ fn eval_batch<B: Backend>(
     }
 
     // Encode negative states
-    let mut neg_embeddings = Vec::with_capacity(batch_size * k_negatives);
-    for sample in &samples {
+    let mut neg_embeddings = Vec::with_capacity(samples.len() * k_negatives);
+    for sample in samples {
         for neg in &sample.negatives {
             match encode_fn(&neg.state_pp) {
                 Ok(emb) => neg_embeddings.push(emb),
@@ -162,7 +167,37 @@ fn eval_batch<B: Backend>(
         contrastive_val,
         depth_val,
         total_val,
+        margin,
     ))
+}
+
+/// Evaluate a batch of contrastive samples and return metrics (no gradients).
+///
+/// Samples from the given sampler and delegates to [`eval_samples`].
+/// Used for training-time periodic validation.
+fn eval_batch<B: Backend>(
+    model: &EnergyHead<B>,
+    encode_fn: &dyn Fn(&str) -> anyhow::Result<Vec<f32>>,
+    sampler: &ContrastiveSampler,
+    batch_size: usize,
+    k_negatives: usize,
+    depth_loss_weight: f64,
+    loss_type: ContrastiveLossType,
+    margin: f64,
+    rng: &mut impl rand::Rng,
+    device: &B::Device,
+) -> Option<EBMMetrics> {
+    let samples = sampler.sample_batch(batch_size, rng);
+    eval_samples(
+        model,
+        encode_fn,
+        &samples,
+        k_negatives,
+        depth_loss_weight,
+        loss_type,
+        margin,
+        device,
+    )
 }
 
 /// Running average accumulator for training metrics over a logging interval.
@@ -170,6 +205,8 @@ struct RunningAvg {
     loss: f64,
     gap: f64,
     rank: f64,
+    pairwise: f64,
+    active: f64,
     pos_e: f64,
     neg_e: f64,
     std: f64,
@@ -178,13 +215,15 @@ struct RunningAvg {
 
 impl RunningAvg {
     fn new() -> Self {
-        Self { loss: 0.0, gap: 0.0, rank: 0.0, pos_e: 0.0, neg_e: 0.0, std: 0.0, count: 0 }
+        Self { loss: 0.0, gap: 0.0, rank: 0.0, pairwise: 0.0, active: 0.0, pos_e: 0.0, neg_e: 0.0, std: 0.0, count: 0 }
     }
 
     fn update(&mut self, m: &EBMMetrics) {
         self.loss += m.loss;
         self.gap += m.energy_gap;
         self.rank += m.rank_accuracy;
+        self.pairwise += m.pairwise_acc;
+        self.active += m.active_fraction;
         self.pos_e += m.pos_energy_mean;
         self.neg_e += m.neg_energy_mean;
         self.std += m.energy_std;
@@ -197,8 +236,9 @@ impl RunningAvg {
         }
         let n = self.count as f64;
         format!(
-            "loss={:.4} gap={:.2} rank={:.2} pos_e={:.2} neg_e={:.2} std={:.2}",
+            "loss={:.4} gap={:.2} rank={:.2} pair={:.2} active={:.2} pos_e={:.2} neg_e={:.2} std={:.2}",
             self.loss / n, self.gap / n, self.rank / n,
+            self.pairwise / n, self.active / n,
             self.pos_e / n, self.neg_e / n, self.std / n,
         )
     }
@@ -217,6 +257,8 @@ impl RunningAvg {
             pos_energy_mean: self.pos_e / n,
             neg_energy_mean: self.neg_e / n,
             energy_std: self.std / n,
+            pairwise_acc: self.pairwise / n,
+            active_fraction: self.active / n,
         })
     }
 
@@ -425,6 +467,7 @@ pub fn train<B: AutodiffBackend>(
                 contrastive_val,
                 depth_val,
                 total_val,
+                config.margin,
             );
             running_avg.update(&step_metrics);
         }
@@ -456,9 +499,8 @@ pub fn train<B: AutodiffBackend>(
             let val_str = if let Some(val_s) = val_sampler {
                 let inner_device = device.clone();
                 let val_model = model.valid();
-                let n_val_batches = 8;
                 let mut val_avg = RunningAvg::new();
-                for _ in 0..n_val_batches {
+                for _ in 0..config.val_batches {
                     if let Some(vm) = eval_batch(
                         &val_model,
                         encode_fn,
@@ -577,6 +619,89 @@ pub fn train<B: AutodiffBackend>(
     )?;
 
     tracing::info!("Training complete. Final checkpoint saved (model + optimizer + meta).");
+
+    // Full validation evaluation with natural search distribution
+    if let Some(val_s) = val_sampler {
+        tracing::info!(
+            hard_ratio = config.final_val_hard_ratio,
+            medium_ratio = config.final_val_medium_ratio,
+            "Running full validation evaluation over entire val set..."
+        );
+        let val_model = model.valid();
+        let num_batches = (val_s.num_records() / config.batch_size).max(1);
+        let mut val_avg = RunningAvg::new();
+        let mut val_rng = rand::rngs::StdRng::from_entropy();
+        let eval_start = Instant::now();
+
+        for batch_idx in 0..num_batches {
+            let samples = val_s.sample_batch_with_ratios(
+                config.batch_size,
+                &mut val_rng,
+                config.final_val_hard_ratio,
+                config.final_val_medium_ratio,
+            );
+            if let Some(m) = eval_samples(
+                &val_model,
+                encode_fn,
+                &samples,
+                config.k_negatives,
+                config.depth_loss_weight,
+                config.loss_type,
+                config.margin,
+                device,
+            ) {
+                val_avg.update(&m);
+            }
+            if batch_idx % 50 == 0 && batch_idx > 0 {
+                tracing::info!(
+                    batch = batch_idx,
+                    total = num_batches,
+                    "Full validation progress: {}/{}",
+                    batch_idx,
+                    num_batches,
+                );
+            }
+        }
+
+        let eval_elapsed = eval_start.elapsed();
+        if let Some(final_metrics) = val_avg.avg_metrics() {
+            tracing::info!(
+                "\n==================================================\n\
+                 FINAL UNBIASED VALIDATION EVALUATION\n\
+                 ==================================================\n\
+                 Total Samples Evaluated : {}\n\
+                 Hard Negative Ratio     : {:.2}\n\
+                 Medium Negative Ratio   : {:.2}\n\
+                 Evaluation Time         : {:.1}s\n\
+                 --------------------------------------------------\n\
+                 Final Validation Rank   : {:.4}\n\
+                 Final Validation Gap    : {:.4}\n\
+                 Final Validation Loss   : {:.4}\n\
+                 Final Pairwise Accuracy : {:.4}\n\
+                 Average Pos Energy      : {:.4}\n\
+                 Average Neg Energy      : {:.4}\n\
+                 Energy Std              : {:.4}\n\
+                 ==================================================",
+                val_avg.count * config.batch_size,
+                config.final_val_hard_ratio,
+                config.final_val_medium_ratio,
+                eval_elapsed.as_secs_f64(),
+                final_metrics.rank_accuracy,
+                final_metrics.energy_gap,
+                final_metrics.loss,
+                final_metrics.pairwise_acc,
+                final_metrics.pos_energy_mean,
+                final_metrics.neg_energy_mean,
+                final_metrics.energy_std,
+            );
+            let warnings = final_metrics.health_check();
+            if !warnings.is_empty() {
+                tracing::warn!("Final validation health warnings: {:?}", warnings);
+            }
+        } else {
+            tracing::warn!("Full validation evaluation produced no metrics (all batches failed encoding)");
+        }
+    }
 
     Ok(model)
 }

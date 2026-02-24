@@ -159,6 +159,12 @@ pub struct TrainEbmArgs {
     pub medium_ratio: f64,
     /// Dropout probability for the energy head MLP.
     pub dropout: f64,
+    /// Number of validation batches to evaluate at each log interval.
+    pub val_batches: usize,
+    /// Hard ratio for final full-validation evaluation (natural search distribution).
+    pub final_val_hard_ratio: f64,
+    /// Medium ratio for final full-validation evaluation.
+    pub final_val_medium_ratio: f64,
 }
 
 /// Backend for EBM inference (no autodiff).
@@ -2341,7 +2347,10 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
         .with_k_negatives(args.k_negatives)
         .with_checkpoint_dir(output_dir_str.clone())
         .with_loss_type(loss_type)
-        .with_margin(args.margin);
+        .with_margin(args.margin)
+        .with_val_batches(args.val_batches)
+        .with_final_val_hard_ratio(args.final_val_hard_ratio)
+        .with_final_val_medium_ratio(args.final_val_medium_ratio);
 
     // 11. Train
     let _trained = ebm::train(

@@ -264,21 +264,30 @@ enum Command {
         /// If --resume-from is set but this is omitted, auto-detects the latest step.
         #[arg(long)]
         resume_step: Option<usize>,
-        /// Contrastive loss type: "info_nce" (default) or "margin_ranking".
-        #[arg(long, default_value = "info_nce")]
+        /// Contrastive loss type: "margin_ranking" (default) or "info_nce".
+        #[arg(long, default_value = "margin_ranking")]
         loss_type: String,
         /// Margin for margin ranking loss. Ignored when using info_nce.
         #[arg(long, default_value_t = 1.0)]
         margin: f64,
         /// Fraction of negatives sampled as hard (sibling) negatives.
-        #[arg(long, default_value_t = 0.3)]
+        #[arg(long, default_value_t = 0.6)]
         hard_ratio: f64,
         /// Fraction of negatives sampled as medium (same-theorem) negatives.
-        #[arg(long, default_value_t = 0.4)]
+        #[arg(long, default_value_t = 0.3)]
         medium_ratio: f64,
         /// Dropout probability for the energy head MLP.
-        #[arg(long, default_value_t = 0.1)]
+        #[arg(long, default_value_t = 0.2)]
         dropout: f64,
+        /// Number of validation batches to evaluate at each log interval.
+        #[arg(long, default_value_t = 40)]
+        val_batches: usize,
+        /// Hard ratio for final full-validation evaluation (natural search distribution).
+        #[arg(long, default_value_t = 0.1)]
+        final_val_hard_ratio: f64,
+        /// Medium ratio for final full-validation evaluation.
+        #[arg(long, default_value_t = 0.3)]
+        final_val_medium_ratio: f64,
     },
 }
 
@@ -453,6 +462,9 @@ async fn main() -> anyhow::Result<()> {
             hard_ratio,
             medium_ratio,
             dropout,
+            val_batches,
+            final_val_hard_ratio,
+            final_val_medium_ratio,
         } => {
             pipeline::run_train_ebm(TrainEbmArgs {
                 trajectories,
@@ -475,6 +487,9 @@ async fn main() -> anyhow::Result<()> {
                 hard_ratio,
                 medium_ratio,
                 dropout,
+                val_batches,
+                final_val_hard_ratio,
+                final_val_medium_ratio,
             })
             .await
         }

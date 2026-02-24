@@ -224,12 +224,26 @@ impl ContrastiveSampler {
         self
     }
 
-    /// Sample a single contrastive example.
+    /// Sample a single contrastive example using the sampler's configured ratios.
     ///
     /// Picks a random positive from an eligible theorem, then mines K negatives
     /// using the 3-tier hard/medium/easy strategy. If a tier is exhausted,
     /// overflows into the next tier (hard → medium → easy → all_negatives).
     pub fn sample(&self, rng: &mut impl Rng) -> ContrastiveSample {
+        self.sample_with_ratios(rng, self.hard_ratio, self.medium_ratio)
+    }
+
+    /// Sample a single contrastive example with explicit hard/medium ratios.
+    ///
+    /// Like [`sample`], but overrides the sampler's configured ratios for this
+    /// single draw. Useful for final validation with a different distribution
+    /// (e.g., natural search distribution) without cloning the sampler.
+    pub fn sample_with_ratios(
+        &self,
+        rng: &mut impl Rng,
+        hard_ratio: f64,
+        medium_ratio: f64,
+    ) -> ContrastiveSample {
         // Pick a random eligible theorem
         let theorem = self.index.eligible_theorems.choose(rng).unwrap();
 
@@ -239,8 +253,8 @@ impl ContrastiveSampler {
         let positive = self.records[pos_idx].clone();
 
         // Compute category counts
-        let n_hard = (self.k_negatives as f64 * self.hard_ratio).round() as usize;
-        let n_medium = (self.k_negatives as f64 * self.medium_ratio).round() as usize;
+        let n_hard = (self.k_negatives as f64 * hard_ratio).round() as usize;
+        let n_medium = (self.k_negatives as f64 * medium_ratio).round() as usize;
         let n_easy = self.k_negatives.saturating_sub(n_hard + n_medium);
 
         let mut negatives = Vec::with_capacity(self.k_negatives);
@@ -305,6 +319,19 @@ impl ContrastiveSampler {
         rng: &mut impl Rng,
     ) -> Vec<ContrastiveSample> {
         (0..batch_size).map(|_| self.sample(rng)).collect()
+    }
+
+    /// Sample a batch of contrastive examples with explicit hard/medium ratios.
+    pub fn sample_batch_with_ratios(
+        &self,
+        batch_size: usize,
+        rng: &mut impl Rng,
+        hard_ratio: f64,
+        medium_ratio: f64,
+    ) -> Vec<ContrastiveSample> {
+        (0..batch_size)
+            .map(|_| self.sample_with_ratios(rng, hard_ratio, medium_ratio))
+            .collect()
     }
 
     /// Extract all unique `state_pp` values from the records.

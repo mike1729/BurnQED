@@ -14,15 +14,18 @@
 # Steps: 1=encode embeddings (via encode server), 2=EBM training
 #
 # Environment variables:
-#   EBM_STEPS          Training steps (default: 50000)
+#   EBM_STEPS          Training steps (default: 75000)
 #   EBM_LR             Learning rate (default: 3e-5)
 #   EBM_RESUME         Resume mode: auto|none|/path/to/dir (default: auto)
 #   ENCODE_BATCH_SIZE  Batch size for encoding (default: 32)
 #   ENCODE_URL         Encode server URL (default: http://localhost:30001)
 #   HIDDEN_SIZE        Model hidden size (default: 4096)
-#   HARD_RATIO         Fraction of hard (sibling) negatives (default: 0.3)
-#   MEDIUM_RATIO       Fraction of medium (same-theorem) negatives (default: 0.4)
-#   DROPOUT            Dropout probability for energy head (default: 0.1)
+#   HARD_RATIO         Fraction of hard (sibling) negatives (default: 0.6)
+#   MEDIUM_RATIO       Fraction of medium (same-theorem) negatives (default: 0.3)
+#   DROPOUT            Dropout probability for energy head (default: 0.2)
+#   VAL_BATCHES        Number of validation batches per log interval (default: 40)
+#   FINAL_VAL_HARD_RATIO   Hard ratio for final unbiased validation (default: 0.1)
+#   FINAL_VAL_MEDIUM_RATIO Medium ratio for final unbiased validation (default: 0.3)
 #   START_STEP         Skip steps: 1=encode+train, 2=train only (default: 1)
 
 set -euo pipefail
@@ -45,16 +48,19 @@ EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
-EBM_STEPS="${EBM_STEPS:-50000}"
+EBM_STEPS="${EBM_STEPS:-75000}"
 EBM_LR="${EBM_LR:-3e-5}"
 EBM_RESUME="${EBM_RESUME:-auto}"
 ENCODE_BATCH_SIZE="${ENCODE_BATCH_SIZE:-32}"
 HIDDEN_SIZE="${HIDDEN_SIZE:-4096}"
-LOSS_TYPE="${LOSS_TYPE:-info_nce}"
+LOSS_TYPE="${LOSS_TYPE:-margin_ranking}"
 MARGIN="${MARGIN:-1}"
-HARD_RATIO="${HARD_RATIO:-0.3}"
-MEDIUM_RATIO="${MEDIUM_RATIO:-0.4}"
-DROPOUT="${DROPOUT:-0.1}"
+HARD_RATIO="${HARD_RATIO:-0.6}"
+MEDIUM_RATIO="${MEDIUM_RATIO:-0.3}"
+DROPOUT="${DROPOUT:-0.2}"
+VAL_BATCHES="${VAL_BATCHES:-40}"
+FINAL_VAL_HARD_RATIO="${FINAL_VAL_HARD_RATIO:-0.1}"
+FINAL_VAL_MEDIUM_RATIO="${FINAL_VAL_MEDIUM_RATIO:-0.3}"
 START_STEP="${START_STEP:-1}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
@@ -87,20 +93,33 @@ fi
 echo "================================================================"
 echo "  Expert Iteration ${ITER} — EBM Training"
 echo "================================================================"
-echo "  LLM model:       ${LLM_DIR}"
-echo "  EBM output:      ${EBM_DIR}"
-echo "  Embeddings:      ${EMBEDDINGS_FILE}"
-echo "  Trajectory files: ${#TRAJ_FILES[@]}"
-echo "  EBM steps:       ${EBM_STEPS}"
-echo "  EBM LR:          ${EBM_LR}"
-echo "  EBM resume:      ${EBM_RESUME}"
-echo "  Loss type:       ${LOSS_TYPE} (margin: ${MARGIN})"
-echo "  Hard ratio:      ${HARD_RATIO}"
-echo "  Medium ratio:    ${MEDIUM_RATIO}"
-echo "  Dropout:         ${DROPOUT}"
-echo "  Encode batch:    ${ENCODE_BATCH_SIZE}"
-echo "  Encode server:   ${ENCODE_URL}"
-echo "  Start step:      ${START_STEP} (1=encode, 2=train)"
+echo "  Paths"
+echo "    LLM model:          ${LLM_DIR}"
+echo "    EBM output:         ${EBM_DIR}"
+echo "    Embeddings:         ${EMBEDDINGS_FILE}"
+echo "    Trajectory files:   ${#TRAJ_FILES[@]}"
+echo "  Training"
+echo "    Steps:              ${EBM_STEPS}"
+echo "    Learning rate:      ${EBM_LR}"
+echo "    Batch size:         256"
+echo "    K negatives:        7"
+echo "    Loss type:          ${LOSS_TYPE} (margin: ${MARGIN})"
+echo "    Dropout:            ${DROPOUT}"
+echo "    Resume:             ${EBM_RESUME}"
+echo "  Negative Mining"
+echo "    Hard ratio:         ${HARD_RATIO}"
+echo "    Medium ratio:       ${MEDIUM_RATIO}"
+echo "    Easy ratio:         $(echo "1.0 - ${HARD_RATIO} - ${MEDIUM_RATIO}" | bc)"
+echo "  Validation"
+echo "    Val batches/log:    ${VAL_BATCHES} ($(( VAL_BATCHES * 256 )) samples)"
+echo "    Final val hard:     ${FINAL_VAL_HARD_RATIO}"
+echo "    Final val medium:   ${FINAL_VAL_MEDIUM_RATIO}"
+echo "  Encoding"
+echo "    Encode batch size:  ${ENCODE_BATCH_SIZE}"
+echo "    Encode server:      ${ENCODE_URL}"
+echo "    Hidden size:        ${HIDDEN_SIZE}"
+echo "  Control"
+echo "    Start step:         ${START_STEP} (1=encode, 2=train)"
 echo "================================================================"
 
 # ── Step 1: Encode Embeddings ──────────────────────────────────────────────
@@ -228,7 +247,10 @@ run_logged "$STEP_LOG" $PROVER train-ebm \
     --margin $MARGIN \
     --hard-ratio $HARD_RATIO \
     --medium-ratio $MEDIUM_RATIO \
-    --dropout $DROPOUT
+    --dropout $DROPOUT \
+    --val-batches $VAL_BATCHES \
+    --final-val-hard-ratio $FINAL_VAL_HARD_RATIO \
+    --final-val-medium-ratio $FINAL_VAL_MEDIUM_RATIO
 
 echo ""
 echo "================================================================"
