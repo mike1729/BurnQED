@@ -284,13 +284,21 @@ impl SearchEngine {
                 &prompts,
                 self.config.num_candidates,
             ).await?;
-            let gen_us = gen_start.elapsed().as_micros() as u64;
+            let gen_elapsed = gen_start.elapsed();
+            let gen_us = gen_elapsed.as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
             stats.gen_latencies_us.push(gen_us);
+            tracing::debug!(
+                expansion = nodes_expanded,
+                states = expand_batch.len(),
+                gen_ms = gen_elapsed.as_millis() as u64,
+                "Generate complete"
+            );
 
             // Expand each node in the batch.
             // Collect children needing EBM scoring for deferred batch scoring.
             let mut pending_scores: Vec<(usize, String)> = Vec::new();
+            let lean_batch_start = Instant::now();
 
             for (i, sn) in expand_batch.iter().enumerate() {
                 let node_idx = sn.node_index;
@@ -505,6 +513,14 @@ impl SearchEngine {
                 nodes_expanded += 1;
             }
 
+            let lean_elapsed = lean_batch_start.elapsed();
+            tracing::debug!(
+                expansion = nodes_expanded,
+                lean_ms = lean_elapsed.as_millis() as u64,
+                children = pending_scores.len(),
+                "Lean tactics complete"
+            );
+
             // Batch-score all deferred children from this expansion batch
             if let Some(scorer) = scorer {
                 if !pending_scores.is_empty() {
@@ -514,9 +530,16 @@ impl SearchEngine {
                         tracing::warn!(error = %e, "Batch scoring failed during expansion, using 0.0 defaults");
                         vec![0.0; states.len()]
                     });
-                    let ebm_us = ebm_start.elapsed().as_micros() as u64;
+                    let ebm_elapsed = ebm_start.elapsed();
+                    let ebm_us = ebm_elapsed.as_micros() as u64;
                     stats.total_ebm_time_ms += ebm_us / 1000;
                     stats.ebm_latencies_us.push(ebm_us);
+                    tracing::debug!(
+                        expansion = nodes_expanded,
+                        ebm_ms = ebm_elapsed.as_millis() as u64,
+                        scored = scores.len(),
+                        "EBM scoring complete"
+                    );
                     stats.ebm_score_calls += scores.len() as u32;
 
                     for ((idx, _), score) in pending_scores.iter().zip(scores) {

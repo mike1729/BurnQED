@@ -6,11 +6,11 @@ alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
-timeout_per_theorem = 120     # seconds (most theorems exhaust in <30s anyway)
+timeout_per_theorem = 60      # seconds (halved: most proofs that succeed do so in <30s)
 # No ebm_skip_easy. Always score with EBM when available.
 harvest_siblings = true       # Mine sibling states from proof path after finding proof
 batch_expansion_size = 8      # Pop 8 nodes from frontier per batch (saturates GPU)
-batch_encode_size = 8         # Max states per encode HTTP request (lower for nf4 VRAM)
+batch_encode_size = 16        # Max states per encode HTTP request (matches encode server --max-batch-size)
 # Full probes for Mathlib (simp/simp_all are useful closers). For miniF2F use search_minif2f.toml.
 
 [search.iteration_0]

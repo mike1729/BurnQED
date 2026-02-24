@@ -92,7 +92,7 @@ enum Command {
         #[arg(long)]
         min_steps: Option<usize>,
     },
-    /// Evaluate a model at multiple search budgets.
+    /// Evaluate a model on a theorem set.
     Eval {
         /// Path to search config TOML file.
         #[arg(long, default_value = "configs/search.toml")]
@@ -109,10 +109,10 @@ enum Command {
         /// Path to the theorem index JSON file.
         #[arg(long)]
         theorems: PathBuf,
-        /// Comma-separated list of node budgets to evaluate at.
-        #[arg(long, value_delimiter = ',', default_values_t = vec![100, 300, 600])]
-        budgets: Vec<u32>,
-        /// Number of attempts per theorem per budget (best-of-N).
+        /// Maximum number of search nodes per theorem.
+        #[arg(long, default_value_t = 600)]
+        max_nodes: u32,
+        /// Number of attempts per theorem (best-of-N).
         #[arg(long, default_value_t = 1)]
         pass_n: u32,
         /// Path to write JSON evaluation results.
@@ -358,7 +358,7 @@ async fn main() -> anyhow::Result<()> {
             ebm_path,
             encode_url,
             theorems,
-            budgets,
+            max_nodes,
             pass_n,
             output,
             num_workers,
@@ -384,7 +384,7 @@ async fn main() -> anyhow::Result<()> {
                     max_theorems,
                     imports,
                 },
-                budgets,
+                max_nodes,
                 pass_n,
                 output,
             })

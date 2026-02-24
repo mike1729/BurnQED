@@ -317,6 +317,7 @@ fn write_proved_theorem(dir: &std::path::Path, filename: &str, theorem: &str) ->
         wall_time_ms: 100,
         all_records: vec![root, n1, n2, n3],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     let labeled = TrajectoryWriter::from_search_result(&result);
@@ -704,13 +705,7 @@ async fn test_eval_mock_budgets() {
         ebm_path: Option<String>,
         benchmark: String,
         total_theorems: u32,
-        budget_results: Vec<BudgetResult>,
-        cumulative_solved: u32,
-        cumulative_rate: f64,
-    }
-    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    struct BudgetResult {
-        budget: u32,
+        max_nodes: u32,
         solved: u32,
         total: u32,
         rate: f64,
@@ -743,59 +738,35 @@ async fn test_eval_mock_budgets() {
         ..SearchConfig::default()
     };
 
-    // Evaluate at budgets [5, 10]
-    let budgets = vec![5u32, 10];
+    let engine = SearchEngine::new(config);
     let theorems = vec![
         ("true_trivial", "True"),
         ("nat_refl", "∀ (n : Nat), n = n"),
     ];
 
-    let mut budget_results = Vec::new();
-    let mut cumulative_solved_set = std::collections::HashSet::new();
+    let mut per_theorem = Vec::new();
+    let mut solved = 0u32;
 
-    for &budget in &budgets {
-        let mut search_config = config.clone();
-        search_config.max_nodes = budget;
-        let engine = SearchEngine::new(search_config);
+    for (name, stmt) in &theorems {
+        let result = engine
+            .search_one(&env, &policy, None, name, stmt)
+            .await
+            .unwrap();
 
-        let mut per_theorem = Vec::new();
-        let mut solved = 0u32;
-
-        for (name, stmt) in &theorems {
-            let result = engine
-                .search_one(&env, &policy, None, name, stmt)
-                .await
-                .unwrap();
-
-            let time_secs = result.wall_time_ms as f64 / 1000.0;
-            if result.proved {
-                solved += 1;
-                cumulative_solved_set.insert(name.to_string());
-            }
-            per_theorem.push(TheoremResult {
-                name: name.to_string(),
-                proved: result.proved,
-                nodes_used: result.nodes_expanded,
-                time_secs,
-            });
+        let time_secs = result.wall_time_ms as f64 / 1000.0;
+        if result.proved {
+            solved += 1;
         }
-
-        let total = theorems.len() as u32;
-        let rate = solved as f64 / total as f64;
-        budget_results.push(BudgetResult {
-            budget,
-            solved,
-            total,
-            rate,
-            avg_nodes: 0.0,
-            avg_time_secs: 0.0,
-            median_time_secs: 0.0,
-            per_theorem,
+        per_theorem.push(TheoremResult {
+            name: name.to_string(),
+            proved: result.proved,
+            nodes_used: result.nodes_expanded,
+            time_secs,
         });
     }
 
-    let cumulative_solved = cumulative_solved_set.len() as u32;
-    let cumulative_rate = cumulative_solved as f64 / theorems.len() as f64;
+    let total = theorems.len() as u32;
+    let rate = solved as f64 / total as f64;
 
     let iter_result = IterationResult {
         iteration: None,
@@ -803,29 +774,26 @@ async fn test_eval_mock_budgets() {
         llm_path: "test".to_string(),
         ebm_path: None,
         benchmark: "test".to_string(),
-        total_theorems: theorems.len() as u32,
-        budget_results,
-        cumulative_solved,
-        cumulative_rate,
+        total_theorems: total,
+        max_nodes: 5,
+        solved,
+        total,
+        rate,
+        avg_nodes: 0.0,
+        avg_time_secs: 0.0,
+        median_time_secs: 0.0,
+        per_theorem,
     };
 
     // Serialize and verify structure
     let json = serde_json::to_string_pretty(&iter_result).unwrap();
     let loaded: IterationResult = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(loaded.budget_results.len(), 2);
-    assert_eq!(loaded.budget_results[0].budget, 5);
-    assert_eq!(loaded.budget_results[1].budget, 10);
-
-    // true_trivial should be solved at both budgets
-    for br in &loaded.budget_results {
-        assert_eq!(br.total, 2);
-        assert_eq!(br.solved, 1); // only True is provable
-        assert!(br.per_theorem.iter().any(|t| t.name == "true_trivial" && t.proved));
-        assert!(br.per_theorem.iter().any(|t| t.name == "nat_refl" && !t.proved));
-    }
-
-    assert_eq!(loaded.cumulative_solved, 1);
+    assert_eq!(loaded.max_nodes, 5);
+    assert_eq!(loaded.total, 2);
+    assert_eq!(loaded.solved, 1); // only True is provable
+    assert!(loaded.per_theorem.iter().any(|t| t.name == "true_trivial" && t.proved));
+    assert!(loaded.per_theorem.iter().any(|t| t.name == "nat_refl" && !t.proved));
 }
 
 // ---------------------------------------------------------------------------
@@ -844,13 +812,7 @@ fn test_compare_two_results() {
         ebm_path: Option<String>,
         benchmark: String,
         total_theorems: u32,
-        budget_results: Vec<BudgetResult>,
-        cumulative_solved: u32,
-        cumulative_rate: f64,
-    }
-    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-    struct BudgetResult {
-        budget: u32,
+        max_nodes: u32,
         solved: u32,
         total: u32,
         rate: f64,
@@ -869,7 +831,7 @@ fn test_compare_two_results() {
 
     let tmp = tempfile::TempDir::new().unwrap();
 
-    let make_result = |iteration: u32, rate100: f64, rate300: f64| -> IterationResult {
+    let make_result = |iteration: u32, max_nodes: u32, rate: f64| -> IterationResult {
         IterationResult {
             iteration: Some(iteration),
             timestamp: format!("2026-01-0{}T00:00:00Z", iteration + 1),
@@ -877,35 +839,19 @@ fn test_compare_two_results() {
             ebm_path: None,
             benchmark: "data/test.json".to_string(),
             total_theorems: 10,
-            budget_results: vec![
-                BudgetResult {
-                    budget: 100,
-                    solved: (rate100 * 10.0) as u32,
-                    total: 10,
-                    rate: rate100,
-                    avg_nodes: 50.0,
-                    avg_time_secs: 5.0,
-                    median_time_secs: 4.0,
-                    per_theorem: vec![],
-                },
-                BudgetResult {
-                    budget: 300,
-                    solved: (rate300 * 10.0) as u32,
-                    total: 10,
-                    rate: rate300,
-                    avg_nodes: 150.0,
-                    avg_time_secs: 15.0,
-                    median_time_secs: 12.0,
-                    per_theorem: vec![],
-                },
-            ],
-            cumulative_solved: (rate300 * 10.0) as u32,
-            cumulative_rate: rate300,
+            max_nodes,
+            solved: (rate * 10.0) as u32,
+            total: 10,
+            rate,
+            avg_nodes: 50.0,
+            avg_time_secs: 5.0,
+            median_time_secs: 4.0,
+            per_theorem: vec![],
         }
     };
 
-    let r0 = make_result(0, 0.25, 0.40);
-    let r1 = make_result(1, 0.30, 0.45);
+    let r0 = make_result(0, 300, 0.25);
+    let r1 = make_result(1, 300, 0.30);
 
     let path0 = tmp.path().join("eval_0.json");
     let path1 = tmp.path().join("eval_1.json");
@@ -920,14 +866,10 @@ fn test_compare_two_results() {
 
     assert_eq!(loaded0.iteration, Some(0));
     assert_eq!(loaded1.iteration, Some(1));
-    assert_eq!(loaded0.budget_results.len(), 2);
-    assert_eq!(loaded1.budget_results.len(), 2);
 
-    // Verify deltas can be computed
-    let delta_100 = loaded1.budget_results[0].rate - loaded0.budget_results[0].rate;
-    let delta_300 = loaded1.budget_results[1].rate - loaded0.budget_results[1].rate;
-    assert!((delta_100 - 0.05).abs() < 1e-9);
-    assert!((delta_300 - 0.05).abs() < 1e-9);
+    // Verify delta can be computed
+    let delta = loaded1.rate - loaded0.rate;
+    assert!((delta - 0.05).abs() < 1e-9);
 }
 
 // ---------------------------------------------------------------------------

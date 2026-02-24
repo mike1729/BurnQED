@@ -397,6 +397,9 @@ impl SglangClient {
             }
         }
 
+        // Scale timeout with batch size: ~0.5s per prompt, clamped to [15, 120]s
+        let timeout_secs = ((flat_prompts.len() as u64) / 2).clamp(15, 120);
+
         let request = BatchGenerateRequest {
             text: flat_prompts,
             sampling_params: SamplingParams {
@@ -411,7 +414,7 @@ impl SglangClient {
 
         let url = self.base_url.join("/generate")?;
         let resp = self
-            .post_with_retry(&url, &request, Some(Duration::from_secs(30)))
+            .post_with_retry(&url, &request, Some(Duration::from_secs(timeout_secs)))
             .await?;
         let body: serde_json::Value = resp.json().await.map_err(|e| {
             anyhow::anyhow!("Failed to decode SGLang batch generate response: {e}")

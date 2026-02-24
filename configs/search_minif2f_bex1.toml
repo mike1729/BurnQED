@@ -1,5 +1,5 @@
 [search]
-max_nodes = 300
+max_nodes = 600
 max_depth = 50
 num_candidates = 16           # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
@@ -8,7 +8,7 @@ llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% E
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
 timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ observed)
 harvest_siblings = true       # Mine sibling states from proof path after finding proof
-batch_expansion_size = 2      # Pop 2 nodes per batch — smaller batches pipeline better with high concurrency
+batch_expansion_size = 1      # Pop 1 node — minimize SGLang batch size to reduce gen latency
 batch_encode_size = 16        # Max states per encode HTTP request (dedicated GPU has headroom)
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
 probe_tactics = ["ring", "omega", "norm_num", "trivial", "rfl", "tauto", "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left", "right", "ext"]

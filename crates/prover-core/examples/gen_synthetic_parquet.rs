@@ -49,6 +49,7 @@ fn make_proved_result(theorem: &str) -> SearchResult {
         wall_time_ms: 100,
         all_records: vec![root, n1, n2, n3],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     }
 }
 
@@ -66,6 +67,7 @@ fn make_unproved_result(theorem: &str) -> SearchResult {
         wall_time_ms: 50,
         all_records: vec![root, n1],
         stats: SearchStats::default(),
+        failure_reason: "budget_exhausted".to_string(),
     }
 }
 

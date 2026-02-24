@@ -94,6 +94,20 @@ else
         MAX_FLAG="--max-theorems $MAX_THEOREMS"
     fi
 
+    # Auto-resume from partial trajectory if it exists.
+    # The prover only merges when --resume-from differs from --output,
+    # so we copy the old file to a .resume temp path.
+    RESUME_FLAG=""
+    RESUME_TMP="${TRAJ_OUTPUT%.parquet}.resume.parquet"
+    if [ -f "$TRAJ_OUTPUT" ] && [ -s "$TRAJ_OUTPUT" ]; then
+        DONE_COUNT=$(python3 -c "import pyarrow.parquet as pq; t = pq.read_table('$TRAJ_OUTPUT', columns=['theorem_name']); print(len(set(t.column('theorem_name').to_pylist())))" 2>/dev/null || echo "0")
+        if [ "$DONE_COUNT" -gt 0 ]; then
+            cp "$TRAJ_OUTPUT" "$RESUME_TMP"
+            echo "  Resuming from partial trajectory: ${TRAJ_OUTPUT} (${DONE_COUNT} theorems done)"
+            RESUME_FLAG="--resume-from $RESUME_TMP"
+        fi
+    fi
+
     # shellcheck disable=SC2086
     run_logged "$STEP_LOG" $PROVER search \
         --config $SEARCH_CONFIG \
@@ -105,8 +119,12 @@ else
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
         --num-candidates 16 \
+        $RESUME_FLAG \
         $MAX_FLAG \
         --imports Mathlib
+
+    # Clean up resume temp file
+    rm -f "$RESUME_TMP"
 
     # ── Step 2b: Noise injection search (iteration 0 only) ────────────────
     if [ "$ITER" -eq 0 ]; then

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Results from evaluating a model at multiple search budgets.
+/// Results from evaluating a model on a theorem set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IterationResult {
     /// Expert iteration number (None for baseline evaluation).
@@ -17,20 +17,9 @@ pub struct IterationResult {
     pub benchmark: String,
     /// Total number of theorems in the benchmark.
     pub total_theorems: u32,
-    /// Results at each search budget level.
-    pub budget_results: Vec<BudgetResult>,
-    /// Number of theorems solved at ANY budget.
-    pub cumulative_solved: u32,
-    /// Fraction of theorems solved at any budget.
-    pub cumulative_rate: f64,
-}
-
-/// Results for a single search budget level.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BudgetResult {
-    /// Maximum node budget for this evaluation.
-    pub budget: u32,
-    /// Number of theorems proved within budget.
+    /// Maximum search nodes per theorem.
+    pub max_nodes: u32,
+    /// Number of theorems proved.
     pub solved: u32,
     /// Total theorems attempted.
     pub total: u32,
@@ -42,11 +31,11 @@ pub struct BudgetResult {
     pub avg_time_secs: f64,
     /// Median wall-clock time per theorem in seconds.
     pub median_time_secs: f64,
-    /// Per-theorem results at this budget.
+    /// Per-theorem results.
     pub per_theorem: Vec<TheoremResult>,
 }
 
-/// Result for a single theorem at a single budget.
+/// Result for a single theorem.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TheoremResult {
     /// Theorem name.
@@ -107,47 +96,28 @@ mod tests {
             ebm_path: Some("checkpoints/ebm".to_string()),
             benchmark: "data/test.json".to_string(),
             total_theorems: 10,
-            budget_results: vec![BudgetResult {
-                budget: 100,
-                solved: 5,
-                total: 10,
-                rate: 0.5,
-                avg_nodes: 42.0,
-                avg_time_secs: 3.5,
-                median_time_secs: 3.0,
-                per_theorem: vec![TheoremResult {
-                    name: "thm1".to_string(),
-                    proved: true,
-                    nodes_used: 42,
-                    time_secs: 3.5,
-                }],
+            max_nodes: 100,
+            solved: 5,
+            total: 10,
+            rate: 0.5,
+            avg_nodes: 42.0,
+            avg_time_secs: 3.5,
+            median_time_secs: 3.0,
+            per_theorem: vec![TheoremResult {
+                name: "thm1".to_string(),
+                proved: true,
+                nodes_used: 42,
+                time_secs: 3.5,
+                failure_reason: String::new(),
             }],
-            cumulative_solved: 5,
-            cumulative_rate: 0.5,
         };
 
         let json = serde_json::to_string_pretty(&result).unwrap();
         let loaded: IterationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.iteration, Some(1));
         assert_eq!(loaded.total_theorems, 10);
-        assert_eq!(loaded.budget_results.len(), 1);
-        assert_eq!(loaded.budget_results[0].budget, 100);
-        assert_eq!(loaded.budget_results[0].per_theorem[0].name, "thm1");
-    }
-
-    #[test]
-    fn test_budget_result_rate_computation() {
-        let br = BudgetResult {
-            budget: 300,
-            solved: 7,
-            total: 20,
-            rate: 7.0 / 20.0,
-            avg_nodes: 150.0,
-            avg_time_secs: 10.0,
-            median_time_secs: 8.5,
-            per_theorem: vec![],
-        };
-        assert!((br.rate - 0.35).abs() < 1e-9);
+        assert_eq!(loaded.max_nodes, 100);
+        assert_eq!(loaded.per_theorem[0].name, "thm1");
     }
 
     #[test]

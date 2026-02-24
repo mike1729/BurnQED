@@ -25,7 +25,7 @@ use search::{
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
-use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
+use crate::results::{median, IterationResult, TheoremResult};
 
 /// Shared arguments for search-based commands (search, eval).
 #[derive(Debug)]
@@ -83,9 +83,9 @@ pub struct SummaryArgs {
 #[derive(Debug)]
 pub struct EvalArgs {
     pub common: CommonSearchArgs,
-    /// Node budgets to evaluate at (sorted ascending).
-    pub budgets: Vec<u32>,
-    /// Number of attempts per theorem per budget (best-of-N).
+    /// Maximum number of search nodes per theorem.
+    pub max_nodes: u32,
+    /// Number of attempts per theorem (best-of-N).
     pub pass_n: u32,
     /// Path to write JSON evaluation results.
     pub output: Option<PathBuf>,
@@ -336,12 +336,15 @@ async fn setup_search(
 ) -> anyhow::Result<SearchSetup> {
     let concurrency = common.concurrency.max(1);
 
+    // Default num_workers to concurrency when unset (each concurrent theorem needs a Lean worker)
+    let num_workers = common.num_workers.or(Some(concurrency));
+
     let (mut search_config, loaded) = load_policy_and_ebm(
         &common.config,
         &common.server_url,
         common.ebm_path.as_deref(),
         common.encode_url.as_deref(),
-        common.num_workers,
+        num_workers,
         temperature,
         common.max_tactic_tokens,
         common.imports.as_deref(),
@@ -350,12 +353,9 @@ async fn setup_search(
     )
     .await?;
 
-    // Apply CLI override for num_candidates, or EBM default
+    // Apply CLI override for num_candidates (otherwise use TOML value as-is)
     if let Some(n) = common.num_candidates {
         search_config.num_candidates = n;
-    } else if common.ebm_path.is_some() {
-        tracing::info!("EBM active — defaulting num_candidates to 8");
-        search_config.num_candidates = 8;
     }
 
     // Load theorem index
@@ -681,8 +681,8 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     // EBM-active overrides: more candidates + higher temperature for diversity
     let temperature = args.temperature.or_else(|| {
         args.common.ebm_path.as_ref().map(|_| {
-            tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
-            1.0
+            tracing::info!("EBM active — defaulting temperature to 1.2 for candidate diversity");
+            1.2
         })
     });
 
@@ -739,13 +739,18 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let pb = make_progress_bar(total, 40);
     pb.set_message("?");
 
-    // CTRL-C via AtomicBool — shared across spawned tasks
+    // CTRL-C via AtomicBool — shared across spawned tasks.
+    // First Ctrl-C: graceful stop (finish in-flight, flush after each).
+    // Second Ctrl-C: hard exit (process terminates).
     let interrupted = Arc::new(AtomicBool::new(false));
     let sig_flag = interrupted.clone();
     tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
         sig_flag.store(true, Ordering::Relaxed);
-        tracing::warn!("Interrupted by CTRL-C, finishing in-flight searches");
+        tracing::warn!("Ctrl-C received, finishing in-flight searches (press again to force quit)");
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::error!("Second Ctrl-C, exiting immediately");
+        std::process::exit(1);
     });
 
     let inference_label = setup.inference_label;
@@ -850,14 +855,18 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
     // Closure that collects a search outcome + periodic auto-save / progress.
     // flush_err tracks any auto-save I/O error to propagate after the loop.
+    // When interrupted, flush after every result so Ctrl-C never loses data.
     let mut flush_err: Option<anyhow::Error> = None;
     let mut collect_and_save = |outcome: SearchOutcome| {
         collect_search(outcome, &mut agg, &mut writer, &pb, total);
+        let is_interrupted = interrupted.load(Ordering::Relaxed);
         const AUTOSAVE_INTERVAL: u32 = 50;
-        if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
+        let should_flush = is_interrupted
+            || (agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0);
+        if should_flush {
             if let Err(e) = writer.flush_partial() {
                 flush_err = Some(e.into());
-            } else {
+            } else if !is_interrupted {
                 tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
             }
         }
@@ -1644,245 +1653,198 @@ struct EvalOutcome {
     total_nodes: f64,
 }
 
-/// Evaluate a model at multiple search budgets, printing a formatted table
-/// and optionally writing JSON results.
-///
-/// Budgets are processed sequentially (cumulative_solved_set accumulates across
-/// budgets). Within each budget, theorem searches run in parallel bounded by
-/// the `concurrency` semaphore.
+/// Evaluate a model on a theorem set, printing a summary table and optionally
+/// writing JSON results.
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let concurrency = args.common.concurrency.max(1);
+    let max_nodes = args.max_nodes;
 
     // EBM-active overrides: temperature for diversity (no CLI override for eval)
     let temperature = if args.common.ebm_path.is_some() {
-        tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
-        Some(1.0)
+        tracing::info!("EBM active — defaulting temperature to 1.2 for candidate diversity");
+        Some(1.2)
     } else {
         None
     };
 
     let setup = setup_search(&args.common, temperature).await?;
 
-    let mut budgets = args.budgets;
-    budgets.sort();
-    budgets.dedup();
-
     let total = setup.index.len() as u32;
-    let mut budget_results = Vec::new();
-    let mut cumulative_solved_set: HashSet<String> = HashSet::new();
 
     let inference_label = setup.inference_label;
     let pool = setup.pool;
     let policy = setup.policy;
     let value_fn = setup.value_fn;
-    let base_config = setup.config;
+    let mut search_config = setup.config;
+    search_config.max_nodes = max_nodes;
+    let engine = SearchEngine::new(search_config);
     let index = setup.index;
     let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
-    for &budget in &budgets {
-        tracing::info!(budget, "Evaluating at budget");
+    tracing::info!(max_nodes, "Evaluating");
 
-        let mut search_config = base_config.clone();
-        search_config.max_nodes = budget;
-        let engine = SearchEngine::new(search_config);
+    let pb = make_progress_bar(total, 30);
+    let eval_start = Instant::now();
 
-        let pb = make_progress_bar(total, 30);
-        let budget_start = Instant::now();
+    let mut join_set = tokio::task::JoinSet::new();
+    let pass_n = args.pass_n;
 
-        // Interleaved spawn + collect: drain completed tasks before each spawn
-        // so the progress bar updates in real time.
-        let mut join_set = tokio::task::JoinSet::new();
-        let pass_n = args.pass_n;
+    let mut per_theorem = Vec::new();
+    let mut solved = 0u32;
+    let mut errors = 0u32;
+    let mut timeouts = 0u32;
+    let mut all_times: Vec<f64> = Vec::new();
+    let mut total_nodes_sum: f64 = 0.0;
+    let mut solved_set: HashSet<String> = HashSet::new();
 
-        let mut per_theorem = Vec::new();
-        let mut solved = 0u32;
-        let mut errors = 0u32;
-        let mut timeouts = 0u32;
-        let mut all_times: Vec<f64> = Vec::new();
-        let mut total_nodes_sum: f64 = 0.0;
-
-        /// Process one completed eval outcome into accumulators.
-        fn collect_eval(
-            outcome: EvalOutcome,
-            per_theorem: &mut Vec<TheoremResult>,
-            solved: &mut u32,
-            errors: &mut u32,
-            timeouts: &mut u32,
-            all_times: &mut Vec<f64>,
-            total_nodes_sum: &mut f64,
-            cumulative_solved_set: &mut HashSet<String>,
-            pb: &ProgressBar,
-            budget_start: Instant,
-            total: u32,
-        ) {
-            if outcome.best.proved {
-                *solved += 1;
-                cumulative_solved_set.insert(outcome.name);
-            } else {
-                match outcome.best.failure_reason.as_str() {
-                    "error" => *errors += 1,
-                    "timeout" => *timeouts += 1,
-                    _ => {} // budget_exhausted, frontier_exhausted counted as regular fails
-                }
-            }
-            all_times.extend(outcome.times);
-            *total_nodes_sum += outcome.total_nodes;
-            per_theorem.push(outcome.best);
-            pb.inc(1);
-            let done = pb.position() as u32;
-            let elapsed = budget_start.elapsed().as_secs_f64();
-            let fail = done - *solved - *errors - *timeouts;
-            let rate_pct = if done > 0 { *solved as f64 / done as f64 * 100.0 } else { 0.0 };
-            let thm_per_min = if elapsed > 0.0 { done as f64 / elapsed * 60.0 } else { 0.0 };
-            let avg_nodes = if done > 0 { *total_nodes_sum / done as f64 } else { 0.0 };
-            pb.set_prefix(format!(
-                "proved={solved} fail={fail} timeout={timeouts} err={errors} | {rate_pct:.1}% {thm_per_min:.1}thm/m avg_n={avg_nodes:.0}"
-            ));
-            if done > 0 {
-                let remaining = elapsed * (total - done) as f64 / done as f64;
-                let eta = if remaining < 60.0 {
-                    format!("{:.0}s", remaining)
-                } else if remaining < 3600.0 {
-                    format!("{:.0}m", remaining / 60.0)
-                } else {
-                    format!("{:.1}h", remaining / 3600.0)
-                };
-                pb.set_message(eta);
+    /// Process one completed eval outcome into accumulators.
+    fn collect_eval(
+        outcome: EvalOutcome,
+        per_theorem: &mut Vec<TheoremResult>,
+        solved: &mut u32,
+        errors: &mut u32,
+        timeouts: &mut u32,
+        all_times: &mut Vec<f64>,
+        total_nodes_sum: &mut f64,
+        solved_set: &mut HashSet<String>,
+        pb: &ProgressBar,
+        eval_start: Instant,
+        total: u32,
+    ) {
+        if outcome.best.proved {
+            *solved += 1;
+            solved_set.insert(outcome.name);
+        } else {
+            match outcome.best.failure_reason.as_str() {
+                "error" => *errors += 1,
+                "timeout" => *timeouts += 1,
+                _ => {}
             }
         }
+        all_times.extend(outcome.times);
+        *total_nodes_sum += outcome.total_nodes;
+        per_theorem.push(outcome.best);
+        pb.inc(1);
+        let done = pb.position() as u32;
+        let elapsed = eval_start.elapsed().as_secs_f64();
+        let fail = done - *solved - *errors - *timeouts;
+        let rate_pct = if done > 0 { *solved as f64 / done as f64 * 100.0 } else { 0.0 };
+        let thm_per_min = if elapsed > 0.0 { done as f64 / elapsed * 60.0 } else { 0.0 };
+        let avg_nodes = if done > 0 { *total_nodes_sum / done as f64 } else { 0.0 };
+        pb.set_prefix(format!(
+            "proved={solved} fail={fail} timeout={timeouts} err={errors} | {rate_pct:.1}% {thm_per_min:.1}thm/m avg_n={avg_nodes:.0}"
+        ));
+        if done > 0 {
+            let remaining = elapsed * (total - done) as f64 / done as f64;
+            let eta = if remaining < 60.0 {
+                format!("{:.0}s", remaining)
+            } else if remaining < 3600.0 {
+                format!("{:.0}m", remaining / 60.0)
+            } else {
+                format!("{:.1}h", remaining / 3600.0)
+            };
+            pb.set_message(eta);
+        }
+    }
 
-        let mut collect = |outcome: EvalOutcome| {
-            collect_eval(
-                outcome, &mut per_theorem, &mut solved, &mut errors,
-                &mut timeouts, &mut all_times, &mut total_nodes_sum,
-                &mut cumulative_solved_set, &pb, budget_start, total,
-            );
-        };
+    let mut collect = |outcome: EvalOutcome| {
+        collect_eval(
+            outcome, &mut per_theorem, &mut solved, &mut errors,
+            &mut timeouts, &mut all_times, &mut total_nodes_sum,
+            &mut solved_set, &pb, eval_start, total,
+        );
+    };
 
-        for task in &index.theorems {
-            // Drain completed tasks before waiting for a permit
-            drain_join_set(&mut join_set, false, &mut collect).await;
+    for task in &index.theorems {
+        drain_join_set(&mut join_set, false, &mut collect).await;
 
-            let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
+        let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
 
-            let pool = Arc::clone(&pool);
-            let policy = Arc::clone(&policy);
-            let value_fn = value_fn.clone();
-            let engine = engine.clone();
-            let name = task.name.clone();
-            let statement = task.statement.clone();
+        let pool = Arc::clone(&pool);
+        let policy = Arc::clone(&policy);
+        let value_fn = value_fn.clone();
+        let engine = engine.clone();
+        let name = task.name.clone();
+        let statement = task.statement.clone();
 
-            join_set.spawn(async move {
-                let _permit = permit;
-                let mut best: Option<TheoremResult> = None;
-                let mut times = Vec::new();
-                let mut total_nodes = 0.0;
-                for _ in 0..pass_n {
-                    let scorer_ref: Option<&dyn search::ValueScorer> =
-                        value_fn.as_deref().map(|v| v as &dyn search::ValueScorer);
-                    match engine
-                        .search_one(&pool, &*policy, scorer_ref, &name, &statement)
-                        .await
-                    {
-                        Ok(result) => {
-                            let time_secs = result.wall_time_ms as f64 / 1000.0;
-                            times.push(time_secs);
-                            total_nodes += result.nodes_expanded as f64;
-                            let tr = TheoremResult {
+        join_set.spawn(async move {
+            let _permit = permit;
+            let mut best: Option<TheoremResult> = None;
+            let mut times = Vec::new();
+            let mut total_nodes = 0.0;
+            for _ in 0..pass_n {
+                let scorer_ref: Option<&dyn search::ValueScorer> =
+                    value_fn.as_deref().map(|v| v as &dyn search::ValueScorer);
+                match engine
+                    .search_one(&pool, &*policy, scorer_ref, &name, &statement)
+                    .await
+                {
+                    Ok(result) => {
+                        let time_secs = result.wall_time_ms as f64 / 1000.0;
+                        times.push(time_secs);
+                        total_nodes += result.nodes_expanded as f64;
+                        let tr = TheoremResult {
+                            name: name.clone(),
+                            proved: result.proved,
+                            nodes_used: result.nodes_expanded,
+                            time_secs,
+                            failure_reason: result.failure_reason.clone(),
+                        };
+                        best = Some(match best {
+                            None => tr,
+                            Some(prev) if !prev.proved && tr.proved => tr,
+                            Some(prev) => prev,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::debug!(theorem = name, error = %e, "Eval search failed");
+                        if best.is_none() {
+                            best = Some(TheoremResult {
                                 name: name.clone(),
-                                proved: result.proved,
-                                nodes_used: result.nodes_expanded,
-                                time_secs,
-                                failure_reason: result.failure_reason.clone(),
-                            };
-                            best = Some(match best {
-                                None => tr,
-                                Some(prev) if !prev.proved && tr.proved => tr,
-                                Some(prev) => prev,
+                                proved: false,
+                                nodes_used: 0,
+                                time_secs: 0.0,
+                                failure_reason: "error".to_string(),
                             });
-                        }
-                        Err(e) => {
-                            tracing::debug!(theorem = name, error = %e, "Eval search failed");
-                            if best.is_none() {
-                                best = Some(TheoremResult {
-                                    name: name.clone(),
-                                    proved: false,
-                                    nodes_used: 0,
-                                    time_secs: 0.0,
-                                    failure_reason: "error".to_string(),
-                                });
-                            }
                         }
                     }
                 }
+            }
 
-                EvalOutcome {
-                    name,
-                    best: best.unwrap_or_else(|| TheoremResult {
-                        name: String::new(),
-                        proved: false,
-                        nodes_used: 0,
-                        time_secs: 0.0,
-                        failure_reason: "error".to_string(),
-                    }),
-                    times,
-                    total_nodes,
-                }
-            });
-        }
-
-        // Final drain: collect remaining in-flight tasks
-        drain_join_set(&mut join_set, true, &mut collect).await;
-
-        pb.finish_and_clear();
-
-        let rate = if total > 0 {
-            solved as f64 / total as f64
-        } else {
-            0.0
-        };
-        let n_attempts = all_times.len().max(1) as f64;
-        let avg_nodes = total_nodes_sum / n_attempts;
-        let avg_time_secs = all_times.iter().sum::<f64>() / n_attempts;
-        let median_time_secs = median(&mut all_times);
-
-        budget_results.push(BudgetResult {
-            budget,
-            solved,
-            total,
-            rate,
-            avg_nodes,
-            avg_time_secs,
-            median_time_secs,
-            per_theorem,
+            EvalOutcome {
+                name,
+                best: best.unwrap_or_else(|| TheoremResult {
+                    name: String::new(),
+                    proved: false,
+                    nodes_used: 0,
+                    time_secs: 0.0,
+                    failure_reason: "error".to_string(),
+                }),
+                times,
+                total_nodes,
+            }
         });
     }
 
-    let cumulative_solved = cumulative_solved_set.len() as u32;
-    let cumulative_rate = if total > 0 {
-        cumulative_solved as f64 / total as f64
-    } else {
-        0.0
-    };
+    drain_join_set(&mut join_set, true, &mut collect).await;
+    pb.finish_and_clear();
 
-    // Print formatted table
+    let rate = if total > 0 { solved as f64 / total as f64 } else { 0.0 };
+    let n_attempts = all_times.len().max(1) as f64;
+    let avg_nodes = total_nodes_sum / n_attempts;
+    let avg_time_secs = all_times.iter().sum::<f64>() / n_attempts;
+    let median_time_secs = median(&mut all_times);
+
+    // Print summary
     println!();
-    println!("┌──────────┬───────────┬──────────┬───────────┬───────────┐");
-    println!("│ Budget   │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
-    println!("├──────────┼───────────┼──────────┼───────────┼───────────┤");
-    for br in &budget_results {
-        println!(
-            "│ {:<8} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
-            br.budget, br.solved, br.total, br.rate * 100.0, br.avg_nodes, br.avg_time_secs
-        );
-    }
-    println!("└──────────┴───────────┴──────────┴───────────┴───────────┘");
+    println!("┌───────────┬───────────┬──────────┬───────────┬───────────┐");
+    println!("│ Max Nodes │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
+    println!("├───────────┼───────────┼──────────┼───────────┼───────────┤");
     println!(
-        "Cumulative (any budget): {}/{} ({:.1}%)",
-        cumulative_solved,
-        total,
-        cumulative_rate * 100.0
+        "│ {:<9} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
+        max_nodes, solved, total, rate * 100.0, avg_nodes, avg_time_secs
     );
+    println!("└───────────┴───────────┴──────────┴───────────┴───────────┘");
 
     // Shutdown pool
     pool.shutdown().await;
@@ -1895,9 +1857,14 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         ebm_path: args.common.ebm_path.map(|p| p.display().to_string()),
         benchmark: args.common.theorems.display().to_string(),
         total_theorems: total,
-        budget_results,
-        cumulative_solved,
-        cumulative_rate,
+        max_nodes,
+        solved,
+        total,
+        rate,
+        avg_nodes,
+        avg_time_secs,
+        median_time_secs,
+        per_theorem,
     };
 
     let output_path = args
@@ -1931,80 +1898,30 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Find common budgets across all results
-    let common_budgets: Vec<u32> = if let Some(first) = results.first() {
-        first
-            .budget_results
-            .iter()
-            .map(|br| br.budget)
-            .filter(|b| {
-                results
-                    .iter()
-                    .all(|r| r.budget_results.iter().any(|br| br.budget == *b))
-            })
-            .collect()
-    } else {
-        vec![]
-    };
-
     // Print header
-    print!("{:<12}", "Iteration");
-    for b in &common_budgets {
-        print!("│ Budget {:<5}", b);
-    }
-    println!("│ Cumulative");
-
-    let sep_width = 12 + common_budgets.len() * 14 + 14;
+    println!("{:<12}│ Max Nodes │ Solved    │ Rate     │ Avg Nodes │ Avg Time", "Iteration");
+    let sep_width = 72;
     println!("{}", "─".repeat(sep_width));
 
-    // Print each result row
     for (i, r) in results.iter().enumerate() {
         let label = r
             .iteration
             .map(|n| format!("{n}"))
             .unwrap_or_else(|| format!("{i}"));
-        print!("{:<12}", label);
-        for b in &common_budgets {
-            if let Some(br) = r.budget_results.iter().find(|br| br.budget == *b) {
-                print!("│ {:>5.1}%      ", br.rate * 100.0);
-            } else {
-                print!("│ {:>12}", "N/A");
-            }
-        }
-        println!("│ {:>5.1}%", r.cumulative_rate * 100.0);
+        println!(
+            "{:<12}│ {:<9} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s",
+            label, r.max_nodes, r.solved, r.total, r.rate * 100.0, r.avg_nodes, r.avg_time_secs
+        );
     }
 
     // Print delta row if there are exactly 2 results
     if results.len() == 2 {
         println!("{}", "─".repeat(sep_width));
         let (r0, r1) = (&results[0], &results[1]);
-        let l0 = r0
-            .iteration
-            .map(|n| format!("{n}"))
-            .unwrap_or_else(|| "0".to_string());
-        let l1 = r1
-            .iteration
-            .map(|n| format!("{n}"))
-            .unwrap_or_else(|| "1".to_string());
-        print!("Δ ({l0}→{l1})    ");
-        for b in &common_budgets {
-            let rate0 = r0
-                .budget_results
-                .iter()
-                .find(|br| br.budget == *b)
-                .map(|br| br.rate)
-                .unwrap_or(0.0);
-            let rate1 = r1
-                .budget_results
-                .iter()
-                .find(|br| br.budget == *b)
-                .map(|br| br.rate)
-                .unwrap_or(0.0);
-            let delta = (rate1 - rate0) * 100.0;
-            print!("│ {:>+5.1}%      ", delta);
-        }
-        let cum_delta = (r1.cumulative_rate - r0.cumulative_rate) * 100.0;
-        println!("│ {:>+5.1}%", cum_delta);
+        let l0 = r0.iteration.map(|n| format!("{n}")).unwrap_or_else(|| "0".to_string());
+        let l1 = r1.iteration.map(|n| format!("{n}")).unwrap_or_else(|| "1".to_string());
+        let delta = (r1.rate - r0.rate) * 100.0;
+        println!("Δ ({l0}→{l1})    │           │           │ {:>+5.1}%   │", delta);
     }
 
     Ok(())
