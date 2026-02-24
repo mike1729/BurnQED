@@ -408,6 +408,7 @@ fn test_metrics_history_simulated_training() {
             contrastive_loss,
             0.01,
             contrastive_loss + 0.01,
+            1.0,
         );
 
         history.push(step, metrics);

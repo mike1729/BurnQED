@@ -49,8 +49,11 @@ EVAL_MAX_THEOREMS_TRAIN="${EVAL_MAX_THEOREMS_TRAIN:-100}"
 CONCURRENCY="${CONCURRENCY:-4}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 TRAIN_EVAL_THEOREMS="${REPO_ROOT}/data/train_eval_theorems.json"
-MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
+MINIF2F="${REPO_ROOT}/data/minif2f_v2s_test.json"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
+# Default: always run separation probe during fine-tuning
+PROBE_DATA="${PROBE_DATA:-${REPO_ROOT}/data/separation_probe.json}"
+export PROBE_DATA
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
 START_STEP="${START_STEP:-0}"

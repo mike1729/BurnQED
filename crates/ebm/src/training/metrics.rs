@@ -26,6 +26,10 @@ pub struct EBMMetrics {
     pub rank_accuracy: f64,
     /// Standard deviation across all energies. Watch for collapse → 0.
     pub energy_std: f64,
+    /// Fraction of (pos, neg) pairs where E_pos < E_neg.
+    pub pairwise_acc: f64,
+    /// Fraction of (pos, neg) pairs where margin hinge > 0 (margin violated).
+    pub active_fraction: f64,
 }
 
 impl EBMMetrics {
@@ -43,6 +47,7 @@ impl EBMMetrics {
         contrastive_loss: f64,
         depth_loss: f64,
         total_loss: f64,
+        margin: f64,
     ) -> Self {
         let [batch_size, _k] = neg_energies.dims();
 
@@ -56,6 +61,27 @@ impl EBMMetrics {
         let correct = pos_energy.clone().lower(neg_mins); // bool (batch,)
         let correct_count: f64 = correct.int().sum().into_scalar().elem();
         let rank_accuracy = correct_count / batch_size as f64;
+
+        // Pairwise accuracy: fraction of (pos, neg) pairs where E_pos < E_neg
+        let pos_expanded = pos_energy
+            .clone()
+            .unsqueeze_dim::<2>(1)
+            .expand([batch_size, _k]); // (batch, K)
+        let pairs_correct = pos_expanded.clone().lower(neg_energies.clone()); // bool (batch, K)
+        let pairwise_correct_count: f64 = pairs_correct.int().sum().into_scalar().elem();
+        let pairwise_acc = pairwise_correct_count / (batch_size * _k) as f64;
+
+        // Active fraction: % of pairs where margin hinge > 0
+        // hinge = max(0, margin + E_pos - E_neg)
+        let diff = pos_expanded - neg_energies.clone() + margin;
+        let active_count: f64 = diff
+            .clamp_min(0.0)
+            .greater_elem(0.0)
+            .int()
+            .sum()
+            .into_scalar()
+            .elem();
+        let active_fraction = active_count / (batch_size * _k) as f64;
 
         // Energy standard deviation across all energies
         // Cat pos (batch,) and neg (batch*K,) into a single 1D tensor
@@ -82,6 +108,8 @@ impl EBMMetrics {
             neg_energy_mean,
             rank_accuracy,
             energy_std,
+            pairwise_acc,
+            active_fraction,
         }
     }
 
@@ -114,6 +142,9 @@ impl EBMMetrics {
         if self.loss.is_nan() || self.loss.is_infinite() {
             warnings.push("training diverged: loss is NaN or infinite".to_string());
         }
+        if self.active_fraction < 0.01 {
+            warnings.push("gradient dead: no pairs violate margin".to_string());
+        }
 
         warnings
     }
@@ -121,10 +152,12 @@ impl EBMMetrics {
     /// Single-line display string for logging.
     pub fn display(&self) -> String {
         format!(
-            "loss={:.4} gap={:.2} rank={:.2} pos_e={:.2} neg_e={:.2} std={:.2}",
+            "loss={:.4} gap={:.2} rank={:.2} pair={:.2} active={:.2} pos_e={:.2} neg_e={:.2} std={:.2}",
             self.loss,
             self.energy_gap,
             self.rank_accuracy,
+            self.pairwise_acc,
+            self.active_fraction,
             self.pos_energy_mean,
             self.neg_energy_mean,
             self.energy_std,
@@ -234,7 +267,7 @@ mod tests {
             &device,
         );
 
-        let metrics = EBMMetrics::compute(&pos, &neg, 0.01, 0.0, 0.01);
+        let metrics = EBMMetrics::compute(&pos, &neg, 0.01, 0.0, 0.01, 1.0);
 
         assert!(
             (metrics.rank_accuracy - 1.0).abs() < 1e-6,
@@ -256,6 +289,18 @@ mod tests {
             "neg_energy_mean should be ≈5.0, got {}",
             metrics.neg_energy_mean
         );
+        // With gap=10 and margin=1, all pairs satisfy margin → pairwise_acc=1.0
+        assert!(
+            (metrics.pairwise_acc - 1.0).abs() < 1e-6,
+            "Perfect separation should give pairwise_acc=1.0, got {}",
+            metrics.pairwise_acc
+        );
+        // margin + E_pos - E_neg = 1 + (-5) - 5 = -9 → hinge = 0, no active pairs
+        assert!(
+            metrics.active_fraction < 1e-6,
+            "Perfect separation (gap >> margin) should give active_fraction≈0.0, got {}",
+            metrics.active_fraction
+        );
     }
 
     #[test]
@@ -276,7 +321,7 @@ mod tests {
             &device,
         );
 
-        let metrics = EBMMetrics::compute(&pos, &neg, 1.0, 0.0, 1.0);
+        let metrics = EBMMetrics::compute(&pos, &neg, 1.0, 0.0, 1.0, 1.0);
 
         // With equal energies, pos < neg_min is false → rank_accuracy = 0
         assert!(
@@ -288,6 +333,18 @@ mod tests {
             metrics.energy_gap.abs() < 0.01,
             "Equal energies: gap should be ~0, got {}",
             metrics.energy_gap
+        );
+        // Equal energies: strict less-than → pairwise_acc = 0
+        assert!(
+            metrics.pairwise_acc < 0.01,
+            "Equal energies: pairwise_acc should be ~0, got {}",
+            metrics.pairwise_acc
+        );
+        // margin + 0 - 0 = 1.0 > 0 → all pairs active
+        assert!(
+            (metrics.active_fraction - 1.0).abs() < 1e-6,
+            "Equal energies with margin=1: active_fraction should be 1.0, got {}",
+            metrics.active_fraction
         );
     }
 
@@ -302,6 +359,8 @@ mod tests {
             neg_energy_mean: 0.01,
             rank_accuracy: 0.5,
             energy_std: 0.01, // very low → mode collapse
+            pairwise_acc: 0.5,
+            active_fraction: 0.5,
         };
 
         let warnings = metrics.health_check();
@@ -323,6 +382,8 @@ mod tests {
             neg_energy_mean: 1.5,
             rank_accuracy: 0.8,
             energy_std: 1.2,
+            pairwise_acc: 0.9,
+            active_fraction: 0.3,
         };
 
         let warnings = metrics.health_check();

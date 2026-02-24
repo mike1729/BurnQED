@@ -539,6 +539,7 @@ def train(args):
             tokenizer=tokenizer,
             max_seq_len=args.max_seq_len,
             output_dir=str(output_dir),
+            probe_interval=args.probe_interval,
         )
         probe_cb.trainer = trainer
         trainer.add_callback(probe_cb)
@@ -715,6 +716,12 @@ def main():
         "--probe-data",
         default=None,
         help="Path to separation probe JSON (enables SeparationProbeCallback)",
+    )
+    parser.add_argument(
+        "--probe-interval",
+        type=int,
+        default=500,
+        help="Steps between separation probe measurements (default: 500)",
     )
     parser.add_argument(
         "--resume",

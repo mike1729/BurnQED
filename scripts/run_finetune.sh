@@ -93,7 +93,7 @@ SAVE_STEPS_FLAG=""
 [ -n "${SAVE_STEPS:-}" ] && SAVE_STEPS_FLAG="--save-steps $SAVE_STEPS"
 
 PROBE_DATA_FLAG=""
-[ -n "${PROBE_DATA:-}" ] && PROBE_DATA_FLAG="--probe-data $PROBE_DATA"
+[ -n "${PROBE_DATA:-}" ] && PROBE_DATA_FLAG="--probe-data $PROBE_DATA --probe-interval ${PROBE_INTERVAL:-500}"
 
 MAX_SEQ_LEN_FLAG=""
 [ -n "${MAX_SEQ_LEN:-}" ] && MAX_SEQ_LEN_FLAG="--max-seq-len $MAX_SEQ_LEN"
