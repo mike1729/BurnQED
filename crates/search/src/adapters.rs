@@ -63,8 +63,15 @@ impl ProofEnvironment for Arc<LeanPool> {
             }
             Err(e) => return Err(SearchError::Lean(e)),
         }
-        // Fallback: start proof from expression (works for simple type expressions).
-        match self.start_proof_owned(statement).await {
+        // Fallback: start proof from expression.
+        // If the statement contains context (hypotheses before ⊢), extract just the goal type.
+        // Full proof states like "x : Nat\n⊢ x = x" can't be parsed as expressions.
+        let expr = if let Some(pos) = statement.find('⊢') {
+            statement[pos + '⊢'.len_utf8()..].trim()
+        } else {
+            statement.trim()
+        };
+        match self.start_proof_owned(expr).await {
             Ok(handle) => Ok(Box::new(handle)),
             Err(e) => {
                 tracing::warn!(
@@ -275,13 +282,21 @@ impl CachingEncoder {
                     }
                 }
                 Err(e) => {
-                    // Sub-batch failed (likely OOM). Wait for server to recover, then retry individually.
+                    // Sub-batch failed (likely OOM). Wait with jitter for server to recover,
+                    // then retry individually.
+                    // Jitter via nanosecond timestamp to avoid thundering herd
+                    let jitter_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.subsec_nanos() as u64 % 1000)
+                        .unwrap_or(500);
+                    let wait = std::time::Duration::from_millis(1000 + jitter_ms);
                     tracing::warn!(
                         chunk_size = chunk_texts.len(),
                         error = %e,
-                        "Sub-batch encode failed, waiting 2s then retrying individually"
+                        wait_ms = wait.as_millis() as u64,
+                        "Sub-batch encode failed, retrying individually"
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(wait).await;
                     for (j, &idx) in chunk_indices.iter().enumerate() {
                         let single = vec![chunk_texts[j].clone()];
                         match self.handle.encode_batch(&single).await {
