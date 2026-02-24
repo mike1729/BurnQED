@@ -108,6 +108,44 @@ Analyzed EBM accuracy on proof paths from the nc=16/t=1.3 run (9 proved theorems
 guidance. The EBM needs significantly better training data or architecture
 changes to be useful for search guidance.
 
+### Known bug: terminal node score = 0.0
+
+Proof-completing states are never sent to the encode server (they have no
+remaining goals to embed), so they receive the fallback `ebm_score = 0.0`.
+Since proof-path nodes average `-0.50` and dead-ends average `-0.22`, a
+score of `0.0` makes the actual winning state look like the **worst**
+possible state in the priority queue.
+
+**Fix:** Hardcode a large negative (= "very provable") score for terminal
+states in the search engine, e.g. `ebm_score = -100.0`, so they are
+popped immediately if they ever enter the queue. This doesn't affect
+correctness (terminal states are detected on creation), but fixes the
+score used in trajectory labels and any future backpropagation of values.
+
+### Known bug: `sorry` tactic leak
+
+Two proofs ended with `sorry` (aime_1990_p4, aime_1999_p11). The LLM
+learned from Mathlib training data that `sorry` closes goals without error.
+Lean accepts `sorry` as a valid tactic — it just marks the proof as
+incomplete.
+
+**Fix:** Add a lexical filter to reject `sorry` and `admit` tactics before
+sending them to Lean. This should go in the candidate loop in
+`engine.rs`, before `apply_tactic`.
+
+### Why the EBM doesn't discriminate siblings
+
+With a branching factor of 3.6 and 99.1% negative labels, the EBM's
+training data is overwhelmingly "easy" negatives. The model learns to
+predict a flat, safe average (`-0.22`) rather than the subtle differences
+between a good step and a bad step at the same parent.
+
+**Fix path:** Use the fast generation pipeline (`nc=16, t=1.3, bex=1`) to
+generate thousands of deep trajectories. Feed them into `train-ebm` with
+the contrastive sampler (`hard_ratio`) to train on hard negatives
+(siblings of proof-path nodes). This teaches the EBM to rank siblings
+rather than just separate "any positive" from "any negative".
+
 ## Trajectory Statistics
 
 From nc=16/t=1.3 run (16 theorems, 8 proved):
@@ -118,8 +156,6 @@ From nc=16/t=1.3 run (16 theorems, 8 proved):
 - **Depth distribution:** bell-shaped, peaks at depth 9, max 19
 - **Proof depths:** 3–16 (mean 7.9, median 7.0)
 - **Nodes/theorem:** mean 483, range 23–1,837
-
-Two proofs ended with `sorry` (aime_1990_p4, aime_1999_p11) — incomplete.
 
 ## Recommended Default Configuration
 
