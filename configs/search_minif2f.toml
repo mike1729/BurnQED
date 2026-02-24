@@ -1,7 +1,7 @@
 [search]
 max_nodes = 300
 max_depth = 50
-num_candidates = 8            # T≥1.0 yields 6-8 unique tactics
+num_candidates = 16           # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)

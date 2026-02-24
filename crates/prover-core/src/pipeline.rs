@@ -27,29 +27,21 @@ use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryReco
 use crate::config::{build_lean_pool_config, load_search_toml};
 use crate::results::{median, BudgetResult, IterationResult, TheoremResult};
 
-/// Arguments for the `search` subcommand.
+/// Shared arguments for search-based commands (search, eval).
 #[derive(Debug)]
-pub struct SearchArgs {
+pub struct CommonSearchArgs {
     /// Path to the search config TOML file.
     pub config: PathBuf,
     /// URL of the SGLang inference server.
     pub server_url: String,
     /// Path to the theorem index JSON file.
     pub theorems: PathBuf,
-    /// Path for the output Parquet file.
-    pub output: PathBuf,
     /// Optional CLI override for number of Lean workers.
     pub num_workers: Option<usize>,
-    /// Load model and pool but don't search. Verifies environment setup.
-    pub dry_run: bool,
     /// Path to EBM checkpoint directory for value-guided search.
     pub ebm_path: Option<PathBuf>,
     /// Optional separate encode server URL for EBM embeddings.
     pub encode_url: Option<String>,
-    /// Resume from a partial trajectory file — skip already-searched theorems.
-    pub resume_from: Option<PathBuf>,
-    /// Override sampling temperature for tactic generation.
-    pub temperature: Option<f64>,
     /// Override maximum tokens per generated tactic.
     pub max_tactic_tokens: Option<usize>,
     /// Override number of candidate tactics per expansion.
@@ -64,6 +56,20 @@ pub struct SearchArgs {
     pub imports: Option<Vec<String>>,
 }
 
+/// Arguments for the `search` subcommand.
+#[derive(Debug)]
+pub struct SearchArgs {
+    pub common: CommonSearchArgs,
+    /// Path for the output Parquet file.
+    pub output: PathBuf,
+    /// Load model and pool but don't search. Verifies environment setup.
+    pub dry_run: bool,
+    /// Resume from a partial trajectory file — skip already-searched theorems.
+    pub resume_from: Option<PathBuf>,
+    /// Override sampling temperature for tactic generation.
+    pub temperature: Option<f64>,
+}
+
 /// Arguments for the `summary` subcommand (formerly `eval`).
 #[derive(Debug)]
 pub struct SummaryArgs {
@@ -76,36 +82,13 @@ pub struct SummaryArgs {
 /// Arguments for the `eval` subcommand.
 #[derive(Debug)]
 pub struct EvalArgs {
-    /// Path to the search config TOML file.
-    pub config: PathBuf,
-    /// URL of the SGLang inference server.
-    pub server_url: String,
-    /// Path to EBM checkpoint directory for value-guided search.
-    pub ebm_path: Option<PathBuf>,
-    /// Optional separate encode server URL for EBM embeddings.
-    pub encode_url: Option<String>,
-    /// Path to the theorem index JSON file.
-    pub theorems: PathBuf,
+    pub common: CommonSearchArgs,
     /// Node budgets to evaluate at (sorted ascending).
     pub budgets: Vec<u32>,
     /// Number of attempts per theorem per budget (best-of-N).
     pub pass_n: u32,
     /// Path to write JSON evaluation results.
     pub output: Option<PathBuf>,
-    /// Optional CLI override for number of Lean workers.
-    pub num_workers: Option<usize>,
-    /// Number of theorems to search in parallel (default: 1 = sequential).
-    pub concurrency: usize,
-    /// Maximum number of theorems to evaluate (truncates the index).
-    pub max_theorems: Option<usize>,
-    /// Override maximum tokens per generated tactic.
-    pub max_tactic_tokens: Option<usize>,
-    /// Override number of candidate tactics per expansion.
-    pub num_candidates: Option<usize>,
-    /// Override max states per encode HTTP request (lower for nf4 VRAM).
-    pub batch_encode_size: Option<usize>,
-    /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
-    pub imports: Option<Vec<String>>,
 }
 
 /// Arguments for the `compare` subcommand.
@@ -332,6 +315,112 @@ fn load_ebm_scorer(
 
     tracing::info!("EBM scorer loaded successfully");
     Ok(Some(value_fn))
+}
+
+// ---------------------------------------------------------------------------
+// Shared setup helpers for search / eval
+// ---------------------------------------------------------------------------
+
+/// Everything needed to start spawning search tasks.
+struct SearchSetup {
+    config: SearchConfig,
+    pool: Arc<LeanPool>,
+    policy: Arc<CachedPolicy<GlobalBatcher>>,
+    value_fn: Option<Arc<EBMValueFn>>,
+    index: TheoremIndex,
+    inference_label: String,
+}
+
+/// Consolidates: load_policy_and_ebm + EBM defaults (temperature/num_candidates)
+/// + theorem loading + truncation. Returns everything needed to start spawning.
+async fn setup_search(
+    common: &CommonSearchArgs,
+    temperature: Option<f64>,
+) -> anyhow::Result<SearchSetup> {
+    let concurrency = common.concurrency.max(1);
+
+    let (mut search_config, loaded) = load_policy_and_ebm(
+        &common.config,
+        &common.server_url,
+        common.ebm_path.as_deref(),
+        common.encode_url.as_deref(),
+        common.num_workers,
+        temperature,
+        common.max_tactic_tokens,
+        common.imports.as_deref(),
+        concurrency,
+        common.batch_encode_size,
+    )
+    .await?;
+
+    // Apply CLI override for num_candidates, or EBM default
+    if let Some(n) = common.num_candidates {
+        search_config.num_candidates = n;
+    } else if common.ebm_path.is_some() {
+        tracing::info!("EBM active — defaulting num_candidates to 8");
+        search_config.num_candidates = 8;
+    }
+
+    // Load theorem index
+    let mut index = TheoremIndex::from_json(&common.theorems)?;
+    if let Some(max) = common.max_theorems {
+        if max < index.len() {
+            tracing::info!(total = index.len(), max, "Truncating theorem index");
+            index.theorems.truncate(max);
+        }
+    }
+    tracing::info!(count = index.len(), "Loaded theorems");
+
+    Ok(SearchSetup {
+        config: search_config,
+        pool: loaded.pool,
+        policy: Arc::new(loaded.policy),
+        value_fn: loaded.value_fn.map(Arc::new),
+        index,
+        inference_label: loaded.inference_label,
+    })
+}
+
+/// Create a progress bar with the standard search/eval style.
+fn make_progress_bar(total: u32, bar_width: usize) -> ProgressBar {
+    let pb = ProgressBar::new(total as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template(&format!(
+                "{{spinner:.green}} [{{elapsed_precise}}] [{{bar:{bar_width}.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) {{prefix}}"
+            ))
+            .expect("valid progress bar template")
+            .progress_chars("=> "),
+    );
+    pb.set_prefix("proved=0");
+    pb.enable_steady_tick(Duration::from_secs(1));
+    pb
+}
+
+/// Drain completed tasks from a `JoinSet`, calling `collect` on each result.
+///
+/// When `blocking` is false, only drains already-completed tasks (try_join_next).
+/// When `blocking` is true, waits for all remaining tasks (join_next().await).
+async fn drain_join_set<T: 'static>(
+    join_set: &mut tokio::task::JoinSet<T>,
+    blocking: bool,
+    mut collect: impl FnMut(T),
+) {
+    if blocking {
+        while let Some(join_result) = join_set.join_next().await {
+            match join_result {
+                Ok(outcome) => collect(outcome),
+                Err(e) => tracing::error!(error = %e, "Task panicked"),
+            }
+        }
+    } else {
+        while let Some(join_result) = join_set.try_join_next() {
+            match join_result {
+                Ok(outcome) => collect(outcome),
+                Err(e) => tracing::error!(error = %e, "Task panicked"),
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -590,57 +679,27 @@ struct SearchOutcome {
 /// single-threaded `TrajectoryWriter` processing.
 pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let start = Instant::now();
-    let concurrency = args.concurrency.max(1);
+    let concurrency = args.common.concurrency.max(1);
 
     // EBM-active overrides: more candidates + higher temperature for diversity
     let temperature = args.temperature.or_else(|| {
-        args.ebm_path.as_ref().map(|_| {
+        args.common.ebm_path.as_ref().map(|_| {
             tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
             1.0
         })
     });
 
-    let (mut search_config, loaded) = load_policy_and_ebm(
-        &args.config,
-        &args.server_url,
-        args.ebm_path.as_deref(),
-        args.encode_url.as_deref(),
-        args.num_workers,
-        temperature,
-        args.max_tactic_tokens,
-        args.imports.as_deref(),
-        concurrency,
-        args.batch_encode_size,
-    )
-    .await?;
-
-    // Apply CLI override for num_candidates, or EBM default
-    if let Some(n) = args.num_candidates {
-        search_config.num_candidates = n;
-    } else if args.ebm_path.is_some() {
-        tracing::info!("EBM active — defaulting num_candidates to 8");
-        search_config.num_candidates = 8;
-    }
-
-    // Load theorem index
-    let mut index = TheoremIndex::from_json(&args.theorems)?;
-    if let Some(max) = args.max_theorems {
-        if max < index.len() {
-            tracing::info!(total = index.len(), max, "Truncating theorem index");
-            index.theorems.truncate(max);
-        }
-    }
-    tracing::info!(count = index.len(), "Loaded theorems");
+    let setup = setup_search(&args.common, temperature).await?;
 
     // Dry-run: verify setup and exit early
     if args.dry_run {
         println!("Dry run — setup verified successfully");
-        println!("  Inference: {}", loaded.inference_label);
-        println!("  Theorems: {} loaded", index.len());
-        println!("  Workers: {}", loaded.pool.num_workers());
+        println!("  Inference: {}", setup.inference_label);
+        println!("  Theorems: {} loaded", setup.index.len());
+        println!("  Workers: {}", setup.pool.num_workers());
         println!(
             "  EBM: {}",
-            if args.ebm_path.is_some() {
+            if args.common.ebm_path.is_some() {
                 "loaded"
             } else {
                 "none"
@@ -650,7 +709,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
             println!("  Temperature: {temp}");
         }
         println!("  Concurrency: {concurrency}");
-        loaded.pool.shutdown().await;
+        setup.pool.shutdown().await;
         return Ok(());
     }
 
@@ -659,7 +718,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         let names = TrajectoryReader::read_theorem_names(resume_path)?;
         tracing::info!(
             done = names.len(),
-            remaining = index.len() - names.len(),
+            remaining = setup.index.len() - names.len(),
             "Resuming from partial trajectory"
         );
         names
@@ -667,28 +726,21 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         HashSet::new()
     };
 
-    let theorems_to_search: Vec<_> = index
+    let theorems_to_search: Vec<_> = setup
+        .index
         .theorems
         .iter()
         .filter(|t| !done_names.contains(&t.name))
         .collect();
 
     // Run search with progress bar
-    let engine = SearchEngine::new(search_config);
+    let engine = SearchEngine::new(setup.config);
     let mut writer = TrajectoryWriter::new(args.output.clone());
     let total = theorems_to_search.len() as u32;
     let mut agg = SearchAggregator::default();
 
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) {prefix}")
-            .expect("valid progress bar template")
-            .progress_chars("=> "),
-    );
-    pb.set_prefix("proved=0");
+    let pb = make_progress_bar(total, 40);
     pb.set_message("?");
-    pb.enable_steady_tick(Duration::from_secs(1));
 
     // CTRL-C via AtomicBool — shared across spawned tasks
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -699,10 +751,10 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         tracing::warn!("Interrupted by CTRL-C, finishing in-flight searches");
     });
 
-    // Arc-wrap shared state for concurrent access
-    let pool = loaded.pool; // Already Arc<LeanPool>
-    let policy = Arc::new(loaded.policy);
-    let value_fn: Option<Arc<EBMValueFn>> = loaded.value_fn.map(Arc::new);
+    let inference_label = setup.inference_label;
+    let pool = setup.pool;
+    let policy = setup.policy;
+    let value_fn = setup.value_fn;
 
     // Spawn phase: submit theorems bounded by semaphore
     let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
@@ -799,32 +851,33 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         pb.set_message(agg.format_eta(remaining));
     }
 
+    // Closure that collects a search outcome + periodic auto-save / progress.
+    // flush_err tracks any auto-save I/O error to propagate after the loop.
+    let mut flush_err: Option<anyhow::Error> = None;
+    let mut collect_and_save = |outcome: SearchOutcome| {
+        collect_search(outcome, &mut agg, &mut writer, &pb, total);
+        const AUTOSAVE_INTERVAL: u32 = 50;
+        if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
+            if let Err(e) = writer.flush_partial() {
+                flush_err = Some(e.into());
+            } else {
+                tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
+            }
+        }
+        const PROGRESS_INTERVAL: u32 = 500;
+        let done = agg.searched_count + agg.error_count;
+        if done % PROGRESS_INTERVAL == 0 && done > 0 {
+            pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
+        }
+    };
+
     for task in &theorems_to_search {
         if interrupted.load(Ordering::Relaxed) {
             break;
         }
 
         // Drain completed tasks before waiting for a permit
-        while let Some(join_result) = join_set.try_join_next() {
-            match join_result {
-                Ok(outcome) => {
-                    collect_search(outcome, &mut agg, &mut writer, &pb, total);
-                    // Periodic auto-save
-                    const AUTOSAVE_INTERVAL: u32 = 50;
-                    if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
-                        writer.flush_partial()?;
-                        tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
-                    }
-                    // Periodic progress stats (count errors too)
-                    const PROGRESS_INTERVAL: u32 = 500;
-                    let done = agg.searched_count + agg.error_count;
-                    if done % PROGRESS_INTERVAL == 0 && done > 0 {
-                        pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
-                    }
-                }
-                Err(e) => tracing::error!(error = %e, "Search task panicked"),
-            }
-        }
+        drain_join_set(&mut join_set, false, &mut collect_and_save).await;
 
         let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
         if interrupted.load(Ordering::Relaxed) {
@@ -857,23 +910,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     }
 
     // Final drain: collect remaining in-flight tasks
-    while let Some(join_result) = join_set.join_next().await {
-        match join_result {
-            Ok(outcome) => {
-                collect_search(outcome, &mut agg, &mut writer, &pb, total);
-                const AUTOSAVE_INTERVAL: u32 = 50;
-                if agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0 {
-                    writer.flush_partial()?;
-                    tracing::info!(searched = agg.searched_count, "Auto-saved checkpoint");
-                }
-                const PROGRESS_INTERVAL: u32 = 500;
-                let done = agg.searched_count + agg.error_count;
-                if done % PROGRESS_INTERVAL == 0 && done > 0 {
-                    pb.suspend(|| agg.print_progress(start.elapsed(), writer.len()));
-                }
-            }
-            Err(e) => tracing::error!(error = %e, "Search task panicked"),
-        }
+    drain_join_set(&mut join_set, true, &mut collect_and_save).await;
+    if let Some(e) = flush_err {
+        return Err(e);
     }
 
     pb.finish_with_message("done");
@@ -1025,10 +1064,10 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         println!("   Candidates/exp:  avg={avg:.1} min={min} max={max} ({n} expansions)");
     }
     println!("──────────────────────────────────────────");
-    println!(" Inference:          {}", loaded.inference_label);
+    println!(" Inference:          {}", inference_label);
     println!(" Trajectory file:    {}", args.output.display());
     println!("   Records:          {record_count}");
-    if args.ebm_path.is_some() {
+    if args.common.ebm_path.is_some() {
         println!(" EBM scorer:         active");
     }
     if let Some(temp) = args.temperature {
@@ -1615,59 +1654,32 @@ struct EvalOutcome {
 /// budgets). Within each budget, theorem searches run in parallel bounded by
 /// the `concurrency` semaphore.
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
-    let concurrency = args.concurrency.max(1);
+    let concurrency = args.common.concurrency.max(1);
 
-    // EBM-active overrides: more candidates + higher temperature for diversity
-    let temperature = if args.ebm_path.is_some() {
+    // EBM-active overrides: temperature for diversity (no CLI override for eval)
+    let temperature = if args.common.ebm_path.is_some() {
         tracing::info!("EBM active — defaulting temperature to 1.0 for candidate diversity");
         Some(1.0)
     } else {
         None
     };
 
-    let (mut base_config, loaded) = load_policy_and_ebm(
-        &args.config,
-        &args.server_url,
-        args.ebm_path.as_deref(),
-        args.encode_url.as_deref(),
-        args.num_workers,
-        temperature,
-        args.max_tactic_tokens,
-        args.imports.as_deref(),
-        concurrency,
-        args.batch_encode_size,
-    )
-    .await?;
-
-    // Apply CLI override for num_candidates, or EBM default
-    if let Some(n) = args.num_candidates {
-        base_config.num_candidates = n;
-    } else if args.ebm_path.is_some() {
-        tracing::info!("EBM active — defaulting num_candidates to 8");
-        base_config.num_candidates = 8;
-    }
-
-    let mut index = TheoremIndex::from_json(&args.theorems)?;
-    if let Some(max) = args.max_theorems {
-        if max < index.len() {
-            tracing::info!(total = index.len(), max, "Truncating theorem index");
-            index.theorems.truncate(max);
-        }
-    }
-    tracing::info!(count = index.len(), "Loaded theorems");
+    let setup = setup_search(&args.common, temperature).await?;
 
     let mut budgets = args.budgets;
     budgets.sort();
     budgets.dedup();
 
-    let total = index.len() as u32;
+    let total = setup.index.len() as u32;
     let mut budget_results = Vec::new();
     let mut cumulative_solved_set: HashSet<String> = HashSet::new();
 
-    // Arc-wrap shared state for concurrent access
-    let pool = loaded.pool; // Already Arc<LeanPool>
-    let policy = Arc::new(loaded.policy);
-    let value_fn: Option<Arc<EBMValueFn>> = loaded.value_fn.map(Arc::new);
+    let inference_label = setup.inference_label;
+    let pool = setup.pool;
+    let policy = setup.policy;
+    let value_fn = setup.value_fn;
+    let base_config = setup.config;
+    let index = setup.index;
     let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
     for &budget in &budgets {
@@ -1677,17 +1689,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         search_config.max_nodes = budget;
         let engine = SearchEngine::new(search_config);
 
-        let pb = ProgressBar::new(total as u64);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template(&format!(
-                    "{{spinner:.green}} [{{elapsed_precise}}] [{{bar:30.cyan/blue}}] {{pos}}/{{len}} ({{msg}}) {{prefix}}"
-                ))
-                .expect("valid progress bar template")
-                .progress_chars("=> "),
-        );
-        pb.set_prefix("proved=0");
-        pb.enable_steady_tick(Duration::from_secs(1));
+        let pb = make_progress_bar(total, 30);
         let budget_start = Instant::now();
 
         // Interleaved spawn + collect: drain completed tasks before each spawn
@@ -1730,23 +1732,17 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             *total_nodes_sum += outcome.total_nodes;
             per_theorem.push(outcome.best);
             pb.inc(1);
-            // Build compact status prefix
-            let mut prefix = format!("proved={solved}");
-            let failed = pb.position() as u32 - *solved - *errors - *timeouts;
-            if failed > 0 {
-                prefix.push_str(&format!(" fail={failed}"));
-            }
-            if *timeouts > 0 {
-                prefix.push_str(&format!(" timeout={timeouts}"));
-            }
-            if *errors > 0 {
-                prefix.push_str(&format!(" err={errors}"));
-            }
-            pb.set_prefix(prefix);
-            let done = pb.position() as usize;
+            let done = pb.position() as u32;
+            let elapsed = budget_start.elapsed().as_secs_f64();
+            let fail = done - *solved - *errors - *timeouts;
+            let rate_pct = if done > 0 { *solved as f64 / done as f64 * 100.0 } else { 0.0 };
+            let thm_per_min = if elapsed > 0.0 { done as f64 / elapsed * 60.0 } else { 0.0 };
+            let avg_nodes = if done > 0 { *total_nodes_sum / done as f64 } else { 0.0 };
+            pb.set_prefix(format!(
+                "proved={solved} fail={fail} timeout={timeouts} err={errors} | {rate_pct:.1}% {thm_per_min:.1}thm/m avg_n={avg_nodes:.0}"
+            ));
             if done > 0 {
-                let elapsed = budget_start.elapsed().as_secs_f64();
-                let remaining = elapsed * (total as usize - done) as f64 / done as f64;
+                let remaining = elapsed * (total - done) as f64 / done as f64;
                 let eta = if remaining < 60.0 {
                     format!("{:.0}s", remaining)
                 } else if remaining < 3600.0 {
@@ -1758,18 +1754,17 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
             }
         }
 
+        let mut collect = |outcome: EvalOutcome| {
+            collect_eval(
+                outcome, &mut per_theorem, &mut solved, &mut errors,
+                &mut timeouts, &mut all_times, &mut total_nodes_sum,
+                &mut cumulative_solved_set, &pb, budget_start, total,
+            );
+        };
+
         for task in &index.theorems {
             // Drain completed tasks before waiting for a permit
-            while let Some(join_result) = join_set.try_join_next() {
-                match join_result {
-                    Ok(outcome) => collect_eval(
-                        outcome, &mut per_theorem, &mut solved, &mut errors,
-                        &mut timeouts, &mut all_times, &mut total_nodes_sum,
-                        &mut cumulative_solved_set, &pb, budget_start, total,
-                    ),
-                    Err(e) => tracing::error!(error = %e, "Eval task panicked"),
-                }
-            }
+            drain_join_set(&mut join_set, false, &mut collect).await;
 
             let permit = concurrency_sem.clone().acquire_owned().await.unwrap();
 
@@ -1840,16 +1835,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         }
 
         // Final drain: collect remaining in-flight tasks
-        while let Some(join_result) = join_set.join_next().await {
-            match join_result {
-                Ok(outcome) => collect_eval(
-                    outcome, &mut per_theorem, &mut solved, &mut errors,
-                    &mut timeouts, &mut all_times, &mut total_nodes_sum,
-                    &mut cumulative_solved_set, &pb, budget_start, total,
-                ),
-                Err(e) => tracing::error!(error = %e, "Eval task panicked"),
-            }
-        }
+        drain_join_set(&mut join_set, true, &mut collect).await;
 
         pb.finish_and_clear();
 
@@ -1908,9 +1894,9 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let result = IterationResult {
         iteration: None,
         timestamp: chrono::Utc::now().to_rfc3339(),
-        llm_path: loaded.inference_label.clone(),
-        ebm_path: args.ebm_path.map(|p| p.display().to_string()),
-        benchmark: args.theorems.display().to_string(),
+        llm_path: inference_label.clone(),
+        ebm_path: args.common.ebm_path.map(|p| p.display().to_string()),
+        benchmark: args.common.theorems.display().to_string(),
         total_theorems: total,
         budget_results,
         cumulative_solved,

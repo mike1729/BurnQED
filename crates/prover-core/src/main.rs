@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use pipeline::{CompareArgs, EvalArgs, ExportProofPathsArgs, GenerateNegativesArgs, ProbeArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
+use pipeline::{CommonSearchArgs, CompareArgs, EvalArgs, ExportProofPathsArgs, GenerateNegativesArgs, ProbeArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
 
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
@@ -321,22 +321,24 @@ async fn main() -> anyhow::Result<()> {
             imports,
         } => {
             pipeline::run_search(SearchArgs {
-                config,
-                server_url,
-                theorems,
+                common: CommonSearchArgs {
+                    config,
+                    server_url,
+                    theorems,
+                    num_workers,
+                    ebm_path,
+                    encode_url,
+                    max_tactic_tokens,
+                    num_candidates,
+                    batch_encode_size,
+                    concurrency,
+                    max_theorems,
+                    imports,
+                },
                 output,
-                num_workers,
                 dry_run,
-                ebm_path,
-                encode_url,
                 resume_from,
                 temperature,
-                max_tactic_tokens,
-                num_candidates,
-                batch_encode_size,
-                concurrency,
-                max_theorems,
-                imports,
             })
             .await
         }
@@ -368,21 +370,23 @@ async fn main() -> anyhow::Result<()> {
             imports,
         } => {
             pipeline::run_eval(EvalArgs {
-                config,
-                server_url,
-                ebm_path,
-                encode_url,
-                theorems,
+                common: CommonSearchArgs {
+                    config,
+                    server_url,
+                    theorems,
+                    num_workers,
+                    ebm_path,
+                    encode_url,
+                    max_tactic_tokens,
+                    num_candidates,
+                    batch_encode_size,
+                    concurrency,
+                    max_theorems,
+                    imports,
+                },
                 budgets,
                 pass_n,
                 output,
-                num_workers,
-                concurrency,
-                max_theorems,
-                max_tactic_tokens,
-                num_candidates,
-                batch_encode_size,
-                imports,
             })
             .await
         }

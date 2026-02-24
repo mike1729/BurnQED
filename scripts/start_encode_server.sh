@@ -32,4 +32,5 @@ export ENCODE_PORT ENCODE_DTYPE
 python "${REPO_ROOT}/python/encode_server.py" \
     --model-path "$MODEL_PATH" \
     --port "$ENCODE_PORT" \
-    --dtype "$ENCODE_DTYPE"
+    --dtype "$ENCODE_DTYPE" \
+    --max-batch-size 4
