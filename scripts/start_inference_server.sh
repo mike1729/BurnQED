@@ -19,17 +19,9 @@ MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
 PORT="${PORT:-30000}"
 TP="${TP:-1}"
 
-# Auto-detect VRAM and adjust memory fraction.
-# 7B fp16 model needs ~14GB. On 24GB GPUs (4090/3090) use 0.75 to leave
-# headroom for hidden-state extraction. On 40GB+ GPUs use 0.85.
-if [ -z "${MEM_FRACTION:-}" ]; then
-    GPU_MEM_MB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "0")
-    if [ "$GPU_MEM_MB" -gt 0 ] && [ "$GPU_MEM_MB" -lt 30000 ]; then
-        MEM_FRACTION="0.75"
-    else
-        MEM_FRACTION="0.85"
-    fi
-fi
+# Memory fraction: 0.65 leaves ~11GB free on 32GB GPU for the nf4 encode
+# server (~7GB) which must coexist during EBM eval/encoding.
+MEM_FRACTION="${MEM_FRACTION:-0.65}"
 
 echo "================================================================"
 echo "  Starting BurnQED Inference Server"

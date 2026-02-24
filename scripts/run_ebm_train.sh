@@ -2,9 +2,8 @@
 # Encode embeddings and train EBM for an expert iteration.
 #
 # Standalone script: can be run independently or called from run_iteration_train.sh.
-# Stops the inference server to free VRAM for direct PyTorch encoding (SGLang batch
-# hidden states are broken — see docs/encoding_bug.md), then restarts it for any
-# subsequent steps.
+# Uses the encode server (nf4 quantized, ~5GB VRAM) for embedding extraction,
+# which can run alongside the inference server.
 #
 # Usage:
 #   ./scripts/run_ebm_train.sh <iteration_number>
@@ -12,13 +11,14 @@
 #   EBM_STEPS=100000 ./scripts/run_ebm_train.sh 3
 #   START_STEP=2 ./scripts/run_ebm_train.sh 3  # skip encoding, start at EBM training
 #
-# Steps: 1=encode embeddings, 2=EBM training
+# Steps: 1=encode embeddings (via encode server), 2=EBM training
 #
 # Environment variables:
 #   EBM_STEPS          Training steps (default: 50000)
 #   EBM_LR             Learning rate (default: 3e-5)
 #   EBM_RESUME         Resume mode: auto|none|/path/to/dir (default: auto)
-#   ENCODE_BATCH_SIZE  Batch size for PyTorch encoding (default: 32)
+#   ENCODE_BATCH_SIZE  Batch size for encoding (default: 32)
+#   ENCODE_URL         Encode server URL (default: http://localhost:30001)
 #   HIDDEN_SIZE        Model hidden size (default: 4096)
 #   START_STEP         Skip steps: 1=encode+train, 2=train only (default: 1)
 
@@ -41,6 +41,7 @@ LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
+ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 EBM_STEPS="${EBM_STEPS:-50000}"
 EBM_LR="${EBM_LR:-3e-5}"
 EBM_RESUME="${EBM_RESUME:-auto}"
@@ -89,6 +90,7 @@ echo "  EBM LR:          ${EBM_LR}"
 echo "  EBM resume:      ${EBM_RESUME}"
 echo "  Loss type:       ${LOSS_TYPE} (margin: ${MARGIN})"
 echo "  Encode batch:    ${ENCODE_BATCH_SIZE}"
+echo "  Encode server:   ${ENCODE_URL}"
 echo "  Start step:      ${START_STEP} (1=encode, 2=train)"
 echo "================================================================"
 
@@ -99,10 +101,37 @@ if [ "$START_STEP" -gt 1 ]; then
 else
     echo ""
     echo "=== Step 1: Encode Embeddings ==="
-    echo "  (Direct PyTorch — SGLang batch hidden states broken, see docs/encoding_bug.md)"
+    echo "  (via encode server at ${ENCODE_URL})"
 
-    # Stop inference server to free VRAM for direct PyTorch encoding
+    # Kill inference server to free VRAM for encoding throughput — encode server
+    # needs full GPU bandwidth without contention from inference server
     stop_inference_server
+
+    # Start encode server if not already running
+    if ! curl -sf "${ENCODE_URL}/health" > /dev/null 2>&1; then
+        echo "  Starting encode server (nf4, ~5GB VRAM)..."
+        ENCODE_DTYPE=nf4 "${REPO_ROOT}/scripts/start_encode_server.sh" "$LLM_DIR" &
+        ENCODE_PID=$!
+        echo "  Waiting for encode server to be ready..."
+        for i in $(seq 1 120); do
+            if curl -sf "${ENCODE_URL}/health" > /dev/null 2>&1; then
+                echo "  Encode server ready (${i}s)"
+                break
+            fi
+            if ! kill -0 $ENCODE_PID 2>/dev/null; then
+                echo "ERROR: Encode server process died"
+                exit 1
+            fi
+            sleep 1
+        done
+        if ! curl -sf "${ENCODE_URL}/health" > /dev/null 2>&1; then
+            echo "ERROR: Encode server failed to start within 120s"
+            exit 1
+        fi
+    else
+        ENCODE_PID=""
+        echo "  Encode server already running"
+    fi
 
     STEP_LOG="${LOG_DIR}/iter_${ITER}_ebm_step_1_encode.log"
     echo "  Logging to: ${STEP_LOG}"
@@ -116,15 +145,21 @@ else
 
     # shellcheck disable=SC2086
     run_logged "$STEP_LOG" python3 "${REPO_ROOT}/python/encode_embeddings.py" \
-        --model-path "$LLM_DIR" \
+        --encode-url "$ENCODE_URL" \
         --trajectories ${TRAJ_FILES[*]} \
         --output "$EMBEDDINGS_FILE" \
         --batch-size "$ENCODE_BATCH_SIZE" \
+        --hidden-size "$HIDDEN_SIZE" \
         $CACHE_FLAG
 
     echo "  Embeddings saved to: ${EMBEDDINGS_FILE}"
 
-    echo "  Server will be restarted after EBM training completes"
+    # Stop encode server to free VRAM for EBM training
+    if [ -n "${ENCODE_PID:-}" ] && kill -0 "$ENCODE_PID" 2>/dev/null; then
+        echo "  Stopping encode server (pid ${ENCODE_PID})..."
+        kill "$ENCODE_PID" 2>/dev/null || true
+        wait "$ENCODE_PID" 2>/dev/null || true
+    fi
 fi
 
 # ── Step 2: EBM Training ──────────────────────────────────────────────────
@@ -182,9 +217,6 @@ run_logged "$STEP_LOG" $PROVER train-ebm \
     --encode-concurrency 1 \
     --loss-type $LOSS_TYPE \
     --margin $MARGIN
-
-# Restart inference server for subsequent pipeline steps (search, eval)
-restart_inference_server "$SGLANG_URL" "$LLM_DIR"
 
 echo ""
 echo "================================================================"

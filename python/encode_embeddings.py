@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
-"""Encode proof state embeddings via direct PyTorch forward pass.
+"""Encode proof state embeddings via encode server or direct PyTorch forward pass.
 
-Loads the model directly (no SGLang), runs batch inference to extract hidden
-states, mean-pools to (hidden_size,) embeddings, and writes a Parquet cache
-compatible with the Rust EmbeddingCache.
+Preferred mode: connect to the encode server (--encode-url) which runs nf4
+quantized (~5GB VRAM) and can coexist with the inference server.
+
+Fallback mode: load the model directly (--model-path without --encode-url),
+requiring full VRAM and SGLang to be stopped.
 
 Usage:
-    # Encode from trajectory files (extracts unique state_pp values)
+    # Via encode server (preferred — no VRAM needed, coexists with inference)
+    python python/encode_embeddings.py \
+        --encode-url http://localhost:30001 \
+        --trajectories trajectories/iter_0.parquet trajectories/iter_1.parquet \
+        --output checkpoints/ebm/iter_4/embeddings.parquet \
+        --batch-size 32
+
+    # Direct PyTorch (fallback — needs full VRAM, kill SGLang first)
     python python/encode_embeddings.py \
         --model-path models/llm/iter_3_new \
         --trajectories trajectories/iter_0.parquet trajectories/iter_1.parquet \
@@ -15,17 +24,16 @@ Usage:
 
     # Resume from partial cache (only encodes missing states)
     python python/encode_embeddings.py \
-        --model-path models/llm/iter_3_new \
+        --encode-url http://localhost:30001 \
         --trajectories trajectories/*.parquet \
         --output checkpoints/ebm/iter_4/embeddings.parquet \
         --cache checkpoints/ebm/old/embeddings.parquet \
         --batch-size 32
 
 Environment:
-    CUDA_VISIBLE_DEVICES  Control GPU selection (default: 0)
+    CUDA_VISIBLE_DEVICES  Control GPU selection (default: 0, direct mode only)
 
 Notes:
-    - Kill SGLang before running to free VRAM
     - Writes checkpoint every 10K states for crash recovery
     - Output schema: {state_pp: string, embedding: list<float32>}
 """
@@ -35,13 +43,12 @@ import logging
 import os
 import sys
 import time
-from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import requests
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
 logging.basicConfig(
     level=logging.INFO,
@@ -130,8 +137,8 @@ def save_parquet(embeddings: dict[str, np.ndarray], output_path: str):
 
 @torch.no_grad()
 def encode_batch(
-    model: AutoModelForCausalLM,
-    tokenizer: AutoTokenizer,
+    model,
+    tokenizer,
     states: list[str],
     device: torch.device,
     max_length: int = 2048,
@@ -161,18 +168,44 @@ def encode_batch(
     return pooled.cpu().float().numpy()
 
 
+def encode_batch_http(
+    encode_url: str,
+    states: list[str],
+    hidden_size: int = 4096,
+    timeout: float = 120.0,
+) -> np.ndarray:
+    """Encode a batch of proof states via the encode server HTTP endpoint."""
+    prompts = [format_prompt(s) for s in states]
+    resp = requests.post(
+        f"{encode_url}/encode",
+        json={"text": prompts, "hidden_size": hidden_size},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    embeddings = np.array(data["embeddings"], dtype=np.float32)
+    return embeddings
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Encode proof state embeddings via direct PyTorch inference")
-    parser.add_argument("--model-path", required=True, help="Path to HuggingFace model directory")
+    parser = argparse.ArgumentParser(description="Encode proof state embeddings via encode server or direct PyTorch")
+    parser.add_argument("--model-path", help="Path to HuggingFace model directory (direct mode)")
+    parser.add_argument("--encode-url", help="URL of encode server, e.g. http://localhost:30001 (preferred)")
     parser.add_argument("--trajectories", nargs="+", required=True, help="Trajectory parquet files")
     parser.add_argument("--output", required=True, help="Output parquet file path")
     parser.add_argument("--cache", help="Existing cache to resume from (skip already-encoded states)")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for encoding (default: 32)")
     parser.add_argument("--max-length", type=int, default=2048, help="Max token length (default: 2048)")
     parser.add_argument("--checkpoint-interval", type=int, default=10000, help="Save checkpoint every N states")
+    parser.add_argument("--hidden-size", type=int, default=4096, help="Model hidden size (default: 4096)")
     parser.add_argument("--dtype", choices=["float16", "bfloat16", "float32"], default="bfloat16",
-                        help="Model dtype (default: bfloat16)")
+                        help="Model dtype for direct mode (default: bfloat16)")
     args = parser.parse_args()
+
+    if not args.encode_url and not args.model_path:
+        parser.error("Either --encode-url or --model-path is required")
+
+    use_server = bool(args.encode_url)
 
     # Collect states
     all_states = collect_states(args.trajectories)
@@ -196,27 +229,44 @@ def main():
             save_parquet(embeddings, args.output)
         return
 
-    # Load model
-    dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
-    model_dtype = dtype_map[args.dtype]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Setup encoder
+    model = None
+    tokenizer = None
+    device = None
 
-    logger.info("Loading model: %s (dtype=%s, device=%s)", args.model_path, args.dtype, device)
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if use_server:
+        logger.info("Using encode server at %s", args.encode_url)
+        # Verify server is reachable
+        try:
+            resp = requests.get(f"{args.encode_url}/health", timeout=5)
+            resp.raise_for_status()
+            logger.info("Encode server healthy")
+        except Exception as e:
+            logger.error("Encode server unreachable at %s: %s", args.encode_url, e)
+            sys.exit(1)
+    else:
+        from transformers import AutoTokenizer, AutoModelForCausalLM
+        # Load model directly
+        dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
+        model_dtype = dtype_map[args.dtype]
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=model_dtype,
-        device_map="auto",
-        low_cpu_mem_usage=True,
-        trust_remote_code=True,
-    )
-    model.eval()
+        logger.info("Loading model: %s (dtype=%s, device=%s)", args.model_path, args.dtype, device)
+        tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    hidden_size = model.config.hidden_size
-    logger.info("Model loaded: hidden_size=%d, params=%.1fB", hidden_size, sum(p.numel() for p in model.parameters()) / 1e9)
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_path,
+            torch_dtype=model_dtype,
+            device_map="auto",
+            low_cpu_mem_usage=True,
+            trust_remote_code=True,
+        )
+        model.eval()
+
+        hidden_size = model.config.hidden_size
+        logger.info("Model loaded: hidden_size=%d, params=%.1fB", hidden_size, sum(p.numel() for p in model.parameters()) / 1e9)
 
     # Encode — start from cached (already numpy arrays), add new encodings
     embeddings = {s: e for s, e in cached.items() if s in all_states}
@@ -232,7 +282,10 @@ def main():
         batch_states = to_encode[start:end]
 
         try:
-            embs = encode_batch(model, tokenizer, batch_states, device, args.max_length)
+            if use_server:
+                embs = encode_batch_http(args.encode_url, batch_states, args.hidden_size)
+            else:
+                embs = encode_batch(model, tokenizer, batch_states, device, args.max_length)
 
             for i, state in enumerate(batch_states):
                 norm = np.linalg.norm(embs[i])
@@ -263,6 +316,10 @@ def main():
                 except Exception as e2:
                     logger.error("Single encode failed: %s", e2)
                     errors += 1
+
+        except requests.exceptions.RequestException as e:
+            logger.error("Batch %d HTTP error: %s", batch_idx, e)
+            errors += len(batch_states)
 
         except Exception as e:
             logger.error("Batch %d failed: %s", batch_idx, e)
