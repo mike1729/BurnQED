@@ -6,7 +6,7 @@ use crate::model::spectral_norm::{SpectralNormLinear, SpectralNormLinearConfig};
 /// Configuration for the EnergyHead MLP.
 ///
 /// Maps encoder hidden states (d_encoder) to scalar energy via a 4-layer
-/// spectral-normed SiLU MLP with dropout and learnable temperature.
+/// spectral-normed SiLU MLP with dropout and optional learnable temperature.
 ///
 /// ```text
 /// (batch, d_encoder)
@@ -14,9 +14,13 @@ use crate::model::spectral_norm::{SpectralNormLinear, SpectralNormLinearConfig};
 ///   → SpectralNormLinear(d_hidden1→d_hidden2) → SiLU → Dropout
 ///   → SpectralNormLinear(d_hidden2→d_hidden3) → SiLU → Dropout
 ///   → SpectralNormLinear(d_hidden3→1, no bias) → squeeze
-///   → raw_energy / exp(log_temperature)
-///   → energy: (batch,)
+///   → raw_energy: (batch,)
 /// ```
+///
+/// Temperature scaling is **not** applied in `forward()`. For InfoNCE loss
+/// (which needs temperature to set softmax scale), call `temperature_scale()`
+/// on the output. Margin ranking loss must use raw energies — temperature
+/// would let the optimizer collapse τ→0 to trivially satisfy the margin.
 #[derive(Config, Debug)]
 pub struct EnergyHeadConfig {
     /// Encoder output dimension (e.g. 4096 for DeepSeek-Prover-V2-7B).
@@ -98,10 +102,13 @@ impl EnergyHeadConfig {
 }
 
 impl<B: Backend> EnergyHead<B> {
-    /// Forward pass: maps encoder hidden states to scalar energy values.
+    /// Forward pass: maps encoder hidden states to raw scalar energy values.
     ///
     /// Input shape: `(batch, d_encoder)`
     /// Output shape: `(batch,)`
+    ///
+    /// Returns **raw** (unscaled) energy. For InfoNCE loss, pipe through
+    /// [`temperature_scale`](Self::temperature_scale) afterwards.
     pub fn forward(&self, h: Tensor<B, 2>) -> Tensor<B, 1> {
         let x = self.sn_linear1.forward(h);
         let x = burn::tensor::activation::silu(x);
@@ -115,9 +122,18 @@ impl<B: Backend> EnergyHead<B> {
         let x = burn::tensor::activation::silu(x);
         let x = self.dropout3.forward(x);
 
-        let raw_energy: Tensor<B, 1> = self.sn_linear4.forward(x).squeeze::<1>(1);
-        let temperature = self.log_temperature.val().exp();
-        raw_energy / temperature
+        self.sn_linear4.forward(x).squeeze::<1>(1)
+    }
+
+    /// Apply learnable temperature scaling to energies.
+    ///
+    /// Returns `energy / exp(log_temperature)`. Only appropriate for
+    /// InfoNCE loss (softmax has no inherent scale). **Never** use with
+    /// margin ranking loss — the optimizer will collapse τ→0 to trivially
+    /// satisfy the margin instead of learning real energy gaps.
+    pub fn temperature_scale(&self, energy: Tensor<B, 1>) -> Tensor<B, 1> {
+        let temperature = self.log_temperature.val().clamp(-5.0, 2.0).exp();
+        energy / temperature
     }
 }
 
@@ -253,76 +269,75 @@ mod tests {
             "sn_linear4 gradient is zero — gradient not flowing"
         );
 
-        // Check gradient flows to log_temperature
-        let temp_grad = grads
+        // log_temperature only gets gradients via temperature_scale(), not forward().
+        // Verify it gets gradient when temperature_scale is in the compute graph.
+        let input2 = Tensor::<TestAutodiffBackend, 2>::random(
+            [4, 32],
+            Distribution::Normal(0.0, 1.0),
+            &device,
+        );
+        let raw = model.forward(input2);
+        let scaled = model.temperature_scale(raw);
+        let loss2 = scaled.sum();
+        let grads2 = GradientsParams::from_grads(loss2.backward(), &model);
+        let temp_grad = grads2
             .get::<NdArray<f32>, 1>(model.log_temperature.id)
-            .expect("log_temperature should have gradient");
+            .expect("log_temperature should have gradient via temperature_scale");
         let temp_grad_sum: f32 = temp_grad.abs().sum().into_scalar().elem();
         assert!(
             temp_grad_sum > 0.0,
-            "log_temperature gradient is zero — gradient not flowing"
+            "log_temperature gradient is zero — gradient not flowing through temperature_scale"
         );
     }
 
     #[test]
     fn test_temperature_scaling() {
-        // Temperature scaling test: verify that changing log_temperature affects
-        // the output magnitude. We use more power iterations (20) to reduce
-        // spectral norm variance between forward calls.
+        // Temperature scaling test: verify that temperature_scale() applies
+        // the learned temperature. forward() returns raw energy; temperature
+        // is only used via temperature_scale() for InfoNCE.
         let device = Default::default();
 
-        let sn_config = |d_in: usize, d_out: usize, bias: bool| {
-            crate::model::spectral_norm::SpectralNormLinearConfig::new(d_in, d_out)
-                .with_n_power_iterations(20)
-                .with_bias(bias)
-        };
-
-        // Build model with high power iterations for tighter convergence
-        let model = EnergyHead {
-            sn_linear1: sn_config(32, 16, true).init::<TestBackend>(&device),
-            sn_linear2: sn_config(16, 8, true).init::<TestBackend>(&device),
-            sn_linear3: sn_config(8, 4, true).init::<TestBackend>(&device),
-            sn_linear4: sn_config(4, 1, false).init::<TestBackend>(&device),
-            dropout1: burn::nn::DropoutConfig::new(0.0).init(),
-            dropout2: burn::nn::DropoutConfig::new(0.0).init(),
-            dropout3: burn::nn::DropoutConfig::new(0.0).init(),
-            log_temperature: Param::from_tensor(Tensor::zeros([1], &device)),
-        };
+        let model = EnergyHeadConfig::new(32)
+            .with_d_hidden1(16)
+            .with_d_hidden2(8)
+            .with_d_hidden3(4)
+            .with_dropout(0.0)
+            .with_init_log_temperature(0.0) // temperature = 1.0
+            .init::<TestBackend>(&device);
 
         let input = Tensor::<TestBackend, 2>::random(
-            [32, 32],
+            [8, 32],
             Distribution::Normal(0.0, 1.0),
             &device,
         );
 
-        // Default log_temperature=0 → temperature=1
-        let energy_temp1 = model.forward(input.clone());
+        // forward() returns raw energy (no temperature)
+        let raw_energy = model.forward(input.clone());
+        // temperature_scale() divides by exp(0) = 1.0, so should be identical
+        let scaled_energy = model.temperature_scale(raw_energy.clone());
 
-        // Create model with log_temperature = ln(2) → temperature = 2
-        let model_temp2 = EnergyHead {
-            sn_linear1: model.sn_linear1,
-            sn_linear2: model.sn_linear2,
-            sn_linear3: model.sn_linear3,
-            sn_linear4: model.sn_linear4,
-            dropout1: model.dropout1,
-            dropout2: model.dropout2,
-            dropout3: model.dropout3,
-            log_temperature: Param::from_tensor(Tensor::from_floats(
-                [2.0_f32.ln()],
-                &device,
-            )),
-        };
-        let energy_temp2 = model_temp2.forward(input);
-
-        // energy_temp1 / energy_temp2 ≈ 2.0 (dividing by 2x temperature halves energy)
-        // With 20 power iterations and batch=32, spectral norm variance is much lower.
-        // Use element-wise absolute energy comparison: |e1| should be roughly 2x |e2|.
-        let abs1: f32 = energy_temp1.abs().mean().into_scalar().elem();
-        let abs2: f32 = energy_temp2.abs().mean().into_scalar().elem();
-        let ratio = abs1 / abs2;
+        let diff: f32 = (raw_energy.clone() - scaled_energy).abs().sum().into_scalar().elem();
         assert!(
-            (ratio - 2.0).abs() < 1.0,
-            "Expected |energy1|/|energy2| ratio ~2.0, got {ratio} (abs1={abs1}, abs2={abs2})"
+            diff < 1e-6,
+            "With log_temperature=0 (temp=1), scaled should equal raw, diff={diff}"
+        );
+
+        // Build model with log_temperature = ln(2) → temperature = 2
+        let model_temp2 = EnergyHeadConfig::new(32)
+            .with_d_hidden1(16)
+            .with_d_hidden2(8)
+            .with_d_hidden3(4)
+            .with_dropout(0.0)
+            .with_init_log_temperature(2.0_f64.ln())
+            .init::<TestBackend>(&device);
+
+        // temperature_scale divides by 2 → half the magnitude
+        let scaled = model_temp2.temperature_scale(raw_energy.clone());
+        let expected = raw_energy / 2.0;
+        let diff: f32 = (scaled - expected).abs().sum().into_scalar().elem();
+        assert!(
+            diff < 1e-4,
+            "With temp=2, scaled should be raw/2, diff={diff}"
         );
     }
 

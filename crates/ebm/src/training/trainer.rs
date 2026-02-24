@@ -150,12 +150,25 @@ fn eval_samples<B: Backend>(
         device,
     );
 
-    let pos_energy = model.forward(pos_tensor);
-    let neg_energy_flat = model.forward(neg_tensor);
+    let pos_energy_raw = model.forward(pos_tensor);
+    let neg_energy_flat_raw = model.forward(neg_tensor);
+
+    // Temperature scaling only for InfoNCE (softmax needs it).
+    // Margin ranking must use raw energies — temperature would let the
+    // optimizer collapse τ→0 to trivially satisfy the margin.
+    let (pos_energy, neg_energy_flat) = if loss_type == ContrastiveLossType::InfoNCE {
+        (
+            model.temperature_scale(pos_energy_raw.clone()),
+            model.temperature_scale(neg_energy_flat_raw.clone()),
+        )
+    } else {
+        (pos_energy_raw.clone(), neg_energy_flat_raw.clone())
+    };
     let neg_energies = neg_energy_flat.reshape([actual_batch, k]);
 
     let cl = contrastive_loss(loss_type, pos_energy.clone(), neg_energies.clone(), margin);
-    let depth_loss = depth_regression_loss(pos_energy.clone(), remaining_tensor);
+    // Depth regression uses raw (unscaled) energy — it's an absolute target.
+    let depth_loss = depth_regression_loss(pos_energy_raw, remaining_tensor);
 
     let contrastive_val: f64 = cl.clone().into_scalar().elem();
     let depth_val: f64 = depth_loss.clone().into_scalar().elem();
@@ -435,9 +448,21 @@ pub fn train<B: AutodiffBackend>(
             device,
         );
 
-        // Forward pass
-        let pos_energy = model.forward(pos_tensor);
-        let neg_energy_flat = model.forward(neg_tensor);
+        // Forward pass — raw (unscaled) energy
+        let pos_energy_raw = model.forward(pos_tensor);
+        let neg_energy_flat_raw = model.forward(neg_tensor);
+
+        // Temperature scaling only for InfoNCE (softmax needs it).
+        // Margin ranking must use raw energies — temperature would let the
+        // optimizer collapse τ→0 to trivially satisfy the margin.
+        let (pos_energy, neg_energy_flat) = if config.loss_type == ContrastiveLossType::InfoNCE {
+            (
+                model.temperature_scale(pos_energy_raw.clone()),
+                model.temperature_scale(neg_energy_flat_raw.clone()),
+            )
+        } else {
+            (pos_energy_raw.clone(), neg_energy_flat_raw.clone())
+        };
         let neg_energies = neg_energy_flat.reshape([batch_size, k]);
 
         // Clone tensors for metrics (before backward consumes them)
@@ -446,7 +471,8 @@ pub fn train<B: AutodiffBackend>(
 
         // Compute losses
         let cl = contrastive_loss(config.loss_type, pos_energy.clone(), neg_energies, config.margin);
-        let depth_loss = depth_regression_loss(pos_energy, remaining_tensor);
+        // Depth regression uses raw (unscaled) energy — it's an absolute target.
+        let depth_loss = depth_regression_loss(pos_energy_raw, remaining_tensor);
 
         // Extract scalar values before backward
         let contrastive_val: f64 = cl.clone().into_scalar().elem();
@@ -454,6 +480,16 @@ pub fn train<B: AutodiffBackend>(
 
         let total_loss = cl + depth_loss * config.depth_loss_weight;
         let total_val: f64 = total_loss.clone().into_scalar().elem();
+
+        // NaN guard: skip optimizer step if loss is NaN/Inf to prevent
+        // permanently corrupting model weights with NaN gradients.
+        if total_val.is_nan() || total_val.is_infinite() {
+            skipped_steps += 1;
+            if step % 1000 == 0 {
+                tracing::warn!(step, loss = total_val, "Skipping step: loss is NaN/Inf");
+            }
+            continue;
+        }
 
         // Backward + optimizer step
         let grads = GradientsParams::from_grads(total_loss.backward(), &model);

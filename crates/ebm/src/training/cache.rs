@@ -2,8 +2,8 @@
 //!
 //! Since the LLM encoder is frozen, `state_pp` → embedding is deterministic.
 //! This module precomputes all unique embeddings once and stores them in a
-//! `HashMap<String, Vec<f32>>` for O(1) lookups during training. Optionally
-//! persists to Parquet for reuse across runs.
+//! flat contiguous buffer with a `HashMap<String, u32>` index for O(1) lookups
+//! during training. Optionally persists to Parquet for reuse across runs.
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -38,12 +38,14 @@ fn format_eta(start: Instant, done: usize, total: usize) -> String {
     }
 }
 
-/// Precomputed embedding cache backed by a `HashMap`.
+/// Precomputed embedding cache backed by a flat contiguous buffer.
 ///
-/// Maps proof state strings to their embedding vectors. Used to avoid
-/// redundant LLM encoder calls during EBM training.
+/// Maps proof state strings to rows in a dense `Vec<f32>` via a
+/// `HashMap<String, u32>` index. This avoids per-embedding heap allocation
+/// overhead compared to `HashMap<String, Vec<f32>>`.
 pub struct EmbeddingCache {
-    embeddings: HashMap<String, Vec<f32>>,
+    index: HashMap<String, u32>,
+    data: Vec<f32>,
     dim: usize,
 }
 
@@ -51,9 +53,22 @@ impl EmbeddingCache {
     /// Create an empty cache with the given embedding dimension.
     pub fn new(dim: usize) -> Self {
         Self {
-            embeddings: HashMap::new(),
+            index: HashMap::new(),
+            data: Vec::new(),
             dim,
         }
+    }
+
+    /// Return the embedding slice for a given row index.
+    fn row_slice(&self, idx: u32) -> &[f32] {
+        let start = idx as usize * self.dim;
+        &self.data[start..start + self.dim]
+    }
+
+    /// Return a mutable embedding slice for a given row index.
+    fn row_slice_mut(&mut self, idx: u32) -> &mut [f32] {
+        let start = idx as usize * self.dim;
+        &mut self.data[start..start + self.dim]
     }
 
     /// Precompute embeddings for all unique states in the sampler.
@@ -76,7 +91,11 @@ impl EmbeddingCache {
                 .progress_chars("=> "),
         );
 
-        let mut embeddings = HashMap::with_capacity(total);
+        let mut cache = Self {
+            index: HashMap::with_capacity(total),
+            data: Vec::with_capacity(total * dim),
+            dim,
+        };
         let mut errors = 0usize;
         let start = Instant::now();
 
@@ -84,7 +103,7 @@ impl EmbeddingCache {
             match encode_fn(state) {
                 Ok(emb) => {
                     debug_assert_eq!(emb.len(), dim, "Embedding dim mismatch: expected {dim}, got {}", emb.len());
-                    embeddings.insert(state.to_string(), emb);
+                    cache.insert(state.to_string(), emb);
                 }
                 Err(e) => {
                     errors += 1;
@@ -101,12 +120,12 @@ impl EmbeddingCache {
 
         tracing::info!(
             total_states = total,
-            cached = embeddings.len(),
+            cached = cache.len(),
             errors = errors,
             "Embedding precomputation complete"
         );
 
-        Self { embeddings, dim }
+        cache
     }
 
     /// Precompute embeddings concurrently for a set of states.
@@ -132,7 +151,7 @@ impl EmbeddingCache {
         // Filter to states not already cached
         let missing: Vec<String> = states
             .iter()
-            .filter(|s| !self.embeddings.contains_key(**s))
+            .filter(|s| !self.index.contains_key(**s))
             .map(|s| s.to_string())
             .collect();
 
@@ -191,7 +210,7 @@ impl EmbeddingCache {
                             "Zero-norm embedding returned by server — skipping"
                         );
                     } else {
-                        self.embeddings.insert(state, emb);
+                        self.insert(state, emb);
                         encoded += 1;
                     }
                 }
@@ -216,7 +235,7 @@ impl EmbeddingCache {
                     } else {
                         tracing::info!(
                             encoded,
-                            total_cached = self.embeddings.len(),
+                            total_cached = self.len(),
                             path = %cp_path.display(),
                             "Checkpoint saved"
                         );
@@ -234,7 +253,7 @@ impl EmbeddingCache {
                 } else {
                     tracing::info!(
                         encoded,
-                        total_cached = self.embeddings.len(),
+                        total_cached = self.len(),
                         path = %cp_path.display(),
                         "Final checkpoint saved"
                     );
@@ -256,7 +275,7 @@ impl EmbeddingCache {
             total_states = states.len(),
             newly_encoded = encoded,
             errors,
-            total_cached = self.embeddings.len(),
+            total_cached = self.len(),
             "Concurrent embedding precomputation complete"
         );
 
@@ -308,7 +327,7 @@ impl EmbeddingCache {
         // Filter to states not already cached
         let missing: Vec<String> = states
             .iter()
-            .filter(|s| !self.embeddings.contains_key(**s))
+            .filter(|s| !self.index.contains_key(**s))
             .map(|s| s.to_string())
             .collect();
 
@@ -370,7 +389,7 @@ impl EmbeddingCache {
                                     "Embedding dim mismatch: expected {dim}, got {}",
                                     emb.len()
                                 );
-                                self.embeddings.insert(state.clone(), emb);
+                                self.insert(state.clone(), emb);
                                 encoded += 1;
                             }
                             Err(e) => {
@@ -411,7 +430,7 @@ impl EmbeddingCache {
                     } else {
                         tracing::info!(
                             encoded,
-                            total_cached = self.embeddings.len(),
+                            total_cached = self.len(),
                             path = %cp_path.display(),
                             "Checkpoint saved"
                         );
@@ -429,7 +448,7 @@ impl EmbeddingCache {
                 } else {
                     tracing::info!(
                         encoded,
-                        total_cached = self.embeddings.len(),
+                        total_cached = self.len(),
                         path = %cp_path.display(),
                         "Final checkpoint saved"
                     );
@@ -451,7 +470,7 @@ impl EmbeddingCache {
             total_states = states.len(),
             newly_encoded = encoded,
             errors,
-            total_cached = self.embeddings.len(),
+            total_cached = self.len(),
             "Batched embedding precomputation complete"
         );
 
@@ -460,20 +479,21 @@ impl EmbeddingCache {
 
     /// Look up the embedding for a proof state.
     pub fn get(&self, state_pp: &str) -> Option<&[f32]> {
-        self.embeddings.get(state_pp).map(|v| v.as_slice())
+        self.index.get(state_pp).map(|&idx| self.row_slice(idx))
     }
 
     /// Look up the embedding for a proof state, returning an error if missing.
     pub fn get_or_err(&self, state_pp: &str) -> anyhow::Result<Vec<f32>> {
-        self.embeddings
+        self.index
             .get(state_pp)
-            .cloned()
+            .map(|&idx| self.row_slice(idx).to_vec())
             .ok_or_else(|| anyhow::anyhow!("Embedding not found in cache for state: {}", state_pp))
     }
 
     /// Insert an embedding into the cache.
     ///
     /// Used for lazy (on-demand) cache population during training.
+    /// If the key already exists, the embedding is overwritten in place.
     pub fn insert(&mut self, state: String, embedding: Vec<f32>) {
         debug_assert_eq!(
             embedding.len(),
@@ -482,17 +502,23 @@ impl EmbeddingCache {
             self.dim,
             embedding.len()
         );
-        self.embeddings.insert(state, embedding);
+        if let Some(&idx) = self.index.get(&state) {
+            self.row_slice_mut(idx).copy_from_slice(&embedding);
+        } else {
+            let idx = (self.data.len() / self.dim) as u32;
+            self.data.extend_from_slice(&embedding);
+            self.index.insert(state, idx);
+        }
     }
 
     /// Number of cached embeddings.
     pub fn len(&self) -> usize {
-        self.embeddings.len()
+        self.index.len()
     }
 
     /// Whether the cache is empty.
     pub fn is_empty(&self) -> bool {
-        self.embeddings.is_empty()
+        self.index.is_empty()
     }
 
     /// Embedding dimension.
@@ -506,13 +532,13 @@ impl EmbeddingCache {
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {
         let schema = Arc::new(embedding_cache_schema());
 
-        let mut state_pps = Vec::with_capacity(self.embeddings.len());
+        let mut state_pps = Vec::with_capacity(self.len());
         let mut all_values = Vec::new();
         let mut offsets = vec![0i32];
 
-        for (state, emb) in &self.embeddings {
+        for (state, &idx) in &self.index {
             state_pps.push(state.as_str());
-            all_values.extend_from_slice(emb);
+            all_values.extend_from_slice(self.row_slice(idx));
             offsets.push(all_values.len() as i32);
         }
 
@@ -540,7 +566,7 @@ impl EmbeddingCache {
         std::fs::rename(&tmp_path, path)?;
 
         tracing::info!(
-            entries = self.embeddings.len(),
+            entries = self.len(),
             dim = self.dim,
             path = %path.display(),
             "Saved embedding cache to Parquet"
@@ -556,8 +582,10 @@ impl EmbeddingCache {
         let file = std::fs::File::open(path)?;
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
 
-        let mut embeddings = HashMap::new();
+        let mut index = HashMap::new();
+        let mut data = Vec::new();
         let mut dim: Option<usize> = None;
+        let mut row_idx: u32 = 0;
 
         for batch_result in reader {
             let batch = batch_result?;
@@ -599,20 +627,22 @@ impl EmbeddingCache {
                     }
                 }
 
-                embeddings.insert(state, emb);
+                data.extend_from_slice(&emb);
+                index.insert(state, row_idx);
+                row_idx += 1;
             }
         }
 
         let dim = dim.unwrap_or(0);
 
         tracing::info!(
-            entries = embeddings.len(),
+            entries = index.len(),
             dim = dim,
             path = %path.display(),
             "Loaded embedding cache from Parquet"
         );
 
-        Ok(Self { embeddings, dim })
+        Ok(Self { index, data, dim })
     }
 }
 
@@ -636,9 +666,7 @@ mod tests {
     #[test]
     fn test_cache_get() {
         let mut cache = EmbeddingCache::new(4);
-        cache
-            .embeddings
-            .insert("⊢ True".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
+        cache.insert("⊢ True".to_string(), vec![1.0, 2.0, 3.0, 4.0]);
 
         // Hit
         assert_eq!(cache.get("⊢ True"), Some(&[1.0, 2.0, 3.0, 4.0][..]));
@@ -681,15 +709,9 @@ mod tests {
         let path = tmp.path().join("cache.parquet");
 
         let mut cache = EmbeddingCache::new(3);
-        cache
-            .embeddings
-            .insert("state_a".to_string(), vec![0.1, 0.2, 0.3]);
-        cache
-            .embeddings
-            .insert("state_b".to_string(), vec![0.4, 0.5, 0.6]);
-        cache
-            .embeddings
-            .insert("state_c".to_string(), vec![0.7, 0.8, 0.9]);
+        cache.insert("state_a".to_string(), vec![0.1, 0.2, 0.3]);
+        cache.insert("state_b".to_string(), vec![0.4, 0.5, 0.6]);
+        cache.insert("state_c".to_string(), vec![0.7, 0.8, 0.9]);
 
         cache.save(&path).unwrap();
         assert!(path.exists());
