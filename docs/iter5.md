@@ -41,9 +41,22 @@
 | neg_norm | 14.656 | 15.209 | +0.553 |
 | delta_cosine | -0.004 | 0.001 | +0.005 |
 
-### miniF2F v2s (partial — interrupted at 145/244, budget 600, no EBM)
+### miniF2F v2s (partial — interrupted at 145/244, budget 600, no EBM, iter_5 LLM)
 
 Partial results before interruption: 38 proved, 6 fail, 87 timeout, 14 errors at 145/244.
+
+### miniF2F v2s (partial — killed at 139/244, budget 600, WITH EBM, iter_4 LLM)
+
+Using iter_4 model (symlinked as iter_5) + iter_5 EBM + nf4 encode server (batch 4).
+
+```
+proved=58  fail=19  timeout=61  err=1
+139/244 evaluated (~57%), elapsed 2h38m
+Prove rate: 41.7%
+Concurrency: 5, workers: 8, candidates: 16
+```
+
+Killed to free GPU for iteration 5 search run.
 
 ## Analysis
 

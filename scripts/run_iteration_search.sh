@@ -104,6 +104,7 @@ else
         --output $TRAJ_OUTPUT \
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
+        --num-candidates 16 \
         $MAX_FLAG \
         --imports Mathlib
 
