@@ -132,6 +132,53 @@ burn-qed/
 | linear_probe_acc | ≥ 0.75 | ≥ iter_0 | < 0.65 |
 | EBM rank-1 (depth 4+) | ≥ 0.30 | ≥ 0.40 | < 0.25 |
 
+## v2 Task Tracker
+
+Reference: `docs/v2_execution_plan.md` for full details, code snippets, and gotchas.
+
+### Phase 0: Environment Setup + Data Pipeline (Days 1–3)
+
+- [x] **0.pre** Archive v1 infrastructure, feature-gate burn-rs, create Python stubs
+- [ ] **0.0** Port GoalConditionedEnergyHead to PyTorch (3h) — implement `python/joint/ebm_head.py` with unit tests: output shape, spectral norms ~1.0, first-layer weight ~0.1x, temperature divides forward(), EmbeddingExtractor grabs correct token
+- [ ] **0.1** Lean version audit (2h) — check LeanDojo vs Workbook (v4.8.0-rc1) vs NuminaMath Lean versions, set up parallel env if mismatch
+- [ ] **0.3** Download datasets (1h) — Goedel Workbook proofs (29.7K), Lean Workbook (57K+83K), NuminaMath-LEAN (100K) from HuggingFace
+- [ ] **0.4** Trace Goedel Workbook proofs — parallel + chunked (Day 2, 8–12h wall) — seed 20% first (~6K, ~2–3h), start SFT on seed, remainder overnight. ABORT if error rate >20%
+- [ ] **0.5** Trace NuminaMath-LEAN proved subset — runs in parallel with 0.4 remainder
+- [ ] **0.6** Filter and format tactic pairs (1h) — combine sources, split by theorem name (Gotcha 11), sorry filter (Gotcha 12), depth≥3 contrastive pool
+
+### Phase 1: Iter 0 SFT Baseline (Days 3–4)
+
+- [ ] **1.1** Train iter_0 LoRA r=32 (5–7h GPU) — seed data first, retrain on full when ready. Completion-only loss masking (Gotcha 13). Check special tokens (Gotcha 14)
+- [ ] **1.2** Merge LoRA and deploy to SGLang (0.5h)
+- [ ] **1.3** Search on contrastive pool — 2K theorems × 800 nodes × 300s (6–8h GPU) — depth over breadth (Gotcha 8), T=1.3, 16 candidates
+- [ ] **1.4** Quick miniF2F sanity check (1.5h GPU) — LLM-only baseline, compare to old iter_4
+
+### Phase 2: Embedding + EBM Baseline (Days 5–6)
+
+- [ ] **2.1** Extract embeddings from iter_0 — STATES AND GOALS (2h GPU) — save to `iterations/iter_0/embeddings/` (Gotcha 9: extract both z_state and z_goal)
+- [ ] **2.2** Compute embedding baseline metrics (2h, no GPU) — centroid_l2, linear_probe, norm_gap, sibling_l2, variance spectrum, depth-stratified clustering, dual-label rate
+- [ ] **2.3** Generate embedding visualizations (1h) — t-SNE/UMAP, depth coloring, sibling histograms, eigenvalue spectrum
+- [ ] **2.4** Train decoupled goal-conditioned EBM on frozen iter_0 embeddings (3h GPU) — SAME architecture as iter_1. Save to `iterations/iter_0/ebm/`
+- [ ] **2.5** Compute EBM baseline metrics (1h) — rank-1 accuracy (overall + by depth), energy gap, sibling discrimination, active ratio
+- [ ] **2.6** EBM-augmented miniF2F search (2–3h GPU) — needs Python encode server wrapping GoalConditionedEnergyHead
+- [ ] **2.7** Compile baseline report (1h) — `iterations/iter_0/baselines/baseline_report.md`
+
+### Phase 3: Joint Training Loop (Days 7–8)
+
+- [ ] **3.1** JointDataset for competition data (3h) — implement `python/joint/dataset.py`: SFT + contrastive interleaved streams
+- [ ] **3.2** JointProver model (2.5h) — implement `python/joint/model.py`: backbone + LoRA r=64 + GoalConditionedEnergyHead
+- [ ] **3.3** InfoNCE loss — no temperature (0.5h) — implement `python/joint/losses.py` (Gotcha 1)
+- [ ] **3.4** Training loop with monitoring (2h) — implement `python/joint/train.py`: joint SFT+InfoNCE backward, separation probe every 500 steps, temperature logging every 50 steps (Gotcha 3)
+- [ ] **3.5** Smoke test — 1 batch forward+backward (0.5h GPU) — verify finite losses, gradients flow to both LoRA and EBM head, peak VRAM <36GB
+
+### Phase 4: Joint Training + Evaluation (Days 9–11)
+
+- [ ] **4.1** Train iter_1 joint (6–8h GPU) — LoRA r=64, lr_lora=2e-5, lr_ebm=3e-5, λ_ebm=0.1, 6K steps. Monitor abort conditions: centroid_l2 <3.0, SFT loss >0.5 after 2K steps, temperature floor/ceiling
+- [ ] **4.2** Export and deploy (0.5h) — merge LoRA, save EBM head to `iterations/iter_1/`
+- [ ] **4.3** Repeat ALL baseline measurements on iter_1 (4h GPU) — 3-config comparison: A (iter_0 decoupled), B (iter_1 LoRA + decoupled EBM), C (iter_1 full joint)
+- [ ] **4.4** Comparative analysis (2h) — `iterations/iter_1/analysis/comparison_report.md`: did competition data help? did joint training protect embeddings? did goal conditioning help? end-to-end miniF2F delta?
+- [ ] **4.5** Decision point — iter_1 > iter_0 + centroid held → plan iter_2; iter_0 >> old but iter_1 ≈ iter_0 → data was bottleneck; centroid collapsed → debug joint training
+
 ## Settled Architecture Decisions (Do NOT Revisit)
 
 1. Shared 7B backbone (not separate encoder)
