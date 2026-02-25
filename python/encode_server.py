@@ -69,7 +69,7 @@ _linger_ms: int = 5
 # Core encode logic (duplicated from encode_embeddings.py to avoid coupling)
 # ---------------------------------------------------------------------------
 
-_max_batch_size = 16  # Default; overridden by --max-batch-size CLI arg
+_max_batch_size = 8  # Default; overridden by --max-batch-size CLI arg
 
 
 @torch.no_grad()
@@ -106,15 +106,29 @@ def _encode_chunk(prompts: list[str]) -> np.ndarray:
 
 @torch.no_grad()
 def encode_batch(prompts: list[str]) -> np.ndarray:
-    """Encode prompts in sub-batches to cap peak VRAM usage."""
-    if len(prompts) <= _max_batch_size:
-        return _encode_chunk(prompts)
-    # Process in chunks to avoid VRAM OOM from activation memory
-    chunks = []
-    for i in range(0, len(prompts), _max_batch_size):
-        chunk = prompts[i : i + _max_batch_size]
-        chunks.append(_encode_chunk(chunk))
-    return np.concatenate(chunks, axis=0)
+    """Encode prompts in sub-batches to cap peak VRAM usage.
+
+    On OOM, halves the batch size and retries down to batch=1.
+    """
+    batch_size = min(_max_batch_size, len(prompts))
+    while batch_size >= 1:
+        try:
+            if len(prompts) <= batch_size:
+                return _encode_chunk(prompts)
+            chunks = []
+            for i in range(0, len(prompts), batch_size):
+                chunk = prompts[i : i + batch_size]
+                chunks.append(_encode_chunk(chunk))
+            return np.concatenate(chunks, axis=0)
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            old = batch_size
+            batch_size = max(1, batch_size // 2)
+            if old == 1:
+                raise  # Already at batch=1, can't recover
+            logger.warning(
+                "OOM at batch_size=%d, retrying with batch_size=%d", old, batch_size
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -284,8 +298,8 @@ def parse_args():
     parser.add_argument(
         "--max-batch-size",
         type=int,
-        default=16,
-        help="Max prompts per forward pass to cap VRAM usage (default: 16). "
+        default=8,
+        help="Max prompts per forward pass to cap VRAM usage (default: 8). "
              "Larger batches are split into sub-batches automatically.",
     )
     parser.add_argument(
@@ -319,6 +333,13 @@ def main():
     _max_batch_size = args.max_batch_size
     _linger_ms = args.linger_ms
     _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Cap PyTorch VRAM to prevent leaked activations from filling the GPU.
+    # Default 0.90 leaves ~2.4 GB headroom on a 24 GB card for the OS / SGLang.
+    vram_fraction = float(os.environ.get("ENCODE_VRAM_FRACTION", "0.90"))
+    if _device.type == "cuda":
+        torch.cuda.set_per_process_memory_fraction(vram_fraction)
+        logger.info("CUDA memory fraction capped at %.0f%%", vram_fraction * 100)
 
     logger.info(
         "Loading model: %s (dtype=%s, device=%s)",

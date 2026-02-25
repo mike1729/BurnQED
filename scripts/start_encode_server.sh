@@ -22,9 +22,12 @@ ENCODE_DTYPE="${ENCODE_DTYPE:-bfloat16}"
 # Pin to a specific GPU (e.g., CUDA_DEVICE=1). Unset = use all GPUs.
 CUDA_DEVICE="${CUDA_DEVICE:-}"
 
-# Max batch size for encoding. 16 is safe with bfloat16 on a dedicated 24GB GPU
-# (~13GB model + ~4-5GB activations at batch 16). Lower to 4 if sharing a GPU.
-ENCODE_MAX_BATCH="${ENCODE_MAX_BATCH:-16}"
+# Max batch size for encoding. 8 is safe with bfloat16 on a dedicated 24GB GPU
+# (~13GB model + ~3GB activations at batch 8). Lower to 4 if sharing a GPU.
+ENCODE_MAX_BATCH="${ENCODE_MAX_BATCH:-8}"
+
+# VRAM fraction cap — prevents activation leaks from filling the GPU.
+ENCODE_VRAM_FRACTION="${ENCODE_VRAM_FRACTION:-0.90}"
 
 if [ -n "$CUDA_DEVICE" ]; then
     export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
@@ -38,9 +41,10 @@ echo "  Port:       ${ENCODE_PORT}"
 echo "  Dtype:      ${ENCODE_DTYPE}"
 echo "  GPU:        ${CUDA_DEVICE:-all}"
 echo "  Max batch:  ${ENCODE_MAX_BATCH}"
+echo "  VRAM frac:  ${ENCODE_VRAM_FRACTION}"
 echo "================================================================"
 
-export ENCODE_PORT ENCODE_DTYPE
+export ENCODE_PORT ENCODE_DTYPE ENCODE_VRAM_FRACTION
 
 python "${REPO_ROOT}/python/encode_server.py" \
     --model-path "$MODEL_PATH" \
