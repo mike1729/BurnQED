@@ -45,13 +45,41 @@ For the EBM/LLM signal to be useful, positive (proof-path) nodes should be disti
 - **LLM sep > 0** means correct tactics get higher log-prob (good). Only iter 0 (base model) has positive separation.
 - **EBM sep > 0** means correct states get lower energy (good). Separation is near zero across all iterations.
 
+## Proof Depth Distribution
+
+Earlier iterations are dominated by shallow (depth 0-1) proofs. Iter 5 searches much harder theorems.
+
+| Iter | Depth 0-1 | Depth 2-3 | Depth 4-7 | Depth 8+ | Median | Mean |
+|------|-----------|-----------|-----------|----------|--------|------|
+| 0    | 72%       | 18%       | 11%       | 0%       | 1      | 1.7  |
+| 1    | 79%       | 7%        | 12%       | 2%       | 1      | 1.8  |
+| 2    | **86%**   | 6%        | 7%        | <1%      | 1      | 1.4  |
+| 4    | 73%       | 12%       | 12%       | 1%       | 1      | 1.8  |
+| 5    | **17%**   | 27%       | 41%       | **15%**  | **4**  | 4.5  |
+
+### LLM Rank-1 by Depth Bucket
+
+Controlling for proof difficulty removes the apparent iter 2 peak.
+
+| Depth | Iter 1 | Iter 2 | Iter 4 | Iter 5 |
+|-------|--------|--------|--------|--------|
+| 0-1   | 72.2%  | 74.3%  | 66.8%  | 46.6%  |
+| 2-3   | 39.4%  | 35.3%  | **48.6%** | 30.8% |
+| 4-7   | 29.9%  | 32.1%  | 32.1%  | 27.1%  |
+| 8+    | 19.6%  | 22.8%  | **28.5%** | 24.9% |
+
+At depth 4+, all iterations are in a similar 20-32% range. Iter 4 is the best at deeper proofs (28.5% at 8+). The headline drop from iter 2 (58%) to iter 5 (28%) is almost entirely explained by iter 2 being 86% shallow proofs vs iter 5 at 17%.
+
 ## Key Findings
 
-### 1. LLM log-prob peaked at iter 2 then collapsed
+### 1. LLM log-prob signal is depth-dependent, not collapsing
 
-Iter 1-2 fine-tuning improved the LLM's ability to rank correct tactics (48-58% rank-1 vs 27% random). But continued fine-tuning inverted the calibration: by iter 5, the LLM assigns **higher probability to incorrect tactics** (sep = -9.00). The rank-1 rate dropped below random (27.6% vs 33.4%).
+The aggregate LLM rank-1 numbers (58% → 28%) are misleading. Iter 2's 58% is inflated by 86% of proofs being depth 0-1 (where LLM gets 74%). When controlling for depth:
+- At depth 4-7: all iterations cluster around 27-32%
+- At depth 8+: iter 4 leads at 28.5%, iter 5 is 24.9%
+- The LLM is consistently useful at ~30% for medium-depth proofs (above 27% random)
 
-This suggests the fine-tuning loop is overfitting the tactic distribution — the model becomes more confident but less calibrated.
+The negative log-prob separation (pos mean < neg mean) reflects that correct tactics for hard theorems tend to be less probable — the LLM is less confident but the ranking still works.
 
 ### 2. EBM provides no useful signal
 
