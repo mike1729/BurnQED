@@ -1,125 +1,147 @@
-# burn-qed
+# burn-qed — Project Summary for Claude
 
-Lean 4 theorem prover combining LLM policy (tactic generation) with Energy-Based Model value function (proof state scoring) to guide best-first proof search. Trained via expert iteration.
+## What This Is
 
-## Architecture Overview
+Lean 4 theorem prover combining an LLM policy (tactic generation) with an Energy-Based Model value function (proof state scoring) to guide best-first proof search. Trained via expert iteration. Primary evaluation benchmark: miniF2Fv2 (244 competition-level math problems formalized in Lean 4).
+
+## Architecture
 
 ```
-DeepSeek-Prover-V2-7B (SGLang server)
-├── Policy head: autoregressive tactic generation (LM head)
-└── Mean-pool hidden states → Vec<f32> via /encode endpoint
-                                    │
-                                    ▼
-                    Energy Head (burn-rs, trainable)
-                    SpectralNorm MLP: 4096 → 2048 → 1024 → 512 → 1
-                    Output: scalar energy (lower = more provable)
+DeepSeek-Prover-V2-7B (SGLang, port 30000)
+├── Policy: autoregressive tactic generation (LM head)
+└── Embeddings: mean-pool hidden states → encode server (port 30001, nf4, ~6.9GB VRAM)
+                    │
+                    ▼
+        GoalConditionedEnergyHead (PyTorch, ~25M params)
+        [z_state; z_goal; z_state⊙z_goal] → 12288 → 2048 → 1024 → 512 → 1
+        Spectral norm all layers, SiLU, dropout 0.15, learnable temperature
+        Output: scalar energy (lower = more provable)
 
-Lean 4 REPL Pool (tokio, Pantograph JSON protocol)
-└── Verifies tactics against proof states, returns new goals
+Lean 4 REPL Pool (Rust/tokio, Pantograph JSON protocol)
+└── Verifies tactics, returns new goals
 ```
 
-Single shared 7B backbone serves both policy and value function (AlphaZero-style). The energy head (~11M params) is the only component trained in Rust via burn-rs. LLM fine-tuning happens in Python with HuggingFace PEFT/LoRA.
+Single shared 7B backbone for both policy and value. Rust core (`prover-core`) handles search, trajectory I/O, and orchestration. Python handles LLM fine-tuning (HuggingFace PEFT/LoRA) and EBM training. The EBM originally lived in burn-rs but has been **deprecated in favor of PyTorch** as of v2.
 
-## Settled Architecture Decisions — Do NOT Change
+## Current Status: v2 Pivot (Starting ~Feb 25, 2026)
 
-These were decided after two external review rounds. Do not revisit without explicit instruction.
+### What Happened in v1 (Iterations 0–5)
 
-1. **Shared 7B backbone**, not separate 1.3B encoder. `EncoderBackend` enum allows switching via config.
-2. **SGLang inference server.** No in-process model loading.
-3. **SpectralNorm Option C** (random reinit per forward, 5 power iterations).
-4. **Single optimizer for EBM.** 7B encoder frozen (served by SGLang).
-5. **No "skip easy" EBM bypass.** Always score with EBM when available.
-6. **No dual tokenizer / bag-of-embeddings.** Smart truncation if context too long.
-7. **Worker recycling for Lean.** 1000 requests OR 30 minutes TTL.
-8. **Pantograph protocol:** JSON lines terminated by `\n`. Missing newline hangs process. 30s timeout on all reads.
-9. **ProofHandle pattern.** `stateId` is process-local — hold worker for proof lifetime. Use `ProofHandleOwned` for `tokio::spawn`.
-10. **Batch EBM scoring.** Deferred scoring: collect child states per expansion, then `score_batch()` once. Uses `EBMValueFn::with_batch_encode()` for single HTTP batch call. Falls back to `0.0` on error. Root scoring also falls back to `0.0` on error (consistent with child scoring).
-11. **Server-side batch generation.** `generate_candidates_batch()` sends all `states × n` prompts in one `BatchGenerateRequest`. SGLang RadixAttention caches shared prefixes. No per-state sequential HTTP calls.
-12. **SGLang circuit breaker.** `CircuitBreaker` trips after 3 consecutive transport failures, auto-resets after 60s. Transport errors (timeout, connection refused) fail immediately — only 5xx retries. Timeouts: 30s default, 30s batch generate, encode batch capped at 30s.
-13. **Standalone encode server.** `python/encode_server.py` loads the 7B model via HuggingFace transformers with nf4 quantization + SDPA attention (~6.9GB VRAM). LM head is stripped after loading. Sub-batching caps peak VRAM. Runs on port 30001 alongside SGLang inference on port 30000.
-14. **Separate batch size controls.** `batch_generate_size` (default 32) for LLM tactic generation, `batch_encode_size` (default 8) for EBM embedding. `GlobalEncodeBatcher` chunks requests to prevent encode server OOM.
+**Training data:** Mathlib4 (122K abstract theorems) — category theory, topology, measure theory.
 
-## Code Conventions
+**Best results (iter_4):**
+- miniF2F LLM+EBM: **41.7%** (partial, 139/244 evaluated)
+- Mathlib clean eval: **59.0%** (LLM+EBM) vs 47.0% (LLM-only) — EBM added +12pp, zero regressions
+- Embedding quality: centroid_l2 = 6.40, linear_probe = 0.83
 
-### Rust
-- Edition 2021, `tokio` for async, `tracing` for logging (never `println!` in library code)
-- `anyhow::Result` for app code (prover-core); concrete `thiserror` enums for library crates
-- `serde::Deserialize` on config types, load from TOML
-- burn-rs: `#[derive(Module, Debug)]` on models, `#[derive(Config, Debug)]` on configs
-- Tests: `#[cfg(test)] mod tests` per file; integration tests in `crates/*/tests/`
+**iter_5 FAILURE — Embedding Collapse:**
+- Fresh LoRA on iter_4 base destroyed embedding separation
+- centroid_l2: 6.40 → 1.33 (80% collapse)
+- linear_probe: 0.83 → 0.68
+- Proof rate regressed: 34% → 30%
+- Root cause: SFT-only training optimizes next-token prediction, which disrupts the representation structure the EBM depends on
 
-### File Organization
-- One major type per file (`worker.rs` → `LeanWorker`, `pool.rs` → `LeanPool`)
-- `mod.rs` only for `pub mod` declarations; `lib.rs` re-exports public API
-- Crate names: kebab-case; modules: snake_case; types: PascalCase; configs: `{Thing}Config`
+### Why v2: Two Problems to Solve
 
-## Key Dependencies (pinned — do not upgrade without testing)
+1. **Distribution mismatch:** Mathlib4 (abstract math) ≠ miniF2F (competition algebra/number theory). Limited LoRA capacity wasted on out-of-distribution patterns.
+2. **Embedding collapse:** SFT-only training destroys embeddings. Need joint LLM+EBM training where contrastive loss actively protects representation quality.
 
-```toml
-tokio = "1", serde = "1", serde_json = "1", anyhow = "1", tracing = "0.1", thiserror = "2"
-burn = "0.16", arrow = "53", parquet = "53", reqwest = "0.12"
+### v2 Strategy
+
+**Data pivot:** Drop Mathlib4. Retrain from scratch on competition-focused datasets:
+- Lean Workbook: 57K + 83K competition problems
+- Goedel Workbook proofs: 29.7K proved (DeepSeek-Prover-V1.5 generated)
+- NuminaMath-LEAN: 100K IMO/USAMO/AMC/AIME formalized
+
+**Architecture pivot:** Joint LoRA + GoalConditioned EBM training. Single forward pass, two losses (SFT cross-entropy + InfoNCE contrastive), shared gradients through LoRA. Based on CURL (Laskin 2020) and VLM joint training findings.
+
+**Scientific methodology:** 3-config comparison isolates variables:
+- Config A: iter_0 LoRA + decoupled EBM (frozen embeddings) — baseline
+- Config B: iter_1 LoRA + decoupled EBM on iter_1 embeddings — measures embedding improvement from joint training
+- Config C: iter_1 LoRA + jointly-trained EBM — full system
+- A→B: did joint training protect/improve embeddings?
+- B→C: did live EBM gradients help the EBM head?
+- A→C: total system improvement
+
+### v2 Execution Plan (11 days, ~$49 GPU)
+
+| Phase | Days | What |
+|-------|------|------|
+| 0: Data Pipeline | 1–3 | PyTorch EBM port, Lean audit, parallel LeanDojo tracing, sorry filter |
+| 1: SFT Baseline | 3–4 | iter_0 LoRA r=32 on competition data, deep trajectory generation (800 nodes) |
+| 2: Baselines | 5–6 | Embedding metrics, decoupled GoalCond EBM training, miniF2F baseline |
+| 3: Joint Training Infra | 7–8 | JointDataset, JointProver, training loop with monitoring |
+| 4: Joint Training + Eval | 9–11 | Train iter_1 LoRA r=64, 3-config evaluation, attribution analysis |
+
+## Key Files
+
+```
+burn-qed/
+├── docs/
+│   ├── v2_execution_plan.md     # THE PLAN — 1145 lines, 15 gotchas, all red-team fixes
+│   ├── burn-qed_plan.md         # Original v1 architecture plan
+│   ├── ebm_overhaul.md          # EBM architecture upgrade (v1)
+│   └── experiment_guide.md      # Scripts, env vars, tuning
+├── crates/                      # Rust core (search, lean-repl, policy, ebm, trajectory, prover-core)
+├── python/
+│   ├── encode_server.py         # Embedding extraction server (nf4)
+│   ├── sft/                     # LLM fine-tuning scripts
+│   └── joint/                   # v2 joint training (to be built)
+│       ├── ebm_head.py          # GoalConditionedEnergyHead
+│       ├── dataset.py           # JointDataset (SFT + contrastive streams)
+│       ├── losses.py            # InfoNCE (no temperature — EBM head handles it)
+│       ├── model.py             # JointProver
+│       ├── monitoring.py        # separation_probe, ebm_metrics
+│       └── train.py             # Main training loop
+├── v2/                          # v2 workspace
+│   ├── data/traced/             # sft_train_seed.jsonl, sft_train_full.jsonl
+│   ├── iter_0/                  # SFT-only baseline + decoupled EBM + trajectories
+│   └── iter_1/                  # Joint-trained model + jointly-trained EBM
+└── scripts/                     # Server startup, eval orchestration
 ```
 
-## Pantograph Protocol
+## 15 Gotchas (Hard-Won Lessons)
 
-Bundled at `vendor/Pantograph/` (submodule, pinned `d047b1d`). Auto-discovered by `LeanPoolConfig::with_bundled_pantograph()`.
+1. **Temperature Double-Dip:** InfoNCE has NO temperature param. EBM head has learnable temperature.
+2. **25M Param Init Explosion:** First EBM layer: `weight.data *= 0.1`
+3. **Monitor Temperature:** Log every 50 steps. Healthy [0.5, 3.0]. Floor/ceiling = ABORT.
+4. **Tokenizer Padding:** `padding_side="right"`. Verify last-token indexing grabs content, not `<eos>`.
+5. **Lean Version:** Check FIRST. Mismatch between LeanDojo, Workbook, NuminaMath = lost day.
+6. **LeanDojo Tracing Time:** 10–15h wall clock for 30K theorems, not 4–6h. Seed 20% first.
+7. **Confounding Variable:** iter_0 and iter_1 use identical EBM architecture. burn-rs DEPRECATED.
+8. **Search Depth:** 2K theorems × 800 nodes × 300s (not 5K × 300 × 120s). Depth > breadth.
+9. **Goal Embeddings:** Task 2.1 extracts BOTH z_state AND z_goal. Day 6 EBM needs both.
+10. **Zombie Lean Processes:** `cleanup_lean_processes()` every 500 theorems + `signal.alarm(120)`.
+11. **Validation Split:** By THEOREM NAME, not tactic pairs. Prevents variable-name leakage.
+12. **Sorry Filter:** Reject entire theorem if any tactic contains `sorry`/`admit`/`cheat`.
+13. **Loss Masking:** `DataCollatorForCompletionOnlyLM` — only train on tactic tokens after `[PROOFSTEP]`. Without this, 90% of LoRA capacity wasted echoing proof states.
+14. **Special Token Fragmentation:** Check if `[GOAL]`/`[PROOFSTEP]` are in vocab. If not, `add_special_tokens()` + `resize_token_embeddings()` + `modules_to_save=["embed_tokens", "lm_head"]`.
+15. **CPU Worker OOM:** Cap `NUM_WORKERS = min(16, int(cpu_count() * 0.75))`. 30 Lean REPLs will OOM 200GB RAM.
 
-**Critical:** Every request is a JSON object on one line, terminated by `\n`. Missing newline = hang.
+## Success Metrics
 
-```jsonc
-{"cmd": "goal.start", "payload": {"copyFrom": "Nat.add_comm"}}  // by name
-{"cmd": "goal.start", "payload": {"expr": "∀ (n : Nat), n + 0 = n"}}  // by expr
-{"cmd": "goal.tactic", "stateId": 0, "goalId": 0, "tactic": "intro n"}
-// Success: {"stateId": 1, "goals": ["n : Nat\n⊢ n + 0 = n"]}
-// Proof done: {"stateId": 2, "goals": []}
-// Error: {"error": "unknown tactic 'bad_tactic'"}
-```
+| Metric | iter_0 target | iter_1 target | Red line |
+|--------|---------------|---------------|----------|
+| miniF2F (LLM-only) | ≥ 35% | ≥ 35% | < 25% |
+| miniF2F (LLM+EBM) | ≥ 40% | ≥ 45% | < 35% |
+| centroid_l2 | ≥ 5.0 | ≥ iter_0 | < 3.0 |
+| linear_probe_acc | ≥ 0.75 | ≥ iter_0 | < 0.65 |
+| EBM rank-1 (depth 4+) | ≥ 0.30 | ≥ 0.40 | < 0.25 |
 
-- `stateId` is monotonically increasing and immutable — revisit any previous state
-- Goals: `hyp1 : Type1\nhyp2 : Type2\n⊢ goal_type`
-- Always redirect stderr to null; always use 30s read timeout
+## Settled Architecture Decisions (Do NOT Revisit)
 
-## Phase Status
+1. Shared 7B backbone (not separate encoder)
+2. SGLang inference server (not in-process)
+3. SpectralNorm Option C (random reinit, 5 power iterations)
+4. Pantograph protocol for Lean REPL (JSON lines, `\n` terminated, 30s timeout)
+5. Worker recycling: 1000 requests OR 30 min TTL
+6. Batch EBM scoring with deferred collect-then-score pattern
+7. **burn-rs EBM pipeline DEPRECATED** — replaced by PyTorch GoalConditionedEnergyHead in v2
 
-- [x] Phase 0-5: All implemented (lean-repl, policy, search, trajectory, ebm, prover-core, expert iteration)
-- [ ] Phase 6: burn-rs upstream PRs
-- **Current:** Experiment execution — generating EBM training data, tuning pipeline
+## Related Literature
 
-## CLI Quick Reference
-
-```bash
-# Proof search
-cargo run -p prover-core -- search --server-url URL --theorems FILE --output FILE [--ebm-path DIR] [--dry-run]
-
-# EBM training from trajectories
-cargo run -p prover-core -- train-ebm --trajectories FILE --server-url URL --output-dir DIR
-
-# Generate contrastive training data (see docs/ebm_overhaul.md Part 3 for full design)
-cargo run -p prover-core -- generate-negatives --tactic-pairs FILE --server-url URL --output FILE [--min-steps N]
-
-# Evaluation (with separate encode server for EBM)
-cargo run -p prover-core -- eval --server-url URL --theorems FILE --budgets 50,100,200 \
-  [--ebm-path DIR] [--encode-url URL] [--imports Mathlib]
-cargo run -p prover-core -- summary --input FILE
-cargo run -p prover-core -- compare --baseline FILE --experiment FILE
-
-# Servers
-MEM_FRACTION=0.65 ./scripts/start_inference_server.sh models/llm/iter_N  # Port 30000
-ENCODE_DTYPE=nf4 ./scripts/start_encode_server.sh models/llm/iter_N      # Port 30001
-```
-
-## Testing Policy
-
-Integration tests (`#[ignore]`) spawn Pantograph — **must** use `--test-threads=1`. Typical runtimes:
-- `cargo test -p lean-repl -- --ignored --test-threads=1` — ~60-90s
-- `cargo test -p search -- --ignored --test-threads=1` — ~60s
-- `cargo test -p prover-core -- --ignored --test-threads=1` — ~15s
-- `cargo test -p policy -- --ignored --test-threads=1` — requires SGLang server
-
-## Reference Docs
-
-- `docs/burn-qed_plan.md` — Full plan: architecture diagrams, code samples, loss functions, cost analysis
-- `docs/ebm_overhaul.md` — EBM architecture upgrade + generate-negatives pipeline design
-- `docs/experiment_guide.md` — Scripts, environment variables, throughput tuning, output layout, go/no-go checkpoints
-- `docs/cloud_deployment.md` — RunPod/Lambda setup, migration
-- `docs/sglang.md` — SGLang server configuration
+- **PACT** (Han 2021): Joint training with auxiliary tasks on proof terms → 32%→48% Lean
+- **HTPS** (Lample 2022): AlphaZero policy+value on shared transformer → 82.6% Metamath, 42% miniF2F
+- **AlphaProof** (Hubert 2025): Policy/value + AlphaZero search + millions of auto-formalized problems
+- **CURL** (Laskin & Srinivas 2020): Contrastive auxiliary loss prevents representation collapse under primary task — directly parallels our iter_5 problem
+- **VLM joint training** (Amazon 2024): Contrastive + SFT on shared backbone fixes misaligned embeddings
