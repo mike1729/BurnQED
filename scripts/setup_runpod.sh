@@ -132,7 +132,7 @@ if [ -n "$PERSIST_DIR" ]; then
     else
         echo ""
         echo "  Model weights not found at ${MODEL_CHECK}"
-        echo "  They'll be downloaded in Step 8."
+        echo "  They'll be downloaded in Step 9."
     fi
 else
     echo ""
@@ -236,14 +236,79 @@ accelerate config default 2>/dev/null || python -m accelerate config default 2>/
 echo "Purging pip cache..."
 pip cache purge 2>/dev/null || true
 
-# ── Step 7: Build prover-core (release) ───────────────────────────────────
+# ── Step 7: Build miniF2F benchmark oleans ───────────────────────────────────────
 echo ""
-echo "=== Step 7: Build prover-core ==="
+echo "=== Step 7: Build miniF2F benchmark oleans ==="
+
+PANTOGRAPH_DIR="$REPO_ROOT/vendor/Pantograph"
+BENCHMARKS=(
+    "minif2f_test.json BenchMinIF2FTest"
+    "minif2f_valid.json BenchMinIF2FValid"
+    "minif2f_v2s_test.json BenchMinIF2FV2STest"
+    "minif2f_v2s_valid.json BenchMinIF2FV2SValid"
+    "minif2f_v2c_test.json BenchMinIF2FV2CTest"
+    "minif2f_v2c_valid.json BenchMinIF2FV2CValid"
+)
+
+# Check if any benchmark JSON files exist
+HAS_BENCHMARKS=0
+for pair in "${BENCHMARKS[@]}"; do
+    read -r json_file _ <<< "$pair"
+    if [ -f "${REPO_ROOT}/data/${json_file}" ]; then
+        HAS_BENCHMARKS=1
+        break
+    fi
+done
+
+if [ "$HAS_BENCHMARKS" -eq 0 ]; then
+    echo "No miniF2F JSON files found in data/ — skipping."
+    echo "Run ./scripts/prepare_data.sh first, then re-run this step."
+else
+    BENCH_LIBS_TO_BUILD=()
+
+    for pair in "${BENCHMARKS[@]}"; do
+        read -r json_file module_name <<< "$pair"
+
+        if [ ! -f "${REPO_ROOT}/data/${json_file}" ]; then
+            echo "  ${json_file} not found, skipping ${module_name}"
+            continue
+        fi
+
+        # Generate .lean file from JSON
+        echo "  Generating ${module_name}.lean from ${json_file}..."
+        python3 "${REPO_ROOT}/python/data/generate_benchmark_lean.py" \
+            --input "${REPO_ROOT}/data/${json_file}" \
+            --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
+            --module-name "${module_name}"
+
+        # Register lean_lib in lakefile.lean if not already present
+        if ! grep -q "lean_lib ${module_name}" "${PANTOGRAPH_DIR}/lakefile.lean"; then
+            echo "" >> "${PANTOGRAPH_DIR}/lakefile.lean"
+            echo "lean_lib ${module_name} {" >> "${PANTOGRAPH_DIR}/lakefile.lean"
+            echo "}" >> "${PANTOGRAPH_DIR}/lakefile.lean"
+            echo "  Registered ${module_name} in lakefile.lean"
+        fi
+
+        BENCH_LIBS_TO_BUILD+=("${module_name}")
+    done
+
+    if [ ${#BENCH_LIBS_TO_BUILD[@]} -gt 0 ]; then
+        echo "  Building ${#BENCH_LIBS_TO_BUILD[@]} benchmark modules (this takes a while)..."
+        cd "${PANTOGRAPH_DIR}"
+        lake build "${BENCH_LIBS_TO_BUILD[@]}"
+        cd "$REPO_ROOT"
+        echo "  SUCCESS: Built ${BENCH_LIBS_TO_BUILD[*]}"
+    fi
+fi
+
+# ── Step 8: Build prover-core (release) ───────────────────────────────────
+echo ""
+echo "=== Step 8: Build prover-core ==="
 cargo build --release -p prover-core
 
-# ── Step 8: Verify model weights ──────────────────────────────────────────
+# ── Step 9: Verify model weights ──────────────────────────────────────────
 echo ""
-echo "=== Step 8: Model weights ==="
+echo "=== Step 9: Model weights ==="
 MODEL_DIR="${REPO_ROOT}/models/deepseek-prover-v2-7b"
 if [ -d "$MODEL_DIR" ] && [ -n "$(ls -A "$MODEL_DIR"/*.safetensors 2>/dev/null)" ]; then
     echo "Model weights found at ${MODEL_DIR}"
@@ -253,9 +318,9 @@ else
     echo "  bash scripts/migrate_to_runpod.sh <source_host> <this_host>"
 fi
 
-# ── Step 9: Shell environment ─────────────────────────────────────────────
+# ── Step 10: Shell environment ─────────────────────────────────────────────
 echo ""
-echo "=== Step 9: Persist PATH in .bashrc ==="
+echo "=== Step 10: Persist PATH in .bashrc ==="
 BASHRC="$HOME/.bashrc"
 for line in 'source "$HOME/.cargo/env"' 'export PATH="$HOME/.elan/bin:$PATH"'; do
     if ! grep -qF "$line" "$BASHRC" 2>/dev/null; then
@@ -266,9 +331,9 @@ for line in 'source "$HOME/.cargo/env"' 'export PATH="$HOME/.elan/bin:$PATH"'; d
     fi
 done
 
-# ── Step 10: Smoke test ──────────────────────────────────────────────────
+# ── Step 11: Smoke test ──────────────────────────────────────────────────
 echo ""
-echo "=== Step 10: Smoke test ==="
+echo "=== Step 11: Smoke test ==="
 echo "To run a quick end-to-end smoke test:"
 echo "  ./scripts/smoke_test.sh"
 
