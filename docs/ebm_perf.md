@@ -70,33 +70,52 @@ Controlling for proof difficulty removes the apparent iter 2 peak.
 
 At depth 4+, all iterations are in a similar 20-32% range. Iter 4 is the best at deeper proofs (28.5% at 8+). The headline drop from iter 2 (58%) to iter 5 (28%) is almost entirely explained by iter 2 being 86% shallow proofs vs iter 5 at 17%.
 
+### EBM Rank-1 by Depth Bucket
+
+| Depth | Iter 1 | Iter 2 | Iter 4 | Iter 5 |
+|-------|--------|--------|--------|--------|
+| 0-1   | 1.0%   | 0.7%   | 5.2%   | 0.0%   |
+| 2-3   | 13.0%  | 18.4%  | 14.1%  | **22.5%** |
+| 4-7   | 17.6%  | 25.9%  | 18.1%  | **31.2%** |
+| 8+    | 21.1%  | 31.6%  | 21.5%  | **32.3%** |
+
+### EBM Rank-1 by Depth (non-zero only, excluding terminal 0.0 bug)
+
+| Depth | Iter 1 | Iter 2 | Iter 4 | Iter 5 |
+|-------|--------|--------|--------|--------|
+| 2-3   | 20.1%  | 30.8%  | 21.6%  | **36.7%** |
+| 4-7   | 21.9%  | 32.4%  | 22.2%  | **39.4%** |
+| 8+    | 23.6%  | 35.3%  | 23.3%  | **35.5%** |
+
+The EBM is not pure noise — it improves with depth and iter 5 is the best at deep proofs (35-39% non-zero at depth 4+, above ~27% random baseline). At depth 0-1 it reads 0-5% because those decisions involve proof-completing nodes that fall back to `ebm_score=0.0`.
+
 ## Key Findings
 
-### 1. LLM log-prob signal is depth-dependent, not collapsing
+### 1. Aggregate numbers are misleading — control for depth
 
-The aggregate LLM rank-1 numbers (58% → 28%) are misleading. Iter 2's 58% is inflated by 86% of proofs being depth 0-1 (where LLM gets 74%). When controlling for depth:
-- At depth 4-7: all iterations cluster around 27-32%
-- At depth 8+: iter 4 leads at 28.5%, iter 5 is 24.9%
-- The LLM is consistently useful at ~30% for medium-depth proofs (above 27% random)
+Both LLM and EBM aggregate rank-1 numbers are dominated by the depth distribution of proved theorems. Iter 2's 58% LLM rank-1 is inflated by 86% depth 0-1 proofs; iter 5's 29% EBM rank-1 is depressed by only 17% depth 0-1.
 
-The negative log-prob separation (pos mean < neg mean) reflects that correct tactics for hard theorems tend to be less probable — the LLM is less confident but the ranking still works.
+### 2. LLM signal is stable at depth 4+
 
-### 2. EBM provides no useful signal
+When controlling for depth, all iterations cluster at 27-32% for depth 4-7. The LLM provides a consistent ~30% rank-1 signal for medium-to-deep proofs across all iterations. The negative log-prob separation (pos mean < neg mean) reflects that correct tactics for hard theorems tend to be less probable — the LLM is less confident but the ranking still works.
 
-Across all iterations, the EBM energy score fails to discriminate proof-path states from dead ends:
-- Rank-1 accuracy hovers around random baseline (10-37% vs 27-41%)
-- Mean energy separation between positive and negative nodes is < 0.3
-- Combined scoring (LLM + EBM) consistently hurts compared to LLM-only
+### 3. EBM improves with iteration and depth
 
-The EBM head (~11M params) trained on contrastive pairs from search trajectories is not learning a meaningful value function.
+Contrary to the aggregate picture, depth-controlled EBM rank-1 shows clear improvement:
+- Iter 1/4 cluster at 21-24% (non-zero, depth 4+)
+- Iter 2/5 reach 32-39% (non-zero, depth 4+)
+- The EBM is most useful precisely where search is hardest (deep proofs)
 
-### 3. Terminal node score bug
+### 4. Terminal node score bug masks EBM value
 
-All 1,030 proof-completing nodes in iter 5 have `ebm_score = 0.0` (the encode fallback value). Since lower energy = better, these nodes sort to the middle of the priority queue instead of the top. This means the search never prioritizes expanding states that are close to completing a proof.
+All proof-completing nodes get `ebm_score = 0.0` (encode fallback). This has two effects:
+- At depth 0-1 (where most decisions involve a proof-completing child), the EBM reads 0-5% — appearing useless
+- The aggregate EBM rank-1 is dragged down by the large fraction of shallow proofs in earlier iterations
+- Fixing this bug would likely improve both the aggregate numbers and the search itself (proof-completing states should rank highest, not middle)
 
-### 4. Combined scoring is strictly worse
+### 5. Combined scoring hurts due to weight calibration
 
-At every iteration, the combined score underperforms LLM-only. The EBM's near-random signal dilutes whatever LLM signal exists. With alpha=beta=0.5, the combined ranker is a weighted average of a weak signal and noise.
+At every iteration, the combined score (alpha=0.5, beta=0.5) underperforms LLM-only. This is likely a calibration issue — the EBM and LLM scores are on different scales. With proper normalization or learned weights, combining a 30% LLM signal with a 35-39% EBM signal (at depth 4+) could outperform either alone.
 
 ## Methodology
 
