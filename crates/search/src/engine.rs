@@ -199,6 +199,7 @@ impl SearchEngine {
         if let Some(scorer) = scorer {
             if self.config.should_skip_ebm(0) {
                 stats.ebm_skipped_by_depth += 1;
+                arena[0].ebm_score = -1e6;
                 tracing::debug!("Skipping EBM at root (depth 0, ebm_min_depth={})", self.config.ebm_min_depth);
             } else {
                 let ebm_start = Instant::now();
@@ -423,6 +424,7 @@ impl SearchEngine {
                             } else {
                                 if scorer.is_some() && self.config.should_skip_ebm(child_depth) {
                                     stats.ebm_skipped_by_depth += 1;
+                                    arena[child_idx].ebm_score = -1e6;
                                 }
                                 // No scorer or EBM skipped at this depth: push to frontier immediately
                                 let child_score =
@@ -720,6 +722,7 @@ async fn harvest_siblings(
                         pending_scores.push((child_idx, spp));
                     } else if scorer.is_some() {
                         stats.ebm_skipped_by_depth += 1;
+                        arena[child_idx].ebm_score = -1e6;
                     }
                 }
                 TacticResult::ProofComplete { state_id } => {
