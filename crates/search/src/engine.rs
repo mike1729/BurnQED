@@ -197,23 +197,28 @@ impl SearchEngine {
 
         // Score root with EBM if available (fall back to 0.0 on error, consistent with child scoring)
         if let Some(scorer) = scorer {
-            let ebm_start = Instant::now();
-            match scorer.score(&arena[0].state_pp) {
-                Ok(score) => {
-                    arena[0].ebm_score = score;
+            if self.config.should_skip_ebm(0) {
+                stats.ebm_skipped_by_depth += 1;
+                tracing::debug!("Skipping EBM at root (depth 0, ebm_min_depth={})", self.config.ebm_min_depth);
+            } else {
+                let ebm_start = Instant::now();
+                match scorer.score(&arena[0].state_pp) {
+                    Ok(score) => {
+                        arena[0].ebm_score = score;
+                    }
+                    Err(e) => {
+                        tracing::warn!(theorem = theorem_name, error = %e, "Root EBM scoring failed, using 0.0");
+                        arena[0].ebm_score = 0.0;
+                    }
                 }
-                Err(e) => {
-                    tracing::warn!(theorem = theorem_name, error = %e, "Root EBM scoring failed, using 0.0");
-                    arena[0].ebm_score = 0.0;
-                }
+                let ebm_us = ebm_start.elapsed().as_micros() as u64;
+                stats.total_ebm_time_ms += ebm_us / 1000;
+                stats.ebm_latencies_us.push(ebm_us);
+                stats.ebm_score_calls += 1;
             }
-            let ebm_us = ebm_start.elapsed().as_micros() as u64;
-            stats.total_ebm_time_ms += ebm_us / 1000;
-            stats.ebm_latencies_us.push(ebm_us);
-            stats.ebm_score_calls += 1;
         }
 
-        let root_score = arena[0].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);
+        let root_score = arena[0].combined_score(self.config.alpha, self.config.effective_beta(0), self.config.llm_temperature, self.config.ebm_temperature);
         let mut frontier = BinaryHeap::new();
         frontier.push(ScoredNode {
             node_index: 0,
@@ -413,12 +418,15 @@ impl SearchEngine {
                             };
                             arena.push(child);
 
-                            if scorer.is_some() {
+                            if scorer.is_some() && !self.config.should_skip_ebm(child_depth) {
                                 pending_scores.push((child_idx, state_pp));
                             } else {
-                                // No scorer: push to frontier immediately
+                                if scorer.is_some() && self.config.should_skip_ebm(child_depth) {
+                                    stats.ebm_skipped_by_depth += 1;
+                                }
+                                // No scorer or EBM skipped at this depth: push to frontier immediately
                                 let child_score =
-                                    arena[child_idx].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);
+                                    arena[child_idx].combined_score(self.config.alpha, self.config.effective_beta(child_depth), self.config.llm_temperature, self.config.ebm_temperature);
                                 frontier.push(ScoredNode {
                                     node_index: child_idx,
                                     score: OrderedFloat(child_score),
@@ -545,7 +553,7 @@ impl SearchEngine {
                     for ((idx, _), score) in pending_scores.iter().zip(scores) {
                         arena[*idx].ebm_score = score;
                         let child_score =
-                            arena[*idx].combined_score(self.config.alpha, self.config.beta, self.config.llm_temperature, self.config.ebm_temperature);
+                            arena[*idx].combined_score(self.config.alpha, self.config.effective_beta(arena[*idx].depth), self.config.llm_temperature, self.config.ebm_temperature);
                         frontier.push(ScoredNode {
                             node_index: *idx,
                             score: OrderedFloat(child_score),
@@ -708,8 +716,10 @@ async fn harvest_siblings(
                         is_terminal: false,
                     });
                     stats.sibling_states_mined += 1;
-                    if scorer.is_some() {
+                    if scorer.is_some() && !config.should_skip_ebm(anc_depth + 1) {
                         pending_scores.push((child_idx, spp));
+                    } else if scorer.is_some() {
+                        stats.ebm_skipped_by_depth += 1;
                     }
                 }
                 TacticResult::ProofComplete { state_id } => {

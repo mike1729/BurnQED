@@ -59,6 +59,18 @@ pub struct SearchConfig {
     /// on the encode server (important for nf4 quantization). Default: 8.
     #[serde(default = "default_batch_encode_size")]
     pub batch_encode_size: usize,
+
+    /// EBM beta ramps linearly from 0 → full over this many depth levels.
+    /// 0 = disabled (use full beta at all depths). E.g., `ebm_ramp_depth = 4` means
+    /// effective_beta = beta * min(1.0, depth / 4).
+    #[serde(default)]
+    pub ebm_ramp_depth: u32,
+
+    /// Skip EBM inference entirely below this depth (saves GPU compute).
+    /// 0 = disabled (always score with EBM). E.g., `ebm_min_depth = 2` means
+    /// depths 0 and 1 get no EBM scoring at all.
+    #[serde(default)]
+    pub ebm_min_depth: u32,
 }
 
 fn default_max_nodes() -> u32 {
@@ -114,6 +126,42 @@ impl SearchConfig {
                 "alpha + beta = {sum:.4}, expected 1.0; scores may not be normalized"
             );
         }
+        if self.ebm_ramp_depth > 0 {
+            tracing::info!(
+                ebm_ramp_depth = self.ebm_ramp_depth,
+                "EBM depth ramp enabled: beta ramps 0→{:.2} over {} depths",
+                self.beta,
+                self.ebm_ramp_depth,
+            );
+        }
+        if self.ebm_min_depth > 0 {
+            tracing::info!(
+                ebm_min_depth = self.ebm_min_depth,
+                "EBM hard cutoff enabled: skipping EBM inference below depth {}",
+                self.ebm_min_depth,
+            );
+        }
+    }
+
+    /// Compute effective EBM beta weight for a given depth.
+    ///
+    /// Applies `ebm_min_depth` (hard cutoff → 0.0) then `ebm_ramp_depth`
+    /// (linear ramp from 0 → beta). Both default to 0 (disabled).
+    pub fn effective_beta(&self, depth: u32) -> f64 {
+        if self.ebm_min_depth > 0 && depth < self.ebm_min_depth {
+            return 0.0;
+        }
+        if self.ebm_ramp_depth > 0 {
+            let lambda = (depth as f64 / self.ebm_ramp_depth as f64).min(1.0);
+            self.beta * lambda
+        } else {
+            self.beta
+        }
+    }
+
+    /// Whether EBM inference should be skipped entirely at this depth.
+    pub fn should_skip_ebm(&self, depth: u32) -> bool {
+        self.ebm_min_depth > 0 && depth < self.ebm_min_depth
     }
 }
 
@@ -133,6 +181,8 @@ impl Default for SearchConfig {
             harvest_siblings: false,
             batch_expansion_size: default_batch_expansion_size(),
             batch_encode_size: default_batch_encode_size(),
+            ebm_ramp_depth: 0,
+            ebm_min_depth: 0,
         }
     }
 }
@@ -239,5 +289,93 @@ mod tests {
             ..Default::default()
         };
         cfg.validate(); // Should log warning but not panic
+    }
+
+    #[test]
+    fn test_depth_ramp_defaults_disabled() {
+        let cfg = SearchConfig::default();
+        assert_eq!(cfg.ebm_ramp_depth, 0);
+        assert_eq!(cfg.ebm_min_depth, 0);
+        // With defaults disabled, effective_beta == beta at all depths
+        assert!((cfg.effective_beta(0) - cfg.beta).abs() < 1e-9);
+        assert!((cfg.effective_beta(5) - cfg.beta).abs() < 1e-9);
+        assert!(!cfg.should_skip_ebm(0));
+    }
+
+    #[test]
+    fn test_depth_ramp_only() {
+        let cfg = SearchConfig {
+            beta: 0.5,
+            ebm_ramp_depth: 4,
+            ..Default::default()
+        };
+        assert!((cfg.effective_beta(0) - 0.0).abs() < 1e-9);
+        assert!((cfg.effective_beta(1) - 0.125).abs() < 1e-9); // 0.5 * 1/4
+        assert!((cfg.effective_beta(2) - 0.25).abs() < 1e-9);  // 0.5 * 2/4
+        assert!((cfg.effective_beta(4) - 0.5).abs() < 1e-9);   // 0.5 * 4/4
+        assert!((cfg.effective_beta(10) - 0.5).abs() < 1e-9);  // clamped at 1.0
+        assert!(!cfg.should_skip_ebm(0)); // ramp only, no hard cutoff
+    }
+
+    #[test]
+    fn test_cutoff_only() {
+        let cfg = SearchConfig {
+            beta: 0.5,
+            ebm_min_depth: 2,
+            ..Default::default()
+        };
+        assert!(cfg.should_skip_ebm(0));
+        assert!(cfg.should_skip_ebm(1));
+        assert!(!cfg.should_skip_ebm(2));
+        assert!(!cfg.should_skip_ebm(5));
+        assert!((cfg.effective_beta(0) - 0.0).abs() < 1e-9);
+        assert!((cfg.effective_beta(1) - 0.0).abs() < 1e-9);
+        assert!((cfg.effective_beta(2) - 0.5).abs() < 1e-9); // full beta, no ramp
+        assert!((cfg.effective_beta(5) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_ramp_and_cutoff_combined() {
+        let cfg = SearchConfig {
+            beta: 0.5,
+            ebm_ramp_depth: 4,
+            ebm_min_depth: 2,
+            ..Default::default()
+        };
+        // Below cutoff: skip entirely
+        assert!(cfg.should_skip_ebm(0));
+        assert!((cfg.effective_beta(0) - 0.0).abs() < 1e-9);
+        assert!((cfg.effective_beta(1) - 0.0).abs() < 1e-9);
+        // At/above cutoff: ramp applies
+        assert!(!cfg.should_skip_ebm(2));
+        assert!((cfg.effective_beta(2) - 0.25).abs() < 1e-9);  // 0.5 * 2/4
+        assert!((cfg.effective_beta(3) - 0.375).abs() < 1e-9); // 0.5 * 3/4
+        assert!((cfg.effective_beta(4) - 0.5).abs() < 1e-9);   // 0.5 * 4/4 = full
+        assert!((cfg.effective_beta(10) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_toml_backward_compat() {
+        // TOML without new fields should still parse (defaults to 0)
+        let toml_str = r#"
+            alpha = 0.5
+            beta = 0.5
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.ebm_ramp_depth, 0);
+        assert_eq!(cfg.ebm_min_depth, 0);
+    }
+
+    #[test]
+    fn test_toml_with_ramp_fields() {
+        let toml_str = r#"
+            alpha = 0.5
+            beta = 0.5
+            ebm_ramp_depth = 4
+            ebm_min_depth = 2
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.ebm_ramp_depth, 4);
+        assert_eq!(cfg.ebm_min_depth, 2);
     }
 }

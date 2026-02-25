@@ -10,6 +10,8 @@ timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ o
 harvest_siblings = true       # Mine sibling states from proof path after finding proof
 batch_expansion_size = 1      # Pop 1 node — minimize SGLang batch size to reduce gen latency
 batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
+ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
+ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
 probe_tactics = ["ring", "omega", "norm_num", "trivial", "rfl", "tauto", "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left", "right", "ext"]
 

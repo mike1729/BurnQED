@@ -105,6 +105,8 @@ pub struct SearchStats {
     pub total_llm_lean_time_ms: u64,
     /// Number of EBM score() invocations.
     pub ebm_score_calls: u32,
+    /// Number of EBM scoring calls skipped due to depth cutoff/ramp.
+    pub ebm_skipped_by_depth: u32,
 
     // --- Cache stats ---
 

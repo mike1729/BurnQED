@@ -511,6 +511,7 @@ struct SearchAggregator {
     total_probe_lean_ms: u64,
     total_llm_lean_ms: u64,
     total_ebm_calls: u64,
+    total_ebm_skipped: u64,
     total_cache_hits: u32,
     total_cache_misses: u32,
     all_candidate_counts: Vec<usize>,
@@ -598,7 +599,7 @@ impl SearchAggregator {
              \x20 Time: gen {:.1}% | lean(llm) {:.1}% | lean(probe) {:.1}% | ebm {:.1}% | harvest {:.1}%\n\
              \x20 Cache: {:.1}% hit ({}/{})\n\
              \x20 Throughput: {:.1} thm/min, {:.1} traj/s\n\
-             \x20 Trajectories: {}, EBM calls: {}",
+             \x20 Trajectories: {}, EBM calls: {} (skipped: {})",
             done,
             secs,
             self.proved_count,
@@ -619,6 +620,7 @@ impl SearchAggregator {
             traj_per_sec,
             records_written,
             self.total_ebm_calls,
+            self.total_ebm_skipped,
         );
 
         // Show recent error examples if any
@@ -645,6 +647,7 @@ impl SearchAggregator {
             ebm_pct = format!("{:.1}", pct(ebm_s, secs)),
             cache_hit_pct = format!("{:.1}", cache_hit_pct),
             ebm_calls = self.total_ebm_calls,
+            ebm_skipped = self.total_ebm_skipped,
             "progress_stats"
         );
     }
@@ -781,6 +784,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 agg.total_probe_lean_ms += result.stats.total_probe_lean_time_ms;
                 agg.total_llm_lean_ms += result.stats.total_llm_lean_time_ms;
                 agg.total_ebm_calls += result.stats.ebm_score_calls as u64;
+                agg.total_ebm_skipped += result.stats.ebm_skipped_by_depth as u64;
                 agg.total_cache_hits += result.stats.cache_hits;
                 agg.total_cache_misses += result.stats.cache_misses;
                 agg.all_candidate_counts
