@@ -1,27 +1,36 @@
 //! Proof search pipeline, evaluation, comparison, and EBM training utilities.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+#[cfg(feature = "burn-ebm")]
+use std::collections::BTreeMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "burn-ebm")]
 use burn::backend::ndarray::NdArray;
+#[cfg(feature = "burn-ebm")]
 use burn::backend::Autodiff;
 #[cfg(feature = "cuda")]
 use burn::backend::CudaJit;
 use indicatif::{ProgressBar, ProgressStyle};
 
+#[cfg(feature = "burn-ebm")]
 use ebm::{
     ContrastiveSampler, EBMScorer, EBMTrainingConfig, EBMValueFn, EmbeddingCache, EnergyHeadConfig,
     ProofStateRecord,
 };
-use lean_repl::{LeanPool, TacticResult};
+use lean_repl::LeanPool;
+#[cfg(feature = "burn-ebm")]
+use lean_repl::TacticResult;
 use policy::{InferenceHandle, SglangClient, SglangConfig};
 use search::{
-    CachedPolicy, CachingEncoder, InferencePolicyProvider,
+    CachedPolicy, InferencePolicyProvider,
     SearchConfig, SearchEngine,
 };
+#[cfg(feature = "burn-ebm")]
+use search::CachingEncoder;
 use trajectory::{TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord, TrajectoryWriter};
 
 use crate::config::{build_lean_pool_config, load_search_toml};
@@ -99,6 +108,7 @@ pub struct CompareArgs {
 }
 
 /// Arguments for the `train-ebm` subcommand.
+#[cfg(feature = "burn-ebm")]
 #[derive(Debug)]
 pub struct TrainEbmArgs {
     /// Path(s) to trajectory Parquet files.
@@ -151,9 +161,10 @@ pub struct TrainEbmArgs {
 }
 
 /// Backend for EBM inference (no autodiff).
+#[cfg(feature = "burn-ebm")]
 type InferenceBackend = NdArray<f32>;
 /// Backend for EBM training (with autodiff for gradient computation).
-#[cfg(not(feature = "cuda"))]
+#[cfg(all(feature = "burn-ebm", not(feature = "cuda")))]
 type TrainingBackend = Autodiff<NdArray<f32>>;
 #[cfg(feature = "cuda")]
 type TrainingBackend = Autodiff<CudaJit>;
@@ -162,7 +173,7 @@ type TrainingBackend = Autodiff<CudaJit>;
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
     policy: CachedPolicy<InferencePolicyProvider>,
-    value_fn: Option<EBMValueFn>,
+    value_fn: Option<Arc<dyn search::ValueScorer>>,
     /// Display string for the inference backend (model path or server URL).
     inference_label: String,
 }
@@ -170,6 +181,7 @@ struct LoadedPolicy {
 /// Load Lean pool, SGLang policy, and optional EBM scorer.
 ///
 /// This is the shared setup used by both `run_search` and `run_eval`.
+#[allow(unused_variables)]
 async fn load_policy_and_ebm(
     config_path: &Path,
     server_url: &str,
@@ -212,26 +224,39 @@ async fn load_policy_and_ebm(
     let policy = CachedPolicy::new(raw_policy, 10_000);
 
     // 4. Optional EBM scorer (uses separate encode server if provided)
-    // Encode batcher coalesce limit scales with concurrency (like generation).
-    // CachingEncoder internally sub-batches HTTP calls to the server's max batch size.
-    let encode_batch_limit = (batch_encode_size.unwrap_or(toml.search.batch_encode_size))
-        .max(exp * concurrency.max(1));
-    tracing::info!(encode_batch_limit, "Encode batch size limit");
-    let encode_handle = if let Some(url) = encode_url {
-        tracing::info!(url, "Connecting to separate encode server for EBM");
-        let encode_config = SglangConfig {
-            server_url: url.to_string(),
-            temperature: 0.0,
-            top_p: 1.0,
-            max_tactic_tokens: 1,
-            hidden_size: 4096,
+    #[cfg(feature = "burn-ebm")]
+    let value_fn = {
+        // Encode batcher coalesce limit scales with concurrency (like generation).
+        // CachingEncoder internally sub-batches HTTP calls to the server's max batch size.
+        let encode_batch_limit = (batch_encode_size.unwrap_or(toml.search.batch_encode_size))
+            .max(exp * concurrency.max(1));
+        tracing::info!(encode_batch_limit, "Encode batch size limit");
+        let encode_handle = if let Some(url) = encode_url {
+            tracing::info!(url, "Connecting to separate encode server for EBM");
+            let encode_config = SglangConfig {
+                server_url: url.to_string(),
+                temperature: 0.0,
+                top_p: 1.0,
+                max_tactic_tokens: 1,
+                hidden_size: 4096,
+            };
+            let encode_client = SglangClient::new(encode_config).await?;
+            InferenceHandle::new(encode_client)
+        } else {
+            inference_handle.clone()
         };
-        let encode_client = SglangClient::new(encode_config).await?;
-        InferenceHandle::new(encode_client)
-    } else {
-        inference_handle.clone()
+        load_ebm_scorer(ebm_path, &encode_handle, encode_batch_limit)?
     };
-    let value_fn = load_ebm_scorer(ebm_path, &encode_handle, encode_batch_limit)?;
+    #[cfg(not(feature = "burn-ebm"))]
+    let value_fn: Option<Arc<dyn search::ValueScorer>> = {
+        if ebm_path.is_some() {
+            tracing::warn!(
+                "EBM path provided but burn-ebm feature is not enabled. \
+                 Rebuild with --features burn-ebm to use EBM scoring."
+            );
+        }
+        None
+    };
 
     Ok((
         toml.search,
@@ -249,11 +274,12 @@ async fn load_policy_and_ebm(
 /// Sets up a `CachingEncoder` with direct `tokio::spawn` + `oneshot` bridging
 /// from sync closures to async encode calls. The encode server handles request
 /// coalescing server-side, so no Rust-side batcher is needed.
+#[cfg(feature = "burn-ebm")]
 fn load_ebm_scorer(
     ebm_path: Option<&Path>,
     inference_handle: &InferenceHandle,
     encode_batch_limit: usize,
-) -> anyhow::Result<Option<EBMValueFn>> {
+) -> anyhow::Result<Option<Arc<dyn search::ValueScorer>>> {
     let ebm_dir = match ebm_path {
         Some(dir) => dir,
         None => return Ok(None),
@@ -311,7 +337,7 @@ fn load_ebm_scorer(
     let value_fn = EBMValueFn::with_batch_encode(scorer, batch_encode_fn);
 
     tracing::info!("EBM scorer loaded successfully");
-    Ok(Some(value_fn))
+    Ok(Some(Arc::new(value_fn) as Arc<dyn search::ValueScorer>))
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +349,7 @@ struct SearchSetup {
     config: SearchConfig,
     pool: Arc<LeanPool>,
     policy: Arc<CachedPolicy<InferencePolicyProvider>>,
-    value_fn: Option<Arc<EBMValueFn>>,
+    value_fn: Option<Arc<dyn search::ValueScorer>>,
     index: TheoremIndex,
     inference_label: String,
 }
@@ -372,7 +398,7 @@ async fn setup_search(
         config: search_config,
         pool: loaded.pool,
         policy: Arc::new(loaded.policy),
-        value_fn: loaded.value_fn.map(Arc::new),
+        value_fn: loaded.value_fn,
         index,
         inference_label: loaded.inference_label,
     })
@@ -425,6 +451,7 @@ async fn drain_join_set<T: 'static>(
 // ---------------------------------------------------------------------------
 
 /// Arguments for the `generate-negatives` subcommand.
+#[cfg(feature = "burn-ebm")]
 #[derive(Debug)]
 pub struct GenerateNegativesArgs {
     /// Path to the search config TOML file.
@@ -454,6 +481,7 @@ pub struct GenerateNegativesArgs {
 }
 
 /// Per-theorem result from the generate-negatives pipeline.
+#[cfg(feature = "burn-ebm")]
 #[allow(dead_code)]
 struct NegGenOutcome {
     theorem_name: String,
@@ -466,6 +494,7 @@ struct NegGenOutcome {
     alternative_proofs: usize,
 }
 
+#[cfg(any(feature = "burn-ebm", test))]
 /// Infer the `open` namespace prefix from a fully-qualified theorem name.
 ///
 /// Uses the last `.` separator: `"Polynomial.natDegree_cyclotomic'"` → `Some("Polynomial")`.
@@ -490,6 +519,7 @@ fn infer_open_prefix(theorem_name: &str) -> Option<String> {
     Some(format!("open {} in ", prefixes.join(" ")))
 }
 
+#[cfg(any(feature = "burn-ebm", test))]
 /// Normalize a tactic string by collapsing whitespace for comparison.
 fn normalize_tactic(tactic: &str) -> String {
     tactic.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -911,7 +941,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
                 };
             }
             let scorer_ref: Option<&dyn search::ValueScorer> =
-                value_fn.as_deref().map(|v| v as &dyn search::ValueScorer);
+                value_fn.as_deref();
             let result = engine
                 .search_one(&pool, &*policy, scorer_ref, &name, &statement)
                 .await;
@@ -1931,6 +1961,7 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Split records into train/val by theorem name.
 ///
 /// Ensures all records for a given theorem end up in the same split
@@ -1970,6 +2001,7 @@ fn split_records_by_theorem(
     (train, val)
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Find the latest `step_N` subdirectory in a checkpoint directory.
 /// Returns `Some(N)` if any step subdirectories with `meta.json` are found.
 fn auto_detect_latest_step(dir: &Path) -> Option<usize> {
@@ -1993,6 +2025,7 @@ fn auto_detect_latest_step(dir: &Path) -> Option<usize> {
     latest
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Train the Energy-Based Model from trajectory data.
 pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
     let hidden_size = args.hidden_size;
@@ -2304,6 +2337,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
 // Generate-negatives pipeline
 // ---------------------------------------------------------------------------
 
+#[cfg(any(feature = "burn-ebm", test))]
 /// Built-in Lean 4 tactics tried at each proof step as additional candidates.
 /// These are cheap (no LLM call) and frequently produce valid divergent states
 /// where LLM-generated candidates mostly produce `TacticResult::Failed`.
@@ -2313,6 +2347,7 @@ const PROBE_TACTICS: &[&str] = &[
     "right", "ext", "simp_all", "intro _",
 ];
 
+#[cfg(feature = "burn-ebm")]
 /// Process a single theorem: walk the ground-truth proof path, generate LLM
 /// candidates at each step, and classify them as Positive or Negative.
 async fn process_theorem(
@@ -2912,6 +2947,7 @@ async fn process_theorem(
     outcome
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Run the generate-negatives pipeline: walk known-good proof paths and generate
 /// LLM candidates at each step, classifying them as Positive or Negative.
 pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Result<()> {

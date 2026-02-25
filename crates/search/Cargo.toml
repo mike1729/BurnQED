@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 lean-repl = { path = "../lean-repl" }
 policy = { path = "../policy" }
-ebm = { path = "../ebm" }
+ebm = { path = "../ebm", optional = true }
 trajectory = { path = "../trajectory" }
 ordered-float = { workspace = true }
 tokio = { workspace = true }
@@ -17,6 +17,10 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 lru = { workspace = true }
 futures = { workspace = true }
+
+[features]
+default = []
+burn-ebm = ["dep:ebm"]
 
 [dev-dependencies]
 toml = { workspace = true }

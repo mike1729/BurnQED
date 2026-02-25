@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+default-members = ["crates/prover-core", "crates/search", "crates/policy", "crates/lean-repl", "crates/trajectory"]
 resolver = "2"
 
 [workspace.dependencies]

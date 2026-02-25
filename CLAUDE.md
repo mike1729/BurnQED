@@ -82,23 +82,27 @@ burn-qed/
 │   ├── burn-qed_plan.md         # Original v1 architecture plan
 │   ├── ebm_overhaul.md          # EBM architecture upgrade (v1)
 │   └── experiment_guide.md      # Scripts, env vars, tuning
-├── crates/                      # Rust core (search, lean-repl, policy, ebm, trajectory, prover-core)
+├── crates/                      # Rust core (search, lean-repl, policy, trajectory, prover-core)
+│   └── ebm/                     # burn-rs EBM (v1, behind --features burn-ebm)
 ├── python/
 │   ├── encode_server.py         # Embedding extraction server (nf4)
-│   ├── sft/                     # LLM fine-tuning scripts
-│   └── joint/                   # v2 joint training (to be built)
+│   ├── training/                # LLM fine-tuning scripts (SFT)
+│   └── joint/                   # v2 joint training stubs
 │       ├── ebm_head.py          # GoalConditionedEnergyHead
 │       ├── dataset.py           # JointDataset (SFT + contrastive streams)
 │       ├── losses.py            # InfoNCE (no temperature — EBM head handles it)
 │       ├── model.py             # JointProver
 │       ├── monitoring.py        # separation_probe, ebm_metrics
 │       └── train.py             # Main training loop
-├── v2/                          # v2 workspace
-│   ├── data/traced/             # sft_train_seed.jsonl, sft_train_full.jsonl
+├── data/traced/                 # sft_train_seed.jsonl, sft_train_full.jsonl
+├── iterations/
 │   ├── iter_0/                  # SFT-only baseline + decoupled EBM + trajectories
 │   └── iter_1/                  # Joint-trained model + jointly-trained EBM
+├── archive/v1/                  # Archived v1 artifacts and burn-rs scripts
 └── scripts/                     # Server startup, eval orchestration
 ```
+
+> **Note:** `docs/v2_execution_plan.md` still references `v2/` paths — it's the reference plan. Paths in this file are the source of truth for actual layout.
 
 ## 15 Gotchas (Hard-Won Lessons)
 
@@ -136,7 +140,7 @@ burn-qed/
 4. Pantograph protocol for Lean REPL (JSON lines, `\n` terminated, 30s timeout)
 5. Worker recycling: 1000 requests OR 30 min TTL
 6. Batch EBM scoring with deferred collect-then-score pattern
-7. **burn-rs EBM pipeline DEPRECATED** — replaced by PyTorch GoalConditionedEnergyHead in v2
+7. **burn-rs EBM pipeline DEPRECATED** — replaced by PyTorch GoalConditionedEnergyHead in v2. Gated behind `--features burn-ebm`; default builds have zero burn dependencies
 
 ## Related Literature
 

@@ -676,13 +676,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "burn-contrib"
-version = "0.1.0"
-dependencies = [
- "burn",
-]
-
-[[package]]
 name = "burn-core"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1830,7 +1823,6 @@ dependencies = [
  "anyhow",
  "arrow",
  "burn",
- "burn-contrib",
  "clap",
  "futures",
  "indicatif",

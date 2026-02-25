@@ -7,9 +7,12 @@ use async_trait::async_trait;
 use lean_repl::{LeanError, LeanPool, ProofHandleOwned, ProofState, TacticResult};
 use policy::{GeneratedTactic, InferenceHandle};
 
+#[cfg(feature = "burn-ebm")]
 use ebm::inference::EBMValueFn;
 
-use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner, ValueScorer};
+#[cfg(feature = "burn-ebm")]
+use crate::engine::ValueScorer;
+use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner};
 
 // ---------------------------------------------------------------------------
 // NullPolicyProvider — returns no candidates (probe-only search)
@@ -154,9 +157,10 @@ impl PolicyProvider for InferencePolicyProvider {
 }
 
 // ---------------------------------------------------------------------------
-// ValueScorer for EBMValueFn
+// ValueScorer for EBMValueFn (burn-rs, v1 — behind feature gate)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "burn-ebm")]
 impl ValueScorer for EBMValueFn {
     fn score(&self, proof_state: &str) -> Result<f64, SearchError> {
         // block_in_place tells tokio this thread will block (on the internal

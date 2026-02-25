@@ -5,19 +5,28 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[cfg(feature = "burn-ebm")]
 use burn::backend::ndarray::NdArray;
+#[cfg(feature = "burn-ebm")]
 use burn::module::Module;
+#[cfg(feature = "burn-ebm")]
 use burn::prelude::Backend;
+#[cfg(feature = "burn-ebm")]
 use burn::record::{FullPrecisionSettings, NamedMpkFileRecorder};
+#[cfg(feature = "burn-ebm")]
 use burn::tensor::ElementConversion;
 
 use lean_repl::TacticResult;
 use search::mocks::{make_tactic, MockEnvironment, MockPolicy};
-use search::{SearchConfig, SearchEngine, ValueScorer};
+use search::{SearchConfig, SearchEngine};
+#[cfg(feature = "burn-ebm")]
+use search::ValueScorer;
 use trajectory::{
-    SearchResult, SearchStats, TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
+    TheoremIndex, TrajectoryLabel, TrajectoryReader, TrajectoryRecord,
     TrajectoryWriter,
 };
+#[cfg(feature = "burn-ebm")]
+use trajectory::{SearchResult, SearchStats};
 
 /// Search theorems using mocks, write Parquet, read back and verify.
 #[tokio::test]
@@ -264,9 +273,10 @@ async fn test_lean_pipeline_multiple_theorems() {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers for EBM integration tests
+// Helpers for EBM integration tests (gated behind burn-ebm feature)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "burn-ebm")]
 type TestBackend = NdArray<f32>;
 
 /// Helper: create a trajectory record for testing.
@@ -298,6 +308,7 @@ fn make_record(
     }
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Write a proved theorem's trajectory to Parquet (root→n1→n2 proof path + n3 dead end).
 fn write_proved_theorem(dir: &std::path::Path, filename: &str, theorem: &str) -> std::path::PathBuf {
     let path = dir.join(filename);
@@ -329,8 +340,10 @@ fn write_proved_theorem(dir: &std::path::Path, filename: &str, theorem: &str) ->
 
 // ---------------------------------------------------------------------------
 // Test: EBM training pipeline with mock encode_fn (no real LLM)
+// (gated behind burn-ebm feature — burn-rs EBM is deprecated in v2)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "burn-ebm")]
 /// Train EBM with synthetic trajectory data and mock encoder, verify checkpoint + config saved.
 #[test]
 fn test_train_ebm_mock_pipeline() {
@@ -398,6 +411,7 @@ fn test_train_ebm_mock_pipeline() {
 // Test: Search with mock EBM scorer
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "burn-ebm")]
 /// Train EBM using precomputed embedding cache (no LLM needed at train time).
 #[test]
 fn test_train_ebm_with_cached_embeddings() {
@@ -460,6 +474,7 @@ fn test_train_ebm_with_cached_embeddings() {
     assert!(checkpoint_dir.join("final").join("model.mpk").exists());
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Create sampler → precompute cache → save → load → train with loaded cache → checkpoint saved.
 #[test]
 fn test_train_ebm_save_embeddings_roundtrip() {
@@ -531,6 +546,7 @@ fn test_train_ebm_save_embeddings_roundtrip() {
     assert!(checkpoint_dir.join("final").join("model.mpk").exists(), "Checkpoint should be saved");
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Two-phase training: first run saves checkpoint + cache, second run resumes.
 #[test]
 fn test_train_ebm_resume_with_cache() {
@@ -623,6 +639,7 @@ fn test_train_ebm_resume_with_cache() {
     // Note: This is a weak assertion due to SpectralNorm Option C randomness
 }
 
+#[cfg(feature = "burn-ebm")]
 /// Search using MockEnvironment + MockPolicy + a real (small) EBM scorer.
 #[tokio::test]
 async fn test_search_with_mock_ebm() {

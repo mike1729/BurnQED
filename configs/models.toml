@@ -10,6 +10,8 @@ shared_hidden_dim = 4096      # DeepSeek-Prover-V2-7B
 # dedicated_model_path = "models/encoder/encoder.pt"
 # dedicated_hidden_dim = 2048   # 1.3B
 
+# NOTE: v1 burn-rs EBM only. Used with `cargo build --features burn-ebm`.
+# v2 uses PyTorch GoalConditionedEnergyHead in python/joint/ebm_head.py.
 [energy_head]
 d_hidden1 = 512
 d_hidden2 = 256

@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use pipeline::{CommonSearchArgs, CompareArgs, EvalArgs, ExportProofPathsArgs, GenerateNegativesArgs, ProbeArgs, SearchArgs, SummaryArgs, TrainEbmArgs};
+use pipeline::{CommonSearchArgs, CompareArgs, EvalArgs, ExportProofPathsArgs, ProbeArgs, SearchArgs, SummaryArgs};
+#[cfg(feature = "burn-ebm")]
+use pipeline::{GenerateNegativesArgs, TrainEbmArgs};
 
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
@@ -147,6 +149,7 @@ enum Command {
         results: Vec<PathBuf>,
     },
     /// Generate high-quality contrastive negatives by walking known-good proof paths.
+    #[cfg(feature = "burn-ebm")]
     GenerateNegatives {
         /// Path to tactic pairs JSONL file (from LeanDojo traces).
         #[arg(long)]
@@ -216,6 +219,7 @@ enum Command {
         hard_theorems: Option<PathBuf>,
     },
     /// Train the Energy-Based Model from trajectory data.
+    #[cfg(feature = "burn-ebm")]
     TrainEbm {
         /// Path(s) to trajectory Parquet files.
         #[arg(long, required = true, num_args = 1..)]
@@ -391,6 +395,7 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         Command::Compare { results } => pipeline::run_compare(CompareArgs { results }),
+        #[cfg(feature = "burn-ebm")]
         Command::GenerateNegatives {
             tactic_pairs,
             server_url,
@@ -445,6 +450,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await
         }
+        #[cfg(feature = "burn-ebm")]
         Command::TrainEbm {
             trajectories,
             output_dir,
