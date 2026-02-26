@@ -76,10 +76,10 @@ BurnQED/
 │   ├── inference_server.py  # Custom sgl.Engine server with in-process mean-pooling
 │   ├── encode_embeddings.py # Direct PyTorch encoding (bypasses SGLang batch bug)
 │   ├── training/            # LoRA fine-tuning (train_llm.py, export_llm.py)
-│   └── data/                # Mathlib tracing, tactic pair extraction, benchmark conversion
+│   └── data/                # Dataset downloads, benchmark conversion
 ├── scripts/             # Pipeline orchestration scripts
 ├── configs/             # search.toml, models.toml
-├── data/                # theorem_index.json, minif2f_test.json, tactic_pairs/
+├── data/                # HF datasets, miniF2F JSONs, SFT training data
 ├── vendor/Pantograph/   # Git submodule (Lean 4 REPL, Mathlib v4.26.0)
 └── docs/                # Architecture plan, experiment guide, known issues
 ```
@@ -279,7 +279,7 @@ cargo test -p policy -- --ignored --test-threads=1
 ## Known Issues
 
 - **SGLang batch hidden states**: `return_hidden_states=True` is broken in batch mode (SGLang #8066). Workaround: `python/encode_embeddings.py` uses direct PyTorch encoding for training data. Search-time encoding uses sequential calls (one at a time), which is correct. See `docs/encoding_bug.md`.
-- **Mathlib version mismatch**: The pre-traced LeanDojo Benchmark 4 (Zenodo) uses Mathlib from July 2024, while Pantograph uses Mathlib v4.26.0 (Dec 2024). ~14% of theorem names don't resolve. Fix: retrace with `python/data/trace_mathlib.py --trace --mathlib-commit v4.26.0`.
+- **Dataset version gaps**: Training datasets (Lean Workbook v4.8, Goedel v4.9, NuminaMath v4.15) lag behind our Pantograph v4.26. Mathlib lemma renames may break some tactics. Pantograph validation (tasks 0.3d-f) measures actual compatibility. See `docs/datasets.md`.
 
 ## License
 

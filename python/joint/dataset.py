@@ -1,11 +1,13 @@
 """JointDataset: interleaved SFT and contrastive training streams.
 
-SFTStream: tactic pairs formatted as [GOAL]state[PROOFSTEP]tactic for next-token prediction.
+SFTStream: tactic pairs in DeepSeek-native prompt format for next-token prediction.
+  Format: "Complete the following Lean 4 code:\n\n```lean4\n/- tactic state:\n{state}\n-/\n```\n{tactic}"
+  See docs/data_format_spec.md for full specification.
 ContrastiveStream: (state, goal, label) triples for InfoNCE contrastive learning.
 
 Gotcha #11: Validation split by THEOREM NAME, not tactic pairs.
 Gotcha #12: Reject entire theorem if any tactic contains sorry/admit/cheat.
-Gotcha #13: DataCollatorForCompletionOnlyLM — only train on tactic tokens after [PROOFSTEP].
+Gotcha #13: DataCollatorForCompletionOnlyLM with response_template="```\\n" (closing code fence).
 """
 
 from __future__ import annotations
@@ -37,9 +39,9 @@ class ContrastiveExample:
 class SFTStream(IterableDataset):
     """Streams SFT examples from tactic pairs JSONL.
 
-    Format per line: {"state": "...", "tactic": "...", "theorem": "..."}
-    Tokenizes as: [GOAL]{state}[PROOFSTEP]{tactic}
-    Loss masked to tactic tokens only (Gotcha #13).
+    Format per line: {"text": "Complete the following Lean 4 code:...", "theorem": "..."}
+    Uses DeepSeek-native prompt format (see docs/data_format_spec.md).
+    Loss masked to tactic tokens only via closing code fence (Gotcha #13).
     """
 
     def __init__(

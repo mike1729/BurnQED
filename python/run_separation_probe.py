@@ -156,8 +156,10 @@ def main():
 
     # Load probe data
     probe_data = json.load(open(args.probe_data))
-    pos_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "positive"]
-    neg_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "negative"]
+    # Embeddings use raw proof state text (no instruction prefix or code fences)
+    # See docs/data_format_spec.md "Embedding extraction" section
+    pos_texts = [d['state_pp'] for d in probe_data if d["label"] == "positive"]
+    neg_texts = [d['state_pp'] for d in probe_data if d["label"] == "negative"]
     logger.info("Probe data: %d positive, %d negative", len(pos_texts), len(neg_texts))
 
     # Load model

@@ -40,9 +40,8 @@ class JointProver(nn.Module):
     ) -> None:
         """Initialize JointProver.
 
-        Gotcha #14: Check if [GOAL]/[PROOFSTEP] tokens are in vocab.
-        If not, add_special_tokens() + resize_token_embeddings().
-        modules_to_save=["embed_tokens", "lm_head"] in LoRA config.
+        Uses DeepSeek-native prompt format (no special tokens needed).
+        See docs/data_format_spec.md for format specification.
 
         Args:
             model_name: HuggingFace model ID (e.g., "deepseek-ai/DeepSeek-Prover-V2-7B").

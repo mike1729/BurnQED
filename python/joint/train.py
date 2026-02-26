@@ -46,7 +46,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 4
 
     # Data
-    sft_data_path: Path = field(default_factory=lambda: Path("data/traced/sft_train.jsonl"))
+    sft_data_path: Path = field(default_factory=lambda: Path("data/sft_train.jsonl"))
     contrastive_data_path: Path = field(default_factory=lambda: Path("iterations/iter_0/trajectories"))
 
     # Monitoring

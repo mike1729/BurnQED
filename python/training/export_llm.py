@@ -108,8 +108,8 @@ def verify_merged(output_dir: Path):
         trust_remote_code=True,
     )
 
-    # Run a forward pass with a sample proof state
-    test_input = "[GOAL]n : Nat\n⊢ n + 0 = n[PROOFSTEP]"
+    # Run a forward pass with a sample proof state (DeepSeek-native format)
+    test_input = "Complete the following Lean 4 code:\n\n```lean4\n/- tactic state:\nn : Nat\n⊢ n + 0 = n\n-/\n```\n"
     inputs = tokenizer(test_input, return_tensors="pt")
 
     with torch.no_grad():

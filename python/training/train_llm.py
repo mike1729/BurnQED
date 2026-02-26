@@ -4,18 +4,21 @@
 Supports expert iteration: pass --extra-data with trajectory Parquet files from
 previous iterations to augment the base training data with self-generated proofs.
 
+Training data uses DeepSeek-native prompt format (see docs/data_format_spec.md):
+  "Complete the following Lean 4 code:\n\n```lean4\n/- tactic state:\n{state}\n-/\n```\n{tactic}"
+
 Usage:
-    # Iteration 0: train on Mathlib tactic pairs only
+    # Iteration 0: train on competition tactic pairs
     accelerate launch python/training/train_llm.py \
         --model-name deepseek-ai/DeepSeek-Prover-V2-7B \
-        --data data/tactic_pairs/train_formatted.jsonl \
-        --val-data data/tactic_pairs/val_formatted.jsonl \
+        --data data/sft_train.jsonl \
+        --val-data data/sft_val.jsonl \
         --output checkpoints/llm/iter_0
 
     # Iteration N>0: add trajectory data from previous iterations
     accelerate launch python/training/train_llm.py \
         --model-name deepseek-ai/DeepSeek-Prover-V2-7B \
-        --data data/tactic_pairs/train_formatted.jsonl \
+        --data data/sft_train.jsonl \
         --extra-data trajectories/iter_*.parquet \
         --base checkpoints/llm/iter_0 \
         --output checkpoints/llm/iter_1 \
@@ -40,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 def load_base_data(data_path: str) -> list:
-    """Load formatted training JSONL (output of prepare_tactic_pairs.py)."""
+    """Load formatted training JSONL (DeepSeek-native prompt format)."""
     records = []
     with open(data_path) as f:
         for line in f:
@@ -56,8 +59,8 @@ def load_trajectory_data(parquet_globs: list) -> list:
 
     Reads TrajectoryRecord fields: state_pp, tactic_applied, label.
     Filters to label == "positive", removes sorry-containing tactics and
-    empty state/tactic records, deduplicates, and formats as
-    [GOAL]{state}[PROOFSTEP]{tactic}.
+    empty state/tactic records, deduplicates, and formats in DeepSeek-native
+    prompt format (see docs/data_format_spec.md).
     """
     import pyarrow.parquet as pq
 
@@ -98,7 +101,11 @@ def load_trajectory_data(parquet_globs: list) -> list:
                     file_dup += 1
                     continue
                 seen.add(key)
-                text = f"[GOAL]{state}[PROOFSTEP]{tactic}"
+                text = (
+                    f"Complete the following Lean 4 code:\n\n"
+                    f"```lean4\n/- tactic state:\n{state}\n-/\n```\n"
+                    f"{tactic}"
+                )
                 records.append({"text": text, "theorem": "", "depth": 0})
                 file_added += 1
 
@@ -218,8 +225,9 @@ def train(args):
                      probe_interval: int = 1000, batch_size: int = 8):
             super().__init__()
             probe_data = json.load(open(probe_path))
-            pos_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "positive"]
-            neg_texts = [f"[GOAL]{d['state_pp']}" for d in probe_data if d["label"] == "negative"]
+            # Embeddings use raw proof state text (no instruction prefix or code fences)
+            pos_texts = [d['state_pp'] for d in probe_data if d["label"] == "positive"]
+            neg_texts = [d['state_pp'] for d in probe_data if d["label"] == "negative"]
             self.n_pos = len(pos_texts)
             self.n_neg = len(neg_texts)
             logger.info("Separation probe: %d positive, %d negative states from %s",
@@ -615,7 +623,7 @@ def main():
     parser.add_argument(
         "--data",
         required=True,
-        help="Training JSONL path (output of prepare_tactic_pairs.py)",
+        help="Training JSONL path (DeepSeek-native prompt format, see docs/data_format_spec.md)",
     )
     parser.add_argument(
         "--val-data",

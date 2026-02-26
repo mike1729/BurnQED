@@ -14,7 +14,7 @@
 # Prerequisites:
 #   - Python deps installed (pip install -r python/requirements.txt)
 #   - Model weights available (HuggingFace or local)
-#   - Training data prepared (python python/data/trace_mathlib.py + prepare_tactic_pairs.py)
+#   - Training data prepared (./scripts/prepare_data.sh)
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
@@ -30,8 +30,8 @@ LLM_BASE="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
 LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 CKPT_DIR="${REPO_ROOT}/checkpoints/llm"
-TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
-VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
+TRAIN_DATA="${REPO_ROOT}/data/sft_train.jsonl"
+VAL_DATA="${REPO_ROOT}/data/sft_val.jsonl"
 EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
 
 # Pre/post eval model: iter 0 uses base HF model, iter N uses previous iter's export
@@ -220,8 +220,9 @@ else
     if [ -f "$MINIF2F" ]; then
         EVAL_THEOREMS="$MINIF2F"
     else
-        echo "Warning: miniF2F file not found at ${MINIF2F}, using theorem_index.json"
-        EVAL_THEOREMS="${REPO_ROOT}/data/theorem_index.json"
+        echo "ERROR: miniF2F file not found at ${MINIF2F}"
+        echo "Run: ./scripts/prepare_data.sh"
+        exit 1
     fi
 
     # Eval WITH EBM (if available)

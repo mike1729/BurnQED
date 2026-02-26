@@ -15,7 +15,7 @@
 #   # Quick iteration 1 training with defaults
 #   ./scripts/run_finetune.sh 1
 #
-#   # Iter 0: base Mathlib tactic pairs only
+#   # Iter 0: base competition tactic pairs only
 #   ./scripts/run_finetune.sh 0
 #
 # Environment variables:
@@ -46,8 +46,8 @@ source "${REPO_ROOT}/scripts/_lib.sh"
 LLM_BASE="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
 TRAJ_DIR="${REPO_ROOT}/trajectories"
 CKPT_DIR="${REPO_ROOT}/checkpoints/llm"
-TRAIN_DATA="${REPO_ROOT}/data/tactic_pairs/train_formatted.jsonl"
-VAL_DATA="${REPO_ROOT}/data/tactic_pairs/val_formatted.jsonl"
+TRAIN_DATA="${REPO_ROOT}/data/sft_train.jsonl"
+VAL_DATA="${REPO_ROOT}/data/sft_val.jsonl"
 LOG_DIR="${REPO_ROOT}/logs"
 
 mkdir -p "$CKPT_DIR" "$LOG_DIR"
@@ -107,7 +107,7 @@ echo "  Logging to: ${STEP_LOG}"
 # ── Iteration 0: base data only ───────────────────────────────────────────
 if [ "$ITER" -eq 0 ]; then
     MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-1500}"
-    echo "Iteration 0: training on base Mathlib tactic pairs only (${MAX_TRAIN_STEPS} steps)"
+    echo "Iteration 0: training on base competition tactic pairs only (${MAX_TRAIN_STEPS} steps)"
 
     # shellcheck disable=SC2086
     run_logged "$STEP_LOG" accelerate launch \
