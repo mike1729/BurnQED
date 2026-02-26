@@ -4,8 +4,9 @@
 Runs from project root. Orchestrates:
 1. Download miniF2F datasets (if not cached)
 2. Generate sorry-proof .lean files
-3. Compile each file with `lake env lean`
-4. Report per-theorem results
+3. Compile each file with `lake env lean` (verify statements)
+4. Build .oleans via `lake build` (for fast Pantograph imports)
+5. Report per-theorem results
 
 Usage:
     cd /path/to/BurnQED
@@ -65,6 +66,46 @@ def generate(variant: str):
     ]
     subprocess.run(cmd, check=True)
     return lean_path
+
+
+def ensure_lean_lib(module: str):
+    """Register lean_lib target in lakefile.lean if not already present."""
+    lakefile = PANTOGRAPH_DIR / "lakefile.lean"
+    content = lakefile.read_text()
+    marker = f"lean_lib {module}"
+    if marker in content:
+        return
+    content += f"\nlean_lib {module} {{}}\n"
+    lakefile.write_text(content)
+    print(f"  Registered {module} in lakefile.lean")
+
+
+def build_olean(module: str, timeout: int = 600) -> bool:
+    """Build .olean for a module via `lake build`. Returns True on success."""
+    ensure_lean_lib(module)
+    cmd = ["lake", "build", module]
+    print(f"  Building {module} .olean...")
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+            cwd=str(PANTOGRAPH_DIR),
+        )
+        if result.returncode != 0:
+            # Filter out sorry warnings
+            errors = [
+                ln for ln in (result.stdout + result.stderr).splitlines()
+                if "error" in ln.lower() and "sorry" not in ln
+            ]
+            if errors:
+                print(f"  WARNING: lake build {module} had errors:")
+                for e in errors[:5]:
+                    print(f"    {e}")
+                return False
+        print(f"  Built {module} .olean successfully")
+        return True
+    except subprocess.TimeoutExpired:
+        print(f"  WARNING: lake build {module} timed out after {timeout}s")
+        return False
 
 
 def compile_file(lean_file: str, timeout: int) -> dict:
@@ -229,6 +270,14 @@ def main():
         help="Skip generate step (reuse existing .lean files)",
     )
     parser.add_argument(
+        "--skip-compile", action="store_true",
+        help="Skip compile step (just download, generate, build oleans)",
+    )
+    parser.add_argument(
+        "--skip-olean", action="store_true",
+        help="Skip .olean build step (lake build)",
+    )
+    parser.add_argument(
         "--timeout", type=int, default=300,
         help="Per-file compile timeout in seconds (default: 300)",
     )
@@ -256,14 +305,32 @@ def main():
     else:
         print("\nStep 2: Skipping generate (--skip-generate)")
 
-    # Step 3: Compile
-    print(f"\nStep 3: Compiling {len(variants)} variant(s) (timeout={args.timeout}s)...")
+    # Step 3: Compile (lake env lean — verify statements)
     all_results = []
-    for v in variants:
-        summary = compile_variant(v, args.timeout, out_dir)
-        all_results.append(summary)
+    if not args.skip_compile:
+        print(f"\nStep 3: Compiling {len(variants)} variant(s) (timeout={args.timeout}s)...")
+        for v in variants:
+            summary = compile_variant(v, args.timeout, out_dir)
+            all_results.append(summary)
+    else:
+        print("\nStep 3: Skipping compile (--skip-compile)")
 
-    # Step 4: Summary
+    # Step 4: Build .oleans (lake build — for fast Pantograph imports)
+    if not args.skip_olean:
+        print(f"\nStep 4: Building .oleans for {len(variants)} variant(s)...")
+        for v in variants:
+            module = variant_to_module(v)
+            # Skip olean build if compilation had errors
+            if all_results:
+                matching = [r for r in all_results if r["variant"] == v]
+                if matching and matching[0]["errors"] > 0:
+                    print(f"  Skipping {module} .olean (has compile errors)")
+                    continue
+            build_olean(module)
+    else:
+        print("\nStep 4: Skipping .olean build (--skip-olean)")
+
+    # Step 5: Summary
     print("\n" + "=" * 60)
     print("COMPILATION SUMMARY")
     print("=" * 60)
@@ -283,6 +350,7 @@ def main():
     print(f"\nResults saved to {out_dir}/")
 
     # Write aggregate
+    out_dir.mkdir(parents=True, exist_ok=True)
     with open(out_dir / "summary.json", "w") as f:
         json.dump({
             "total_theorems": total_theorems,

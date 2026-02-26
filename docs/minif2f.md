@@ -52,7 +52,7 @@ Converts TheoremIndex JSON to a `.lean` file where each theorem is proved by `so
 **v2c compound statements:**
 Some v2c theorems include `abbrev` definitions before the theorem. These are emitted as standalone `abbrev ... := sorry` declarations followed by the theorem.
 
-### Step 3: Compile
+### Step 3: Compile (verify statements)
 
 ```bash
 # Compile a single variant (from Pantograph directory)
@@ -61,19 +61,30 @@ lake env lean BenchMinIF2FV2sTest.lean
 
 # Or use the orchestration script (from project root)
 python python/data/minif2f/compile.py --variant v2s_test --timeout 300
-
-# Compile all 6 variants
-python python/data/minif2f/compile.py
 ```
 
-The compile script uses `lake env lean` (not `lake build`), which injects `LEAN_PATH` from the Pantograph project's pre-compiled Mathlib `.olean` cache. Each file is compiled independently — no `lean_lib` targets needed in `lakefile.lean`.
+Uses `lake env lean` to verify all theorem statements type-check against Lean 4.27 / Mathlib v4.27.
 
-Output: `data/benchmarks/compile_results/{variant}_results.json` with per-theorem pass/fail.
+### Step 4: Build .oleans (for fast Pantograph imports)
+
+```bash
+# Build .olean for a specific variant
+cd vendor/Pantograph && lake build BenchMinIF2FV2sTest
+
+# Or via the orchestration script (builds all passing variants)
+python python/data/minif2f/compile.py --skip-compile  # if already compiled
+```
+
+The script auto-registers `lean_lib` targets in `lakefile.lean` and runs `lake build`. This produces `.olean` files that Pantograph can import via `--imports Mathlib,BenchMinIF2FV2sTest`, avoiding expensive re-elaboration of complex type expressions (ℂ, Finset, etc.) during `goal.start`.
+
+Output: `.olean` in `vendor/Pantograph/.lake/build/lib/BenchMinIF2F*.olean`
 
 ### Full pipeline (one command)
 
 ```bash
-python python/data/minif2f/compile.py
+python python/data/minif2f/compile.py                     # all 6 variants
+python python/data/minif2f/compile.py --variant v2s_test   # single variant
+python python/data/minif2f/compile.py --skip-olean         # skip lake build
 ```
 
 This runs download → generate → compile → report for all 6 variants.
@@ -107,7 +118,7 @@ vendor/Pantograph/
 
 ## Key Decisions
 
-1. **`lake env lean` over `lake build`:** Individual file compilation avoids modifying `lakefile.lean` (which would trigger dependency re-resolution and fail without network). Uses the same Mathlib `.olean` cache as Goedel compilation.
+1. **Two-stage compilation:** `lake env lean` for fast verification (no lakefile changes needed), then `lake build` for `.olean` production. The `.olean`s are required for Pantograph imports (`--imports BenchMinIF2FV2sTest`) which avoid 60s+ re-elaboration of complex types during search.
 
 2. **Syntax fixes in generator, not source data:** The TheoremIndex JSONs store clean `∀`-expression statements. Lean-specific fixes (set-builder parenthesization, factorial notation, etc.) are applied during `.lean` generation so the JSONs remain reusable for other tools (Pantograph `goal.start`, etc.).
 
