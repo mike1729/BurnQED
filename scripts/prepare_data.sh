@@ -1,32 +1,29 @@
 #!/bin/bash
-# Prepare training data for BurnQED expert iteration experiments.
+# Prepare data for BurnQED v2 expert iteration experiments.
 #
 # Orchestrates the full data pipeline:
 #   1. Set up Python virtual environment
-#   2. Download pre-traced Mathlib data (or trace locally with --trace)
-#   3. Format tactic pairs for LLM training
-#   4. Validate all output files
+#   2. Download HuggingFace training datasets (Lean Workbook, Goedel proofs, LEAN-GitHub, NuminaMath)
+#   3. Download miniF2F benchmarks (v1 + v2)
+#   4. Generate .lean benchmark files and build oleans (if lake available)
+#   5. Validate all outputs
 #
 # Usage:
-#   ./scripts/prepare_data.sh                # Download pre-traced data (~5 min, default)
-#   ./scripts/prepare_data.sh --trace        # Local LeanDojo trace (requires LeanDojo, hours)
-#   ./scripts/prepare_data.sh --force        # Re-run even if outputs exist
+#   ./scripts/prepare_data.sh                     # Full pipeline
+#   ./scripts/prepare_data.sh --skip-datasets     # Skip large HF dataset downloads
+#   ./scripts/prepare_data.sh --force             # Re-download everything
 #
 # Environment variables:
-#   MODEL_PATH      Local model dir for tokenizer (optional, speeds up formatting)
+#   HF_TOKEN        HuggingFace token for authenticated (fast) downloads
 #   PYTHON          Python executable (default: python3)
-#   MATHLIB_COMMIT  Mathlib4 tag to trace (default: v4.26.0)
 #
 # Exit codes:
 #   0  Success — all outputs validated
 #   1  Validation failed
 #   2  Python environment setup error
-#   3  Mathlib trace error
-#   4  Tactic pair formatting error
-#
-# Note: Embedding precomputation is handled during EBM training (see run_baseline.sh
-# --save-embeddings flag). miniF2F extraction is handled automatically in both
-# download and trace modes.
+#   3  miniF2F download error
+#   4  HF dataset download error
+#   5  Olean build error
 
 set -euo pipefail
 
@@ -35,49 +32,40 @@ cd "$REPO_ROOT"
 
 # ── Configuration ───────────────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
-MATHLIB_COMMIT="${MATHLIB_COMMIT:-v4.26.0}"
-MODEL_PATH="${MODEL_PATH:-}"
 DATA_DIR="${REPO_ROOT}/data"
 VENV_DIR="${REPO_ROOT}/.venv"
-REQUIREMENTS="${REPO_ROOT}/python/requirements.txt"
+PANTOGRAPH_DIR="${REPO_ROOT}/vendor/Pantograph"
 
-TRACE=0
+SKIP_DATASETS=0
 FORCE=0
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
 for arg in "$@"; do
     case "$arg" in
-        --trace)
-            TRACE=1
+        --skip-datasets)
+            SKIP_DATASETS=1
             ;;
         --force)
             FORCE=1
             ;;
         --help|-h)
-            # Print the header comment block as usage
             sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
             exit 0
             ;;
         *)
             echo "Unknown argument: $arg"
-            echo "Usage: ./scripts/prepare_data.sh [--trace] [--force] [--help]"
+            echo "Usage: ./scripts/prepare_data.sh [--skip-datasets] [--force] [--help]"
             exit 1
             ;;
     esac
 done
 
 echo "================================================================"
-echo "  BurnQED Data Preparation"
+echo "  BurnQED v2 Data Preparation"
 echo "================================================================"
-echo "  Mode:            $([ $TRACE -eq 1 ] && echo 'LeanDojo trace (local)' || echo 'download pre-traced (default)')"
-echo "  Force re-run:    $([ $FORCE -eq 1 ] && echo 'yes' || echo 'no')"
-echo "  Mathlib commit:  ${MATHLIB_COMMIT}"
-echo "  Output dir:      ${DATA_DIR}"
-if [ -n "$MODEL_PATH" ]; then
-    echo "  Tokenizer:       ${MODEL_PATH}"
-else
-    echo "  Tokenizer:       HuggingFace default (deepseek-ai/DeepSeek-Prover-V2-7B)"
-fi
+echo "  Skip HF datasets: $([ $SKIP_DATASETS -eq 1 ] && echo 'yes' || echo 'no')"
+echo "  Force re-download: $([ $FORCE -eq 1 ] && echo 'yes' || echo 'no')"
+echo "  Output dir:        ${DATA_DIR}"
 echo "================================================================"
 
 # ── Step 1: Python environment ──────────────────────────────────────────────
@@ -108,182 +96,181 @@ fi
 echo "Using Python: $(which python)"
 echo "Python version: $(python --version)"
 
-# Install/upgrade requirements if needed
-if [ $TRACE -eq 1 ]; then
-    if ! python -c "import lean_dojo" 2>/dev/null; then
-        echo "Installing Python dependencies (including LeanDojo for --trace mode)..."
-        python -m pip install --upgrade pip -q
-        python -m pip install -r "$REQUIREMENTS" -q
-    fi
-else
-    # Download mode only needs curl/tar (system) and json (stdlib), but
-    # prepare_tactic_pairs.py may need transformers for tokenizer
-    echo "Checking minimal dependencies for download mode..."
-    python -m pip install --upgrade pip -q
-    # Install only what's needed: transformers for tokenizer
-    python -m pip install "transformers>=4.38.0" -q 2>/dev/null || true
-fi
+# Install huggingface_hub CLI for dataset downloads
+echo "Installing dependencies..."
+python -m pip install --upgrade pip -q
+python -m pip install "huggingface_hub[cli]" -q
 echo "Python environment ready."
 
-# ── Step 2: Trace Mathlib ───────────────────────────────────────────────────
-echo ""
-echo "=== Step 2: Trace Mathlib ==="
+# ── Step 1b: HuggingFace authentication ─────────────────────────────────────
+if [ $SKIP_DATASETS -eq 0 ]; then
+    echo ""
+    echo "=== Step 1b: HuggingFace authentication ==="
 
-TRACE_OUTPUTS=(
-    "${DATA_DIR}/theorem_index.json"
-    "${DATA_DIR}/tactic_pairs/train.jsonl"
-    "${DATA_DIR}/tactic_pairs/val.jsonl"
+    if [ -z "${HF_TOKEN:-}" ]; then
+        # Check if already logged in (token cached by previous login)
+        if ! huggingface-cli whoami &>/dev/null; then
+            echo "HuggingFace authentication required for fast downloads."
+            echo "Set HF_TOKEN env var or run: huggingface-cli login"
+            echo ""
+            echo "Options:"
+            echo "  1. Set HF_TOKEN=hf_... and re-run this script"
+            echo "  2. Proceed with interactive login now"
+            echo "  3. Continue without auth (downloads will be rate-limited)"
+            read -rp "Login interactively? [Y/n] " answer
+            if [[ "${answer:-Y}" =~ ^[Yy] ]]; then
+                huggingface-cli login
+            else
+                echo "Continuing without HF auth. Downloads may be slow."
+            fi
+        else
+            echo "Already logged in to HuggingFace."
+        fi
+    else
+        export HF_TOKEN
+        echo "Using HF_TOKEN from environment."
+    fi
+fi
+
+# ── Step 2: Download HuggingFace training datasets ──────────────────────────
+echo ""
+echo "=== Step 2: Download HF training datasets ==="
+
+if [ $SKIP_DATASETS -eq 1 ]; then
+    echo "Skipping HF dataset downloads (--skip-datasets)."
+else
+    HF_DATASETS=(
+        "internlm/Lean-Workbook|data/workbook"
+        "Goedel-LM/Lean-workbook-proofs|data/goedel_proofs"
+        "internlm/Lean-Github|data/lean_github"
+        "AI-MO/NuminaMath-LEAN|data/numinamath"
+    )
+
+    for entry in "${HF_DATASETS[@]}"; do
+        IFS='|' read -r repo local_dir <<< "$entry"
+        full_dir="${REPO_ROOT}/${local_dir}"
+
+        if [ $FORCE -eq 0 ] && [ -d "$full_dir" ] && [ "$(ls -A "$full_dir" 2>/dev/null)" ]; then
+            echo "  ${repo} already downloaded to ${local_dir} (use --force to re-download)"
+            continue
+        fi
+
+        echo "  Downloading ${repo}..."
+        if ! huggingface-cli download "$repo" --repo-type dataset --local-dir "$full_dir"; then
+            echo "ERROR: Failed to download ${repo}"
+            exit 4
+        fi
+        echo "  Downloaded ${repo} → ${local_dir}"
+    done
+
+    echo "HF dataset downloads complete."
+fi
+
+# ── Step 3: Download miniF2F (v1 + v2) ─────────────────────────────────────
+echo ""
+echo "=== Step 3: Download miniF2F benchmarks ==="
+
+MINIF2F_ARGS=("--output-dir" "$DATA_DIR" "--version" "all")
+if [ $FORCE -eq 1 ]; then
+    MINIF2F_ARGS+=("--force")
+fi
+
+if ! python "${REPO_ROOT}/python/data/download_minif2f.py" "${MINIF2F_ARGS[@]}"; then
+    echo "ERROR: miniF2F download failed."
+    exit 3
+fi
+echo "miniF2F download complete."
+
+# ── Step 4: Generate miniF2F benchmark oleans ───────────────────────────────
+echo ""
+echo "=== Step 4: Generate miniF2F benchmark .lean files + oleans ==="
+
+BENCHMARKS=(
+    "minif2f_test.json BenchMinIF2FTest"
+    "minif2f_valid.json BenchMinIF2FValid"
+    "minif2f_v2s_test.json BenchMinIF2FV2STest"
+    "minif2f_v2s_valid.json BenchMinIF2FV2SValid"
+    "minif2f_v2c_test.json BenchMinIF2FV2CTest"
+    "minif2f_v2c_valid.json BenchMinIF2FV2CValid"
 )
 
-# Check if trace outputs already exist
-TRACE_EXISTS=1
-for f in "${TRACE_OUTPUTS[@]}"; do
-    if [ ! -f "$f" ]; then
-        TRACE_EXISTS=0
-        break
+BENCH_LIBS_TO_BUILD=()
+
+for pair in "${BENCHMARKS[@]}"; do
+    read -r json_file module_name <<< "$pair"
+
+    if [ ! -f "${DATA_DIR}/${json_file}" ]; then
+        echo "  ${json_file} not found, skipping ${module_name}"
+        continue
     fi
+
+    # Generate .lean file from JSON
+    echo "  Generating ${module_name}.lean from ${json_file}..."
+    python "${REPO_ROOT}/python/data/generate_benchmark_lean.py" \
+        --input "${DATA_DIR}/${json_file}" \
+        --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
+        --module-name "${module_name}"
+
+    # Register lean_lib in lakefile.lean if not already present
+    if [ -f "${PANTOGRAPH_DIR}/lakefile.lean" ]; then
+        if ! grep -qw "lean_lib ${module_name}" "${PANTOGRAPH_DIR}/lakefile.lean"; then
+            printf "\nlean_lib %s {\n}\n" "${module_name}" >> "${PANTOGRAPH_DIR}/lakefile.lean"
+            echo "  Registered ${module_name} in lakefile.lean"
+        fi
+    fi
+
+    BENCH_LIBS_TO_BUILD+=("${module_name}")
 done
 
-if [ $TRACE_EXISTS -eq 1 ] && [ $FORCE -eq 0 ]; then
-    echo "Trace outputs already exist (use --force to re-run):"
-    for f in "${TRACE_OUTPUTS[@]}"; do
-        echo "  $(wc -l < "$f") lines  $f"
-    done
-else
-    TRACE_ARGS=("--output-dir" "$DATA_DIR" "--mathlib-commit" "$MATHLIB_COMMIT")
-
-    if [ $TRACE -eq 1 ]; then
-        TRACE_ARGS+=("--trace")
-        echo "Tracing Mathlib4 at ${MATHLIB_COMMIT} (this may take hours)..."
-    else
-        echo "Downloading pre-traced LeanDojo data..."
-    fi
-
-    if ! python "${REPO_ROOT}/python/data/trace_mathlib.py" "${TRACE_ARGS[@]}"; then
-        echo "ERROR: Mathlib trace failed."
-        if [ $TRACE -eq 1 ]; then
-            echo "Try running without --trace to download pre-traced data instead."
+# Build oleans if lake is available
+if [ ${#BENCH_LIBS_TO_BUILD[@]} -gt 0 ]; then
+    if command -v lake &>/dev/null; then
+        echo "  Building ${#BENCH_LIBS_TO_BUILD[@]} benchmark modules..."
+        cd "${PANTOGRAPH_DIR}"
+        if lake build "${BENCH_LIBS_TO_BUILD[@]}"; then
+            echo "  Built oleans: ${BENCH_LIBS_TO_BUILD[*]}"
+        else
+            echo "  WARNING: lake build failed. Oleans can be built later with:"
+            echo "    cd vendor/Pantograph && lake build ${BENCH_LIBS_TO_BUILD[*]}"
         fi
-        exit 3
-    fi
-    echo "Trace complete."
-fi
-
-# ── Step 2b: Download miniF2F ─────────────────────────────────────────────
-echo ""
-echo "=== Step 2b: Download miniF2F ==="
-
-MINIF2F_TEST="${DATA_DIR}/minif2f_test.json"
-MINIF2F_VALID="${DATA_DIR}/minif2f_valid.json"
-
-if [ -f "$MINIF2F_TEST" ] && [ -f "$MINIF2F_VALID" ] && [ $FORCE -eq 0 ]; then
-    echo "miniF2F files already exist (use --force to re-download)"
-else
-    MINIF2F_ARGS=("--output-dir" "$DATA_DIR")
-    if [ $FORCE -eq 1 ]; then
-        MINIF2F_ARGS+=("--force")
-    fi
-    if python "${REPO_ROOT}/python/data/download_minif2f.py" "${MINIF2F_ARGS[@]}"; then
-        echo "miniF2F download complete."
+        cd "$REPO_ROOT"
     else
-        echo "WARNING: miniF2F download failed (evaluation will use theorem_index.json instead)"
+        echo "  lake not found — skipping olean build."
+        echo "  Build later with: cd vendor/Pantograph && lake build ${BENCH_LIBS_TO_BUILD[*]}"
     fi
+else
+    echo "  No benchmark JSON files found — skipping .lean generation."
 fi
 
-# ── Step 3: Format tactic pairs ────────────────────────────────────────────
+# ── Step 5: Validate outputs ───────────────────────────────────────────────
 echo ""
-echo "=== Step 3: Format tactic pairs ==="
-
-TOKENIZER_ARG="deepseek-ai/DeepSeek-Prover-V2-7B"
-if [ -n "$MODEL_PATH" ]; then
-    TOKENIZER_ARG="$MODEL_PATH"
-    echo "Using local tokenizer: ${MODEL_PATH}"
-else
-    echo "Using HuggingFace tokenizer: ${TOKENIZER_ARG}"
-fi
-
-# Format train split
-TRAIN_RAW="${DATA_DIR}/tactic_pairs/train.jsonl"
-TRAIN_FMT="${DATA_DIR}/tactic_pairs/train_formatted.jsonl"
-
-if [ -f "$TRAIN_FMT" ] && [ $FORCE -eq 0 ]; then
-    echo "Train formatted already exists: $(wc -l < "$TRAIN_FMT") lines (use --force to re-run)"
-else
-    if [ ! -f "$TRAIN_RAW" ]; then
-        echo "ERROR: ${TRAIN_RAW} not found. Step 2 may have failed."
-        exit 4
-    fi
-    echo "Formatting train split..."
-    if ! python "${REPO_ROOT}/python/data/prepare_tactic_pairs.py" \
-        --input "$TRAIN_RAW" \
-        --output "$TRAIN_FMT" \
-        --max-seq-len 2048 \
-        --tokenizer "$TOKENIZER_ARG"; then
-        echo "ERROR: Failed to format train tactic pairs."
-        exit 4
-    fi
-fi
-
-# Format val split
-VAL_RAW="${DATA_DIR}/tactic_pairs/val.jsonl"
-VAL_FMT="${DATA_DIR}/tactic_pairs/val_formatted.jsonl"
-
-if [ -f "$VAL_FMT" ] && [ $FORCE -eq 0 ]; then
-    echo "Val formatted already exists: $(wc -l < "$VAL_FMT") lines (use --force to re-run)"
-else
-    if [ ! -f "$VAL_RAW" ]; then
-        echo "ERROR: ${VAL_RAW} not found. Step 2 may have failed."
-        exit 4
-    fi
-    echo "Formatting val split..."
-    if ! python "${REPO_ROOT}/python/data/prepare_tactic_pairs.py" \
-        --input "$VAL_RAW" \
-        --output "$VAL_FMT" \
-        --max-seq-len 2048 \
-        --tokenizer "$TOKENIZER_ARG"; then
-        echo "ERROR: Failed to format val tactic pairs."
-        exit 4
-    fi
-fi
-
-# ── Step 4: Validate outputs ───────────────────────────────────────────────
-echo ""
-echo "=== Step 4: Validate outputs ==="
+echo "=== Step 5: Validate outputs ==="
 
 PASS=0
 FAIL=0
 WARN=0
 
-check_file() {
+check_dir() {
     local path="$1"
-    local min_lines="$2"
-    local required="$3"  # "required" or "optional"
-    local desc="$4"
+    local required="$2"
+    local desc="$3"
 
-    if [ ! -f "$path" ]; then
+    if [ ! -d "$path" ] || [ -z "$(ls -A "$path" 2>/dev/null)" ]; then
         if [ "$required" = "required" ]; then
-            echo "  FAIL  ${desc}: file not found"
+            echo "  FAIL  ${desc}: directory empty or not found"
             FAIL=$((FAIL + 1))
         else
-            echo "  WARN  ${desc}: file not found (optional)"
+            echo "  WARN  ${desc}: directory empty or not found (optional)"
             WARN=$((WARN + 1))
         fi
-        return
-    fi
-
-    local lines
-    lines=$(wc -l < "$path")
-
-    if [ "$lines" -lt "$min_lines" ]; then
-        echo "  FAIL  ${desc}: ${lines} lines (need >= ${min_lines})"
-        FAIL=$((FAIL + 1))
     else
-        echo "  PASS  ${desc}: ${lines} lines"
+        local count
+        count=$(find "$path" -type f | head -100 | wc -l)
+        echo "  PASS  ${desc}: ${count}+ files"
         PASS=$((PASS + 1))
     fi
 }
 
-# For JSON files with {"theorems": [...]}, count theorems not lines
 check_json_theorems() {
     local path="$1"
     local min_count="$2"
@@ -318,15 +305,48 @@ print(len(data.get('theorems', [])))
     fi
 }
 
-check_json_theorems "${DATA_DIR}/theorem_index.json"      1000 "required" "theorem_index.json"
-check_json_theorems "${DATA_DIR}/minif2f_test.json"        1    "optional" "minif2f_test.json"
-check_json_theorems "${DATA_DIR}/minif2f_valid.json"       1    "optional" "minif2f_valid.json"
-check_file          "${DATA_DIR}/tactic_pairs/train.jsonl" 1    "required" "tactic_pairs/train.jsonl"
-check_file          "${DATA_DIR}/tactic_pairs/val.jsonl"   1    "required" "tactic_pairs/val.jsonl"
-check_file          "$TRAIN_FMT"                           1000 "required" "tactic_pairs/train_formatted.jsonl"
-check_file          "$VAL_FMT"                             1    "required" "tactic_pairs/val_formatted.jsonl"
+check_lean_file() {
+    local path="$1"
+    local desc="$2"
 
-# ── Step 5: Summary ────────────────────────────────────────────────────────
+    if [ -f "$path" ]; then
+        echo "  PASS  ${desc}: exists"
+        PASS=$((PASS + 1))
+    else
+        echo "  WARN  ${desc}: not generated (optional)"
+        WARN=$((WARN + 1))
+    fi
+}
+
+# HF datasets (required unless --skip-datasets)
+if [ $SKIP_DATASETS -eq 0 ]; then
+    check_dir "${DATA_DIR}/workbook"       "required" "data/workbook (Lean Workbook)"
+    check_dir "${DATA_DIR}/goedel_proofs"  "required" "data/goedel_proofs (Goedel proofs)"
+    check_dir "${DATA_DIR}/lean_github"    "required" "data/lean_github (LEAN-GitHub)"
+    check_dir "${DATA_DIR}/numinamath"     "required" "data/numinamath (NuminaMath)"
+else
+    echo "  SKIP  HF datasets (--skip-datasets)"
+fi
+
+# miniF2F v1 (required)
+check_json_theorems "${DATA_DIR}/minif2f_test.json"  1 "required" "minif2f_test.json (v1 test)"
+check_json_theorems "${DATA_DIR}/minif2f_valid.json" 1 "required" "minif2f_valid.json (v1 valid)"
+
+# miniF2F v2 — valid splits required, test splits optional
+check_json_theorems "${DATA_DIR}/minif2f_v2s_valid.json" 1 "required" "minif2f_v2s_valid.json (v2s valid)"
+check_json_theorems "${DATA_DIR}/minif2f_v2c_valid.json" 1 "required" "minif2f_v2c_valid.json (v2c valid)"
+check_json_theorems "${DATA_DIR}/minif2f_v2s_test.json"  1 "optional" "minif2f_v2s_test.json (v2s test)"
+check_json_theorems "${DATA_DIR}/minif2f_v2c_test.json"  1 "optional" "minif2f_v2c_test.json (v2c test)"
+
+# Benchmark .lean files
+for pair in "${BENCHMARKS[@]}"; do
+    read -r json_file module_name <<< "$pair"
+    if [ -f "${DATA_DIR}/${json_file}" ]; then
+        check_lean_file "${PANTOGRAPH_DIR}/${module_name}.lean" "${module_name}.lean"
+    fi
+done
+
+# ── Summary ─────────────────────────────────────────────────────────────────
 echo ""
 echo "================================================================"
 if [ $FAIL -eq 0 ]; then
@@ -339,16 +359,24 @@ echo "  Results: ${PASS} passed, ${FAIL} failed, ${WARN} warnings"
 echo ""
 echo "  Output files:"
 for f in \
-    "${DATA_DIR}/theorem_index.json" \
     "${DATA_DIR}/minif2f_test.json" \
     "${DATA_DIR}/minif2f_valid.json" \
-    "${DATA_DIR}/tactic_pairs/train.jsonl" \
-    "${DATA_DIR}/tactic_pairs/val.jsonl" \
-    "$TRAIN_FMT" \
-    "$VAL_FMT"; do
+    "${DATA_DIR}/minif2f_v2s_valid.json" \
+    "${DATA_DIR}/minif2f_v2c_valid.json" \
+    "${DATA_DIR}/minif2f_v2s_test.json" \
+    "${DATA_DIR}/minif2f_v2c_test.json"; do
     if [ -f "$f" ]; then
         local_path="${f#"$REPO_ROOT/"}"
         size=$(du -h "$f" 2>/dev/null | cut -f1)
+        echo "    ${size}  ${local_path}"
+    fi
+done
+for pair in "${BENCHMARKS[@]}"; do
+    read -r _ module_name <<< "$pair"
+    lean_file="${PANTOGRAPH_DIR}/${module_name}.lean"
+    if [ -f "$lean_file" ]; then
+        local_path="${lean_file#"$REPO_ROOT/"}"
+        size=$(du -h "$lean_file" 2>/dev/null | cut -f1)
         echo "    ${size}  ${local_path}"
     fi
 done
@@ -356,9 +384,9 @@ done
 if [ $FAIL -eq 0 ]; then
     echo ""
     echo "  Next steps:"
-    echo "    1. Cloud bootstrap:  ./scripts/setup_runpod.sh  (or setup_lambda.sh)"
-    echo "    2. Run baseline:     ./scripts/run_baseline.sh"
-    echo "    3. Run experiment:   NUM_WORKERS=64 ./scripts/run_all_iterations.sh"
+    echo "    1. Inspect datasets:   python python/data/inspect_datasets.py"
+    echo "    2. Pantograph validation: (see Phase 0 tasks 0.3d-0.3f)"
+    echo "    3. Build oleans (if skipped): cd vendor/Pantograph && lake build"
 fi
 echo "================================================================"
 

@@ -86,7 +86,7 @@ $PROVER summary --input "${BASELINES_DIR}/raw_test_theorems.parquet"
 
 # ── B2. miniF2F benchmark evaluation ────────────────────────────────────
 echo ""
-echo "=== B2: miniF2F Evaluation (budget 600) ==="
+echo "=== B2: miniF2F v1 Evaluation (budget 600) ==="
 MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
 
 if [ -f "$MINIF2F" ]; then
@@ -102,8 +102,37 @@ if [ -f "$MINIF2F" ]; then
         --num-candidates 16 \
         --imports Mathlib,$MINIF2F_IMPORT
 else
-    echo "Warning: ${MINIF2F} not found, skipping miniF2F evaluation."
-    echo "Run: python python/data/trace_mathlib.py --output-dir data/"
+    echo "Warning: ${MINIF2F} not found, skipping miniF2F v1 evaluation."
+    echo "Run: ./scripts/prepare_data.sh"
+fi
+
+# ── B2b. miniF2F-v2s benchmark evaluation ──────────────────────────────
+echo ""
+echo "=== B2b: miniF2F v2s Evaluation (budget 600) ==="
+MINIF2F_V2S="${REPO_ROOT}/data/minif2f_v2s_test.json"
+MINIF2F_V2S_IMPORT="BenchMinIF2FV2STest"
+
+if [ ! -f "$MINIF2F_V2S" ]; then
+    # Fall back to valid split if test not available
+    MINIF2F_V2S="${REPO_ROOT}/data/minif2f_v2s_valid.json"
+    MINIF2F_V2S_IMPORT="BenchMinIF2FV2SValid"
+fi
+
+if [ -f "$MINIF2F_V2S" ]; then
+    $PROVER eval \
+        --config "$MINIF2F_CONFIG" \
+        --server-url "$SGLANG_URL" \
+        --theorems "$MINIF2F_V2S" \
+        --budgets 600 \
+        --output "${BASELINES_DIR}/raw_minif2f_v2s.json" \
+        --num-workers "$NUM_WORKERS" \
+        --concurrency "$CONCURRENCY" \
+        --max-theorems "$MAX_THEOREMS" \
+        --num-candidates 16 \
+        --imports Mathlib,$MINIF2F_V2S_IMPORT
+else
+    echo "Warning: miniF2F v2s not found, skipping v2s evaluation."
+    echo "Run: ./scripts/prepare_data.sh"
 fi
 
 # ── B3. Full theorem_index search ───────────────────────────────────────
@@ -127,7 +156,7 @@ if [ -f "$THEOREM_INDEX" ]; then
     $PROVER summary --input "${TRAJ_DIR}/baseline_raw.parquet"
 else
     echo "Warning: ${THEOREM_INDEX} not found, skipping full search."
-    echo "Run: python python/data/trace_mathlib.py --output-dir data/"
+    echo "Run: ./scripts/prepare_data.sh"
 fi
 
 # ── B3b. Train baseline EBM ──────────────────────────────────────────────
@@ -138,7 +167,7 @@ mkdir -p "$BASELINE_EBM_DIR"
 
 if [ -f "${TRAJ_DIR}/baseline_raw.parquet" ]; then
     TACTIC_PAIRS_FLAG=""
-    TACTIC_PAIRS_FILE="${REPO_ROOT}/data/tactic_pairs/train.jsonl"
+    TACTIC_PAIRS_FILE="${REPO_ROOT}/data/sft_train.jsonl"
     if [ -f "$TACTIC_PAIRS_FILE" ]; then
         TACTIC_PAIRS_FLAG="--tactic-pairs ${TACTIC_PAIRS_FILE}"
     fi
@@ -173,11 +202,25 @@ if [ -f "${BASELINES_DIR}/raw_test_theorems.parquet" ]; then
 fi
 
 if [ -f "${BASELINES_DIR}/raw_minif2f.json" ]; then
-    echo "  B2 (miniF2F baseline):"
+    echo "  B2 (miniF2F v1 baseline):"
     echo "    Results: ${BASELINES_DIR}/raw_minif2f.json"
     python3 -c "
 import json
 with open('${BASELINES_DIR}/raw_minif2f.json') as f:
+    r = json.load(f)
+for br in r.get('budget_results', []):
+    print(f\"    Budget {br['budget']}: {br['solved']}/{br['total']} ({br['rate']*100:.1f}%)\")
+print(f\"    Cumulative: {r['cumulative_solved']}/{r['total_theorems']} ({r['cumulative_rate']*100:.1f}%)\")
+" 2>/dev/null || echo "    (could not parse results JSON)"
+    echo ""
+fi
+
+if [ -f "${BASELINES_DIR}/raw_minif2f_v2s.json" ]; then
+    echo "  B2b (miniF2F v2s baseline):"
+    echo "    Results: ${BASELINES_DIR}/raw_minif2f_v2s.json"
+    python3 -c "
+import json
+with open('${BASELINES_DIR}/raw_minif2f_v2s.json') as f:
     r = json.load(f)
 for br in r.get('budget_results', []):
     print(f\"    Budget {br['budget']}: {br['solved']}/{br['total']} ({br['rate']*100:.1f}%)\")
