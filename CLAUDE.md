@@ -50,7 +50,7 @@ Single shared 7B backbone for both policy and value. Rust core (`prover-core`) h
 
 **Data pivot:** Drop Mathlib4. Retrain from scratch on competition-focused datasets:
 - Lean Workbook: 57K + 83K competition problems
-- Goedel Workbook proofs: 29.7K proved (DeepSeek-Prover-V1.5 generated), migrating to Lean 4.26 (Phase M)
+- Goedel Workbook proofs: 29.7K proved (DeepSeek-Prover-V1.5 generated), migrating to Lean 4.27 (Phase M)
 - LEAN-GitHub: 218K pre-traced tactic pairs from 28.6K theorems (`internlm/Lean-Github`) — human-written proof diversity, no tracing needed
 - NuminaMath-LEAN: 104K IMO/USAMO/AMC/AIME formalized (Lean v4.15.0) — deferred to Phase 2
 
@@ -68,7 +68,7 @@ Single shared 7B backbone for both policy and value. Rust core (`prover-core`) h
 
 | Phase | Days | What |
 |-------|------|------|
-| M: Migration | M.0–M.11 | Goedel → Lean 4.26 migration, data exploration, miniF2F porting, LEAN-GitHub, release |
+| M: Migration | M.0–M.11 | Goedel → Lean 4.27 migration, data exploration, miniF2F porting, LEAN-GitHub, release |
 | 0: Data Pipeline | 1–3 | PyTorch EBM port, Lean audit, parallel LeanDojo tracing, sorry filter |
 | 1: SFT Baseline | 3–4 | iter_0 LoRA r=32 on competition data, deep trajectory generation (800 nodes) |
 | 2: Baselines | 5–6 | Embedding metrics, decoupled GoalCond EBM training, miniF2F baseline (v1 + v2s + v2c) |
@@ -123,7 +123,7 @@ burn-qed/
 2. **25M Param Init Explosion:** First EBM layer: `weight.data *= 0.1`
 3. **Monitor Temperature:** Log every 50 steps. Healthy [0.5, 3.0]. Floor/ceiling = ABORT.
 4. **Tokenizer Padding:** `padding_side="right"`. Verify last-token indexing grabs content, not `<eos>`.
-5. **Lean Version:** Check FIRST. Mismatch between LeanDojo, Workbook, NuminaMath = lost day. Phase M migrates Goedel to 4.26; LEAN-GitHub pre-traced strings are version-agnostic for SFT.
+5. **Lean Version:** Check FIRST. Mismatch between LeanDojo, Workbook, NuminaMath = lost day. Phase M migrates Goedel to 4.27; LEAN-GitHub pre-traced strings are version-agnostic for SFT.
 6. **LeanDojo Tracing Time:** 10–15h wall clock for 30K theorems, not 4–6h. Seed 20% first.
 7. **Confounding Variable:** iter_0 and iter_1 use identical EBM architecture. burn-rs DEPRECATED.
 8. **Search Depth:** 2K theorems × 800 nodes × 300s (not 5K × 300 × 120s). Depth > breadth.
@@ -134,7 +134,7 @@ burn-qed/
 13. **Loss Masking:** `DataCollatorForCompletionOnlyLM` with `response_template="` ``` `\n"` (closing code fence). Only train on tactic tokens after the closing fence. Without this, 90% of LoRA capacity wasted echoing proof states. See `docs/data_format_spec.md` for full format details.
 14. **Prompt Format:** DeepSeek-native format with tactic state as Lean comment inside code fence. No special tokens (`[GOAL]`/`[PROOFSTEP]` are NOT used). See `docs/data_format_spec.md`.
 15. **CPU Worker OOM:** Cap `NUM_WORKERS = min(16, int(cpu_count() * 0.75))`. 30 Lean REPLs will OOM 200GB RAM.
-16. **Phase M Survival Rate:** If Goedel 4.26 migration < 90% survival, SFT dataset may be too small. Below 80%, consider older toolchain.
+16. **Phase M Survival Rate:** If Goedel 4.27 migration < 90% survival, SFT dataset may be too small. Below 80%, consider older toolchain.
 17. **Token Geometry Truncation:** Don't assume `--max-length 2048`. Phase M Task M.7 computes actual distribution. If p95 ≤ 1024, using 2048 wastes ~50% VRAM on padding.
 
 ## Success Metrics
@@ -153,32 +153,32 @@ Reference: `docs/v2_execution_plan.md` for full details, code snippets, and gotc
 
 ### Phase M: Goedel Migration + Data Exploration (Days M.0–M.6)
 
-- [ ] **M.1** Bulk compile attempt — clone Goedel, update toolchain to 4.26, `lake build`, log survival count
+- [ ] **M.1** Bulk compile attempt — clone Goedel, update toolchain to 4.27, `lake build`, log survival count
 - [ ] **M.2** Automated fixes (renames, instance patches), rebuild — improved survival count
 - [ ] **M.3** Manual triage of remaining failures, drop or fix — target ≥95% compilation (≥28,270 of 29,759)
-- [ ] **M.4** Port miniF2F-v2s/v2c statements to 4.26, verify all 488 compile — eval benchmark ready
-- [ ] **M.5** LeanDojo trace on compiled Goedel 4.26 proofs — tactic pairs parquet (~10-15h CPU)
+- [ ] **M.4** Port miniF2F-v2s/v2c statements to 4.27, verify all 488 compile — eval benchmark ready
+- [ ] **M.5** LeanDojo trace on compiled Goedel 4.27 proofs — tactic pairs parquet (~10-15h CPU)
 - [ ] **M.6** Compilation & integrity sweep — sorry/admit/sorryAx contamination, malformed states, clean pool count
 - [ ] **M.7** Token geometry — state/tactic/full token length distributions, truncation analysis, recommended max_length
 - [ ] **M.8** Proof structure & tactic vocabulary — depth distribution, contrastive pool sizing, tactic concentration
 - [ ] **M.9** Download + filter LEAN-GitHub (`internlm/Lean-Github`, 218K tactics) — quality filter, format convert
 - [ ] **M.10** Merge into unified SFT dataset — Goedel clean pool + LEAN-GitHub, dedup, split, contrastive pool
-- [ ] **M.11** Release Goedel-4.26 on HuggingFace, write migration notes — community contribution
+- [ ] **M.11** Release Goedel-4.27 on HuggingFace, write migration notes — community contribution
 
 ### Phase 0: Environment Setup + Data Pipeline (Days 1–3)
 
 - [x] **0.pre** Archive v1 infrastructure, feature-gate burn-rs, create Python stubs
-- [x] **0.1** Lean version audit (2h) — our Pantograph is Lean v4.26.0 / Mathlib v4.26.0. Datasets are v4.8–4.9 (18 minor versions behind). Main risk: Mathlib lemma renames. Check LeanDojo vs Workbook vs NuminaMath versions, quantify rename impact
+- [x] **0.1** Lean version audit (2h) — our Pantograph is Lean v4.27.0 / Mathlib v4.27.0. Datasets are v4.8–4.9 (18 minor versions behind). Main risk: Mathlib lemma renames. Check LeanDojo vs Workbook vs NuminaMath versions, quantify rename impact
 - [ ] **0.3** Download datasets (1h) — Lean Workbook (single JSON, 25.2K pre-traced tactic pairs + 57K+83K problems), Goedel Workbook proofs (29.8K), LEAN-GitHub (218K tactics from 28.6K theorems), NuminaMath-LEAN (104K) from HuggingFace
 - [ ] **0.3a** Survey all Lean 4 datasets (1.5h) — catalog every HF dataset: LeanDojo-v2, LEAN-GitHub, Herald, DeepSeek-Prover-V1, Kimina-Prover-Promptset, FormalMATH, AI4M/less-proofnet-lean4, LeanTree, plus our four targets. For each: rows, format, Lean/Mathlib version, proof type, license, relevance. Check for newer versions. Write findings to `docs/datasets.md`
 - [ ] **0.3b** Data inventory & quality report (1h) — write `python/data/inspect_datasets.py`: load four target HF datasets, report total rows/schema, sorry/admit/cheat contamination rates, Lean Workbook depth distribution + tactic length stats + dedup check (InternLM-Math-Plus/StepProver overlap), Goedel overlap with Lean Workbook `id` → net-new count + audit import lines for non-Mathlib imports, LEAN-GitHub quality distribution + state length stats, NuminaMath non-empty `formal_proof` count + `ground_truth_type` distribution. Update `docs/datasets.md`
 - [ ] **0.3c** Pre-traced data format validation (0.5h) — for 25.2K Lean Workbook tactic pairs: verify `state_before`/`tactic` format vs our DeepSeek-native prompt format (see `docs/data_format_spec.md`), write converter if needed, compute depth distribution (need depth ≥ 3 for contrastive pool), run sorry/admit filter, determine if usable for immediate SFT
-- [ ] **0.3d** Pantograph validation — Lean Workbook (1.5h) — use Rust `lean-repl` crate (`LeanPool`/`ProofSession`): extend `prover-core` with `validate-tactics` subcommand, sample 50 theorems stratified by depth, replay tactic sequences via `goal.start` + `goal.tactic`, compare replayed goals against pre-traced `state_after` to detect formatting drift (Mathlib v4.8→v4.26). Categorize failures: lemma renames, tactic API changes, missing imports, pretty-printer divergence. If tactic success < 80%: re-tracing needed. If ≥ 80% but text differs: re-extract states during replay
-- [ ] **0.3e** Pantograph validation — Goedel proofs (1.5h) — same `lean-repl` approach: sample 30 non-overlapping Goedel proofs, parse `full_proof` to extract statement + tactics (handle imports, `set_option`), check for non-Mathlib imports, replay through Pantograph stratified by depth, measure compilation rate, categorize failures. If Lean 4.9→4.26 breaks too much: try import fixups or skip source
+- [ ] **0.3d** Pantograph validation — Lean Workbook (1.5h) — use Rust `lean-repl` crate (`LeanPool`/`ProofSession`): extend `prover-core` with `validate-tactics` subcommand, sample 50 theorems stratified by depth, replay tactic sequences via `goal.start` + `goal.tactic`, compare replayed goals against pre-traced `state_after` to detect formatting drift (Mathlib v4.8→v4.27). Categorize failures: lemma renames, tactic API changes, missing imports, pretty-printer divergence. If tactic success < 80%: re-tracing needed. If ≥ 80% but text differs: re-extract states during replay
+- [ ] **0.3e** Pantograph validation — Goedel proofs (1.5h) — same `lean-repl` approach: sample 30 non-overlapping Goedel proofs, parse `full_proof` to extract statement + tactics (handle imports, `set_option`), check for non-Mathlib imports, replay through Pantograph stratified by depth, measure compilation rate, categorize failures. If Lean 4.9→4.27 breaks too much: try import fixups or skip source
 - [ ] **0.3f** Pantograph validation — NuminaMath (1.5h) — sample 30 proofs where `formal_proof` non-empty and `ground_truth_type` is "complete", check tactic-style vs term-style (term proofs can't be replayed step-by-step), replay tactic-style through Pantograph, check Lean version compatibility, estimate tracing yield
 - [ ] **0.3g** Data strategy decision (0.5h, decision point) — based on 0.3a–0.3f: determine immediate SFT data (pre-traced pairs passing Pantograph → use directly; tactics pass but states differ → replay all for consistent states; tactics fail >20% → need full re-tracing). Check if survey found better sources. Set tracing priority. If pre-traced pairs fully pass, Task 0.4 seed batch may be unnecessary. Update task descriptions for 0.4/0.5/0.6
 - [ ] **0.3h** Download + filter LEAN-GitHub (1h) — download `internlm/Lean-Github`, apply quality filtering (state length < 4096, trivial tactic subsampling), source-prefixed dedup against Goedel, convert to SFT format. Expected yield: ~100-150K pairs
-- [ ] **0.4** Trace Goedel Workbook proofs — parallel + chunked (Day 2, 8–12h wall) — **prerequisite: Phase M migration or 0.3e Pantograph validation** determines if Goedel proofs compile under our Lean v4.26. Seed 20% first (~6K, ~2–3h), start SFT on seed, remainder overnight. ABORT if error rate >20%
+- [ ] **0.4** Trace Goedel Workbook proofs — parallel + chunked (Day 2, 8–12h wall) — **prerequisite: Phase M migration or 0.3e Pantograph validation** determines if Goedel proofs compile under our Lean v4.27. Seed 20% first (~6K, ~2–3h), start SFT on seed, remainder overnight. ABORT if error rate >20%
 - [ ] **0.5** Trace NuminaMath-LEAN proved subset — **deferred to Phase 2** (after Goedel + LEAN-GitHub validated; Goedel + LEAN-GitHub already provide ~210-350K pairs)
 - [ ] **0.6** Filter and format tactic pairs (1h) — combine sources including pre-traced Lean Workbook pairs (format-converted per 0.3c), LEAN-GitHub filtered pairs (from 0.3h), and Goedel traced pairs (from 0.4). Source-prefixed dedup, split by theorem name (Gotcha 11), sorry filter (Gotcha 12), depth≥3 contrastive pool
 

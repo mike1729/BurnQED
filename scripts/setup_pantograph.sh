@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PANTOGRAPH_DIR="$REPO_ROOT/vendor/Pantograph"
-MATHLIB_VERSION="${MATHLIB_VERSION:-v4.26.0}"
+MATHLIB_VERSION="${MATHLIB_VERSION:-v4.27.0}"
 SKIP_MATHLIB="${SKIP_MATHLIB:-0}"
 
 echo "=== BurnQED: Pantograph Setup ==="

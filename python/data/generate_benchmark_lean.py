@@ -90,7 +90,7 @@ def fix_statement(statement: str) -> str:
     statement = _parenthesize_set_builders(statement)
 
     # Fix: `![a, b]` doesn't coerce to `EuclideanSpace ℝ (Fin n)` in Mathlib
-    # v4.26.0+. Wrap with `(EuclideanSpace.equiv _ ℝ).symm ![...]`.
+    # v4.27.0+. Wrap with `(EuclideanSpace.equiv _ ℝ).symm ![...]`.
     if "EuclideanSpace" in statement:
         statement = re.sub(
             r"= !\[",
@@ -286,7 +286,7 @@ def generate_lean_file(
             continue
 
         # Skip theorems using APIs that changed between Mathlib versions
-        # (e.g., NNReal.IsConjExponent was renamed/removed in v4.26.0)
+        # (e.g., NNReal.IsConjExponent was renamed/removed in v4.27.0)
         if "NNReal.IsConjExponent" in statement:
             skipped.append((name, "NNReal.IsConjExponent (Mathlib version mismatch)"))
             continue

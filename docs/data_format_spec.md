@@ -341,7 +341,7 @@ No pre-extracted embeddings. The model produces embeddings live:
 ```
 ┌─────────────────────────────┐
 │ Goedel Workbook Proofs      │  29.7K complete proofs
-│ (migrated to Lean 4.26)     │  (Phase M migration)
+│ (migrated to Lean 4.27)     │  (Phase M migration)
 └──────────┬──────────────────┘
            │ LeanDojo trace (Task 0.4)
            │ + sorry filter

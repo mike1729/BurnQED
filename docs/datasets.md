@@ -6,9 +6,9 @@ Last updated: 2026-02-26
 
 This document catalogs all known Lean 4 theorem-proving datasets on HuggingFace and beyond, evaluates them for our competition-focused v2 training pipeline, and documents format/compatibility details for our three target datasets.
 
-**Our setup:** Pantograph on Lean v4.26.0 / Mathlib v4.26.0. DeepSeek-Prover-V2-7B backbone. SFT format: DeepSeek-native prompt with tactic state as Lean comment (see `docs/data_format_spec.md`).
+**Our setup:** Pantograph on Lean v4.27.0 / Mathlib v4.27.0. DeepSeek-Prover-V2-7B backbone. SFT format: DeepSeek-native prompt with tactic state as Lean comment (see `docs/data_format_spec.md`).
 
-**v2.1 additions:** LEAN-GitHub (218K pre-traced tactic pairs) promoted to high-relevance target. Goedel Workbook proofs migrated to Lean 4.26 (new Phase M). miniF2F-v2s as primary evaluation benchmark. Lean Workbook (InternLM) tactic pairs deprecated — fully subsumed by Goedel 4.26 migration. NuminaMath deferred to Phase 2.
+**v2.1 additions:** LEAN-GitHub (218K pre-traced tactic pairs) promoted to high-relevance target. Goedel Workbook proofs migrated to Lean 4.27 (new Phase M). miniF2F-v2s as primary evaluation benchmark. Lean Workbook (InternLM) tactic pairs deprecated — fully subsumed by Goedel 4.27 migration. NuminaMath deferred to Phase 2.
 
 ---
 
@@ -18,15 +18,15 @@ This document catalogs all known Lean 4 theorem-proving datasets on HuggingFace 
 
 | Dataset | HF Path | Rows | Lean Version | Format | License |
 |---------|---------|------|-------------|--------|---------|
-| Goedel Workbook Proofs | `Goedel-LM/Lean-workbook-proofs` | 29.8K full proofs | Lean 4.9 → **4.26 (Phase M)** | Full proofs (`problem_id`, `full_proof`) | Apache 2.0 |
-| LEAN-GitHub | `internlm/Lean-Github` | 28.6K theorems, 218K tactics | Mixed (pre-4.26) | Pre-traced tactic pairs (`state_before`, `tactic`, `state_after`) | Apache 2.0 |
+| Goedel Workbook Proofs | `Goedel-LM/Lean-workbook-proofs` | 29.8K full proofs | Lean 4.9 → **4.27 (Phase M)** | Full proofs (`problem_id`, `full_proof`) | Apache 2.0 |
+| LEAN-GitHub | `internlm/Lean-Github` | 28.6K theorems, 218K tactics | Mixed (pre-4.27) | Pre-traced tactic pairs (`state_before`, `tactic`, `state_after`) | Apache 2.0 |
 | NuminaMath-LEAN | `AI-MO/NuminaMath-LEAN` | 104K rows | v4.15.0 (Mathlib v4.15.0) | Formal statements + proofs (`formal_statement`, `formal_proof`) | Apache 2.0 |
 
 ### 1.2 Other Lean 4 Datasets
 
 | Dataset | HF Path | Size | Lean Version | Format | Notes |
 |---------|---------|------|-------------|--------|-------|
-| Lean Workbook tactic pairs | `internlm/Lean-Workbook` | 25.2K tactic pairs | v4.8.0-rc1 | Pre-traced (`state_before`, `tactic`, `state_after`) | **Deprecated.** Subset of Goedel (15.7K theorems). Superseded by Phase M Goedel 4.26 migration which covers all 29.7K at the correct Lean version. |
+| Lean Workbook tactic pairs | `internlm/Lean-Workbook` | 25.2K tactic pairs | v4.8.0-rc1 | Pre-traced (`state_before`, `tactic`, `state_after`) | **Deprecated.** Subset of Goedel (15.7K theorems). Superseded by Phase M Goedel 4.27 migration which covers all 29.7K at the correct Lean version. |
 | LeanDojo Benchmark 4 | `kaist-ai/LeanDojo-Benchmark-4` | 122K theorems, 259K tactics | v4.3.0+ (Mathlib4) | Tactic pairs from Mathlib4 tracing | Used in v1. Abstract math, not competition-focused. |
 | Herald | `xueliangz/Herald` | 580K statements from 110K Mathlib4 theorems | Mathlib4 | Natural language + formal statement pairs | Useful for autoformalization, not direct SFT. |
 | DeepSeek-Prover-V1 Data | `deepseek-ai/DeepSeek-Prover-V1` | ~8K proved | v4.3.0 | Full proofs | Older, smaller. Superceded by V1.5/V2 data. |
@@ -43,7 +43,7 @@ This document catalogs all known Lean 4 theorem-proving datasets on HuggingFace 
 ### 1.3 Relevance Assessment
 
 **High relevance (competition math, tactic-style, Lean 4):**
-- Goedel Workbook proofs — large, competition-focused, Phase M migrates to 4.26 + LeanDojo trace
+- Goedel Workbook proofs — large, competition-focused, Phase M migrates to 4.27 + LeanDojo trace
 - LEAN-GitHub — 218K pre-traced tactic pairs from 28.6K theorems, human-written proof diversity that complements machine-generated Goedel proofs. Already in (state, tactic) format — no tracing needed.
 - NuminaMath-LEAN — IMO/USAMO/AMC/AIME, largest collection, needs quality audit (deferred to Phase 2)
 
@@ -52,7 +52,7 @@ This document catalogs all known Lean 4 theorem-proving datasets on HuggingFace 
 - AI4M less-proofnet-lean4 — huge but unknown quality, needs investigation
 
 **Deprecated:**
-- Lean Workbook tactic pairs (InternLM) — 25.2K pairs from 15.7K theorems at v4.8. Fully subsumed by Goedel 4.26 migration (29.7K theorems, same problem set, correct Lean version).
+- Lean Workbook tactic pairs (InternLM) — 25.2K pairs from 15.7K theorems at v4.8. Fully subsumed by Goedel 4.27 migration (29.7K theorems, same problem set, correct Lean version).
 
 **Low relevance for v2:**
 - Herald — NL↔formal pairs, not tactic proofs
@@ -81,18 +81,18 @@ This document catalogs all known Lean 4 theorem-proving datasets on HuggingFace 
 - ~14K theorems are net-new beyond InternLM's 15.7K proved subset (based on `problem_id` overlap)
 - Generated by DeepSeek-Prover-V1.5 — same model family as our backbone, tactics in natural vocabulary
 - **Risk:** `full_proof` may contain `import LeanWorkbook.Utils` or other non-Mathlib imports our env lacks
-- **Risk:** Lean 4.9 → 4.26 may break some proofs due to Mathlib lemma renames
+- **Risk:** Lean 4.9 → 4.27 may break some proofs due to Mathlib lemma renames
 
 **Tracing approach:**
 1. Parse `full_proof` to extract theorem statement + tactic sequence
 2. Check for non-Mathlib imports (reject or fixup)
-3. Replay through Pantograph to get tactic pairs with our Mathlib v4.26 goal states
+3. Replay through Pantograph to get tactic pairs with our Mathlib v4.27 goal states
 
-#### Goedel → Lean 4.26 Migration (Phase M)
+#### Goedel → Lean 4.27 Migration (Phase M)
 
-No one has ported Goedel proofs to Lean v4.20+. We plan to migrate the full 29.7K to Lean 4.26 and release as a community contribution.
+No one has ported Goedel proofs to Lean v4.20+. We plan to migrate the full 29.7K to Lean 4.27 and release as a community contribution.
 
-**Why this works for competition math:** Core tactics (`nlinarith`, `ring`, `omega`, `norm_num`, `field_simp`) are stable across versions. The proofs are short (median ~5 tactics) with limited Mathlib surface area. Known 4.26 breaking changes mostly don't apply:
+**Why this works for competition math:** Core tactics (`nlinarith`, `ring`, `omega`, `norm_num`, `field_simp`) are stable across versions. The proofs are short (median ~5 tactics) with limited Mathlib surface area. Known 4.27 breaking changes mostly don't apply:
 - `sorted` → `pairwise` renames — unlikely in competition math
 - `Data.List.MinMax` typeclass changes — unlikely in these proofs
 - `Nat.sqrt` definitional reduction changes — possible in number theory problems
@@ -104,21 +104,21 @@ Most breakage is in topology, category theory, and order theory areas. **Expecte
 
 | Day | Task | Deliverable |
 |-----|------|-------------|
-| M.0 | Clone Goedel, update toolchain to 4.26, attempt `lake build` | Error log, survival count |
+| M.0 | Clone Goedel, update toolchain to 4.27, attempt `lake build` | Error log, survival count |
 | M.1 | Automated fixes (renames, instance patches), rebuild | Improved survival count |
 | M.2 | Manual triage of remaining failures, drop or fix | ≥95% compilation (≥28,270 of 29,759) |
-| M.3 | Port miniF2F-v2s/v2c statements to 4.26, verify all 488 compile | Eval benchmark ready |
-| M.4 | LeanDojo trace on compiled Goedel 4.26 proofs | Tactic pairs parquet |
+| M.3 | Port miniF2F-v2s/v2c statements to 4.27, verify all 488 compile | Eval benchmark ready |
+| M.4 | LeanDojo trace on compiled Goedel 4.27 proofs | Tactic pairs parquet |
 | M.5 | Download + filter LEAN-GitHub, merge with Goedel pairs | Unified SFT dataset |
-| M.6 | Release Goedel-4.26 on HuggingFace, write migration notes | Community contribution |
+| M.6 | Release Goedel-4.27 on HuggingFace, write migration notes | Community contribution |
 
 **Detailed migration phases:**
 
 ```
 Phase 1: Toolchain + bulk compile (M.0–M.1)
 ├── Clone Goedel-LM/Lean-workbook-proofs
-├── Update lean-toolchain → leanprover/lean4:4.26.0
-├── Update lakefile.lean Mathlib dependency → 4.26-compatible tag
+├── Update lean-toolchain → leanprover/lean4:4.27.0
+├── Update lakefile.lean Mathlib dependency → 4.27-compatible tag
 ├── lake update (resolve Reservoir deps)
 ├── lake build (attempt bulk compile)
 └── Log: compiled/total, error categories
@@ -139,7 +139,7 @@ Phase 3: Manual triage (M.2)
 └── Document all changes for community PR
 
 Phase 4: Trace + release (M.4–M.6)
-├── Run LeanDojo trace on compiled 4.26 proofs
+├── Run LeanDojo trace on compiled 4.27 proofs
 │   → Extract (state_before, tactic, state_after) pairs
 ├── Apply sorry filter (should find ~0 in already-proved corpus)
 ├── Package as Parquet: {theorem, state, tactic, depth, source}
@@ -184,7 +184,7 @@ Phase 4: Trace + release (M.4–M.6)
 1. Filter to rows that have either `formal_proof` or complete `formal_ground_truth`
 2. Reconstruct full Lean 4 files (statement + proof)
 3. Trace with LeanDojo to get (state, tactic) pairs
-4. Lean version must match: compiled against Mathlib v4.15.0, migrated to 4.26
+4. Lean version must match: compiled against Mathlib v4.15.0, migrated to 4.27
 
 **Key characteristics:**
 - 104K rows total, but many are statements-only (no proof available)
@@ -192,7 +192,7 @@ Phase 4: Trace + release (M.4–M.6)
 - Competition math from IMO, USAMO, AMC, AIME — directly relevant to miniF2F (use `exam` field for stratification)
 - Mix of tactic-style and term-style proofs — term proofs can't be replayed step-by-step
 - Two proof sources: `formal_proof` (machine-generated by Kimina-Prover RL) and `formal_ground_truth` (human-written, highest quality)
-- Lean v4.15.0 / Mathlib v4.15.0 (confirmed from README) — 11 minor versions behind our v4.26, closest of the three
+- Lean v4.15.0 / Mathlib v4.15.0 (confirmed from README) — 11 minor versions behind our v4.27, closest of the three
 - `ground_truth_type` must be checked: "with_sorry" rows are contaminated and must be filtered
 
 **Deferral rationale:** Goedel + LEAN-GitHub already gives ~210-350K pairs. NuminaMath uses Lean 4.15 (fewer migration issues), and the proofs were machine-generated by Kimina-Prover, adding yet another style. Will be integrated in Phase 2 after Goedel is validated.
@@ -225,7 +225,7 @@ Phase 4: Trace + release (M.4–M.6)
 **Integration challenges:**
 1. **Quality filtering needed**: Some repos are educational (trivial `rfl`/`simp` on toy types). Some `state_before` strings up to 2MB. Need filtering.
 2. **Deduplication with Goedel**: LEAN-GitHub includes some Mathlib proofs. Check overlap on `full_name`.
-3. **Lean version mismatch**: Pre-traced strings are version-agnostic for SFT. Re-tracing on 4.26 would be a separate effort if needed.
+3. **Lean version mismatch**: Pre-traced strings are version-agnostic for SFT. Re-tracing on 4.27 would be a separate effort if needed.
 
 **Filtering strategy:**
 ```python
@@ -257,21 +257,21 @@ def should_include(row):
 
 | Component | Lean Version | Mathlib Version | Notes |
 |-----------|-------------|-----------------|-------|
-| **Our Pantograph** | **v4.26.0** | **v4.26.0** | Source of truth |
-| Goedel Proofs | v4.9 → **v4.26 (Phase M)** | Unknown → 4.26-compatible | Phase M migrates all 29.7K proofs |
+| **Our Pantograph** | **v4.27.0** | **v4.27.0** | Source of truth |
+| Goedel Proofs | v4.9 → **v4.27 (Phase M)** | Unknown → 4.27-compatible | Phase M migrates all 29.7K proofs |
 | LEAN-GitHub | Mixed | Mixed | Pre-traced strings are version-agnostic for SFT |
 | NuminaMath | v4.15.0 | Mathlib v4.15.0 | 11 minor versions behind — closest. Phase 2 migration |
 | LeanDojo Benchmark 4 | v4.3.0+ → **v4.19.0** | Mathlib4 | v4.19 traced version on Zenodo (May 2025). Abstract math, not competition. |
-| miniF2F-lean4 | varies → **v4.21.0** | Mathlib4 | Eval benchmark only (244 problems). Closest to our v4.26. |
-| miniF2F-v2s/v2c | evaluated at v4.9.0 | — | Phase M.3 ports statements to 4.26 |
+| miniF2F-lean4 | varies → **v4.21.0** | Mathlib4 | Eval benchmark only (244 problems). Closest to our v4.27. |
+| miniF2F-v2s/v2c | evaluated at v4.9.0 | — | Phase M.3 ports statements to 4.27 |
 | IMO-Steps | v4.17.0 | — | 20 problems, 1.3K lemmas |
 
 ### Version Drift Risks
 
-**Primary risk: Mathlib lemma renames.** Between Lean v4.9 and v4.26 (17 minor versions of development):
+**Primary risk: Mathlib lemma renames.** Between Lean v4.9 and v4.27 (17 minor versions of development):
 - Hundreds of Mathlib lemmas were renamed for consistency
 - Example: `Nat.foo_bar` → `Nat.bar_foo` or namespace reorganizations
-- Tactic `exact Nat.foo_bar` in v4.9 data fails if lemma was renamed in v4.26
+- Tactic `exact Nat.foo_bar` in v4.9 data fails if lemma was renamed in v4.27
 - `simp` and `omega` tactics are more robust (work on goal structure, not lemma names)
 - Phase M automated rename pass handles most of these
 
@@ -280,10 +280,10 @@ def should_include(row):
 - Pretty-printer format changes (goal text differs even when tactic succeeds)
 
 **Mitigation strategy:**
-1. Phase M migration proactively ports Goedel proofs to 4.26 before tracing — bulk compile validates survival
+1. Phase M migration proactively ports Goedel proofs to 4.27 before tracing — bulk compile validates survival
 2. LEAN-GitHub pre-traced strings are version-agnostic for SFT — sidesteps version issues entirely
 3. Re-extract goal states from Pantograph after migration to ensure consistent `state_before` format
-4. NuminaMath (Phase 2): migrate from v4.15 to v4.26 using same Phase M pipeline — fewer renames expected
+4. NuminaMath (Phase 2): migrate from v4.15 to v4.27 using same Phase M pipeline — fewer renames expected
 
 ---
 
@@ -295,17 +295,17 @@ def should_include(row):
 
 | Dataset | Current Version | Any Newer Port? | Notes |
 |---------|----------------|-----------------|-------|
-| Goedel Proofs | v4.9.0 | **NO** → **PLANNED** | Our Phase M migrates to 4.26; Goedel-V2 achieved 88% miniF2F but stayed at v4.9 |
+| Goedel Proofs | v4.9.0 | **NO** → **PLANNED** | Our Phase M migrates to 4.27; Goedel-V2 achieved 88% miniF2F but stayed at v4.9 |
 | LEAN-GitHub | Mixed | N/A | Pre-traced strings, no compilation needed for SFT |
 | NuminaMath-LEAN | v4.15.0 | **NO** | Cleaned versions exist (ChristianZ97, iiis-lean) but same Lean version |
 | LeanDojo Benchmark 4 | varies | **v4.19.0** (Zenodo, May 2025) | Abstract math, not competition-focused |
 | miniF2F-lean4 | varies | **v4.21.0** (yangky11, Nov 2024) | Eval only, 244 problems |
-| miniF2F-v2s/v2c | v4.9.0 | **NO** → **PLANNED** | Phase M.3 ports to 4.26 |
+| miniF2F-v2s/v2c | v4.9.0 | **NO** → **PLANNED** | Phase M.3 ports to 4.27 |
 | IMO-Steps | v4.17.0 | **NO** | 20 problems, 1.3K lemmas |
 
 ### Implications for Our Pipeline
 
-1. **NuminaMath at v4.15 is our best bet for easy porting** — only 11 versions behind (not 17). Mathlib renames between v4.15→v4.26 are significantly fewer than v4.9→v4.26.
+1. **NuminaMath at v4.15 is our best bet for easy porting** — only 11 versions behind (not 17). Mathlib renames between v4.15→v4.27 are significantly fewer than v4.9→v4.27.
 2. **Goedel (v4.9) has the largest version gap** — expect substantial breakage from Mathlib lemma renames over 17 minor versions. Phase M migration addresses this with automated rename pass + manual triage.
 3. **LEAN-GitHub sidesteps version issues entirely** — pre-traced strings are used as-is for SFT, making it the easiest data source to integrate.
 4. **LeanDojo-v2** can retrace any Lean repo at any version, but the source code must compile first at the target version.
@@ -313,7 +313,7 @@ def should_include(row):
 
 ### Alternative Strategy Considered
 
-Running Pantograph at an older Lean version (e.g., v4.15 matching NuminaMath) instead of porting data forward. **Rejected** — conflicts with our existing Mathlib v4.26 setup and miniF2F eval environment.
+Running Pantograph at an older Lean version (e.g., v4.15 matching NuminaMath) instead of porting data forward. **Rejected** — conflicts with our existing Mathlib v4.27 setup and miniF2F eval environment.
 
 ---
 
@@ -324,7 +324,7 @@ Running Pantograph at an older Lean version (e.g., v4.15 matching NuminaMath) in
 - Both reference the same problem set via `problem_id` / `id`
 - Lean Workbook had 25.2K pre-traced tactic pairs from ~15.7K proved theorems (at v4.8)
 - Goedel has 29.8K proofs — a strict superset of the Lean Workbook proved subset
-- **Decision:** Lean Workbook tactic pairs are deprecated. Phase M migrates all 29.7K Goedel proofs to 4.26 and traces them with LeanDojo, producing tactic pairs at the correct Lean version. This completely supersedes the InternLM pre-traced pairs.
+- **Decision:** Lean Workbook tactic pairs are deprecated. Phase M migrates all 29.7K Goedel proofs to 4.27 and traces them with LeanDojo, producing tactic pairs at the correct Lean version. This completely supersedes the InternLM pre-traced pairs.
 
 ### 5.2 Goedel ↔ NuminaMath
 
@@ -359,8 +359,8 @@ Running Pantograph at an older Lean version (e.g., v4.15 matching NuminaMath) in
 
 ### Needs Tracing
 
-2. **Goedel Workbook proofs (all 29.7K)** — full proofs migrated to 4.26 in Phase M, then LeanDojo traced to extract tactic pairs. Expected ~28K+ surviving proofs → ~110-140K tactic pairs.
-3. **NuminaMath tactic-style proofs** — deferred to Phase 2; filter to rows with `formal_proof` or complete `formal_ground_truth`, migrate from 4.15 to 4.26, then LeanDojo trace
+2. **Goedel Workbook proofs (all 29.7K)** — full proofs migrated to 4.27 in Phase M, then LeanDojo traced to extract tactic pairs. Expected ~28K+ surviving proofs → ~110-140K tactic pairs.
+3. **NuminaMath tactic-style proofs** — deferred to Phase 2; filter to rows with `formal_proof` or complete `formal_ground_truth`, migrate from 4.15 to 4.27, then LeanDojo trace
 4. **NuminaMath term-style proofs** — cannot be replayed step-by-step, may need different approach
 
 ### Quality Gates
@@ -368,13 +368,13 @@ Running Pantograph at an older Lean version (e.g., v4.15 matching NuminaMath) in
 - Sorry/admit/cheat filter on all sources
 - Depth ≥ 3 subset for contrastive pool
 - Validation split by theorem name (not tactic pairs)
-- Phase M bulk compile validates Goedel proofs on 4.26 before tracing
+- Phase M bulk compile validates Goedel proofs on 4.27 before tracing
 - LEAN-GitHub: state length < 4096, trivial tactic subsampling, dedup against Goedel
 - NuminaMath: reject `ground_truth_type == "with_sorry"`, require `formal_proof` or complete `formal_ground_truth`
 
 ### Tracing Priority
 
-1. Goedel Workbook proofs (29.7K, Phase M migration to 4.26 → LeanDojo trace → ~110-140K pairs)
+1. Goedel Workbook proofs (29.7K, Phase M migration to 4.27 → LeanDojo trace → ~110-140K pairs)
 2. LEAN-GitHub pre-traced pairs (immediate — quality filter + format convert → ~100-150K pairs)
 3. NuminaMath tactic-style proofs (Phase 2 — migrate from 4.15, competition metadata for stratification)
 
@@ -414,7 +414,7 @@ Our current system: **41.7% on v1 test** (tactic-level search, 800 nodes). Expec
 
 | Metric | Expected | Rationale |
 |--------|----------|-----------|
-| v1_test | ~45-50% | Larger SFT data + 4.26 should improve over current 41.7% |
+| v1_test | ~45-50% | Larger SFT data + 4.27 should improve over current 41.7% |
 | v2s_test | ~36-42% | ~80-85% of v1 score based on published ratios |
 | v2c_test | ~33-38% | ~75-80% of v1 score |
 
@@ -443,17 +443,17 @@ Goedel (29.7K) + NuminaMath (~10-20K)
 ### Pipeline diagram
 
 ```
-                    Lean 4.26 toolchain
+                    Lean 4.27 toolchain
                            │
          ┌─────────────────┼─────────────────┐
          ▼                 ▼                  ▼
-   Goedel 4.26        LEAN-GitHub        miniF2F-v2s
+   Goedel 4.27        LEAN-GitHub        miniF2F-v2s
    (migrate proofs)   (pre-traced,       (port statements
-    29.7K → ~28K+     filter for SFT)    to 4.26 for eval)
+    29.7K → ~28K+     filter for SFT)    to 4.27 for eval)
          │                 │
          ▼                 ▼
    LeanDojo trace     Direct use
-   on 4.26            (already state,tactic)
+   on 4.27            (already state,tactic)
          │                 │
          └────────┬────────┘
                   ▼
@@ -472,7 +472,7 @@ Goedel (29.7K) + NuminaMath (~10-20K)
 
 | Source | Raw pairs | After filtering | Notes |
 |--------|-----------|----------------|-------|
-| Goedel 4.26 | ~120-150K | ~110-140K | LeanDojo traced, sorry-filtered |
+| Goedel 4.27 | ~120-150K | ~110-140K | LeanDojo traced, sorry-filtered |
 | LEAN-GitHub | ~219K | ~100-150K | Pre-traced, quality-filtered |
 | NuminaMath (Phase 2) | ~50-80K | ~40-60K | Deferred; after Goedel validated |
 | **Total** | | **~210-350K** | |
@@ -495,13 +495,13 @@ train_theorems = set(all_theorems[:int(len(all_theorems) * 0.95)])
 
 ## 9. NuminaMath Migration (Phase 2)
 
-After Goedel is validated on 4.26, apply the same pipeline to NuminaMath-LEAN:
+After Goedel is validated on 4.27, apply the same pipeline to NuminaMath-LEAN:
 
 ```
 AI-MO/NuminaMath-LEAN (104K formalized)
     ↓ Filter: formal_proof present, no sorry
     ~10-20K provable
-    ↓ Update lean-toolchain → 4.26
+    ↓ Update lean-toolchain → 4.27
     ↓ Rebuild, apply same migration fixes
     ↓ LeanDojo trace
     → Additional ~50-80K tactic pairs
@@ -519,7 +519,7 @@ This is lower priority because:
 
 ### What to release
 
-- [ ] `{org}/Lean-workbook-proofs-4.26` on HuggingFace
+- [ ] `{org}/Lean-workbook-proofs-4.27` on HuggingFace
   - Parquet: full proofs (like original)
   - Parquet: tactic-level pairs (from LeanDojo trace)
   - `lean-toolchain` version
@@ -527,12 +527,12 @@ This is lower priority because:
   - Migration changelog
   - List of dropped theorems + failure reasons
 
-- [ ] `{org}/miniF2F-v2-lean426` on GitHub
-  - miniF2F-v2s and v2c formal statements ported to 4.26
+- [ ] `{org}/miniF2F-v2-lean427` on GitHub
+  - miniF2F-v2s and v2c formal statements ported to 4.27
   - Verification script
   - Any patches needed
 
-- [ ] `{org}/NuminaMath-LEAN-4.26` on HuggingFace (Phase 2)
+- [ ] `{org}/NuminaMath-LEAN-4.27` on HuggingFace (Phase 2)
   - Same structure as Goedel release
   - Filter: `formal_proof` or complete `formal_ground_truth` present, no sorry
   - Document `ground_truth_type` filtering and survival rate
@@ -542,4 +542,4 @@ This is lower priority because:
 - Migration script (automated renames)
 - Failure categorization (what breaks and why)
 - Survival statistics by error type
-- Recommendations for others migrating to 4.26
+- Recommendations for others migrating to 4.27

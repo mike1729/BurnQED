@@ -80,7 +80,7 @@ BurnQED/
 │   └── data/                # Dataset downloads, benchmark conversion
 ├── scripts/             # Pipeline orchestration scripts (paths from _lib.sh)
 ├── configs/             # search.toml, models.toml
-├── vendor/Pantograph/   # Git submodule (Lean 4 REPL, Mathlib v4.26.0)
+├── vendor/Pantograph/   # Git submodule (Lean 4 REPL, Mathlib v4.27.0)
 ├── docs/                # Architecture plan, experiment guide, known issues
 │
 └── data/                # ALL generated/downloaded artifacts (gitignored except benchmarks/)
@@ -290,7 +290,7 @@ cargo test -p policy -- --ignored --test-threads=1
 ## Known Issues
 
 - **SGLang batch hidden states**: `return_hidden_states=True` is broken in batch mode (SGLang #8066). Workaround: `python/encode_embeddings.py` uses direct PyTorch encoding for training data. Search-time encoding uses sequential calls (one at a time), which is correct. See `docs/encoding_bug.md`.
-- **Dataset version gaps**: Training datasets (Lean Workbook v4.8, Goedel v4.9, NuminaMath v4.15) lag behind our Pantograph v4.26. Mathlib lemma renames may break some tactics. Pantograph validation (tasks 0.3d-f) measures actual compatibility. See `docs/datasets.md`.
+- **Dataset version gaps**: Training datasets (Lean Workbook v4.8, Goedel v4.9, NuminaMath v4.15) lag behind our Pantograph v4.27. Mathlib lemma renames may break some tactics. Pantograph validation (tasks 0.3d-f) measures actual compatibility. See `docs/datasets.md`.
 
 ## License
 

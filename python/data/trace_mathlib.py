@@ -24,8 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Known-good Mathlib4 commit compatible with Lean v4.26.0 (matches Pantograph lean-toolchain)
-DEFAULT_MATHLIB_COMMIT = "v4.26.0"
+# Known-good Mathlib4 commit compatible with Lean v4.27.0 (matches Pantograph lean-toolchain)
+DEFAULT_MATHLIB_COMMIT = "v4.27.0"
 
 
 def trace_mathlib(commit: str, cache_dir: str):
@@ -402,7 +402,7 @@ def check_lean_version(mathlib_commit: str):
 
     try:
         toolchain_content = toolchain_path.read_text().strip()
-        # lean-toolchain contains something like "leanprover/lean4:v4.26.0"
+        # lean-toolchain contains something like "leanprover/lean4:v4.27.0"
         if ":" in toolchain_content:
             pantograph_version = toolchain_content.split(":")[-1].lstrip("v")
         else:

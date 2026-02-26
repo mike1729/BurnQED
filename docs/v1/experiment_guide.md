@@ -77,7 +77,7 @@ The SGLang server handles request batching and scheduling internally. Multiple c
 | `LLM_BASE` | `deepseek-ai/DeepSeek-Prover-V2-7B` | Base model for fine-tuning |
 | `SKIP_BASELINE` | 0 | Set to 1 to skip Phase B baseline |
 | `MODEL_PATH` | (none) | Local model dir for tokenizer in data prep |
-| `MATHLIB_COMMIT` | `v4.26.0` | Mathlib4 tag to trace (matches Pantograph lean-toolchain) |
+| `MATHLIB_COMMIT` | `v4.27.0` | Mathlib4 tag to trace (matches Pantograph lean-toolchain) |
 | `THEOREM_INDEX` | `data/theorem_index.json` | Path to theorem index for search |
 | `EBM_STEPS` | 1500 | Number of EBM training steps |
 | `EBM_RESUME` | `auto` | EBM checkpoint resume: `auto` (from prev iter), `none` (fresh) |

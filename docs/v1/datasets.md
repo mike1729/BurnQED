@@ -65,7 +65,7 @@ cd vendor/Pantograph && lake build \
   BenchMinIF2FV2CTest BenchMinIF2FV2CValid
 ```
 
-The generator applies syntax fixes for Mathlib v4.26.0 compatibility:
+The generator applies syntax fixes for Mathlib v4.27.0 compatibility:
 - `∑ k in S` → `∑ k ∈ S` (deprecated BigOperators notation)
 - `{x | P}` → `({x | P})` (set-builder parser disambiguation)
 - `{x, ℝ | P}` → `{x : ℝ | P}` (malformed set-builder type annotation in v2c)
