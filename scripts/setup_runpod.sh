@@ -277,7 +277,7 @@ else
 
         # Generate .lean file from JSON
         echo "  Generating ${module_name}.lean from ${json_file}..."
-        python3 "${REPO_ROOT}/python/data/generate_benchmark_lean.py" \
+        python3 "${REPO_ROOT}/python/data/minif2f/generate_lean.py" \
             --input "${REPO_ROOT}/data/benchmarks/${json_file}" \
             --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
             --module-name "${module_name}"

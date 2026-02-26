@@ -5,9 +5,9 @@ Supports both v1 (yangky11/miniF2F-lean4, .lean parsing) and v2
 (roozbeh-yz/miniF2F_v2, JSON datasets with v2s/v2c variants).
 
 Usage:
-    python python/data/download_minif2f.py --output-dir data/benchmarks       # all versions
-    python python/data/download_minif2f.py --output-dir data/benchmarks --version v1    # v1 only
-    python python/data/download_minif2f.py --output-dir data/benchmarks --version v2    # v2 only
+    python python/data/minif2f/download.py --output-dir data/benchmarks       # all versions
+    python python/data/minif2f/download.py --output-dir data/benchmarks --version v1    # v1 only
+    python python/data/minif2f/download.py --output-dir data/benchmarks --version v2    # v2 only
 """
 
 import argparse
@@ -95,37 +95,56 @@ def signature_to_expression(signature: str) -> str:
 
     This is a valid Lean type expression that Pantograph's goal.start can accept.
     """
-    # Find the last top-level ":" that separates params from the return type
+    # Find the last top-level ":" that genuinely separates params from the return type.
+    # A param-goal ":" must be preceded by a closing delimiter (")"/"]"/"}") at depth 0.
+    # This avoids picking up ":" inside quantifier bindings like "∃ a b : ℕ, ...".
     depth_paren = 0
     depth_bracket = 0
     depth_brace = 0
     last_colon = -1
+    saw_close_delim = False  # True if last non-whitespace was )/]/} at depth 0
 
     for i, ch in enumerate(signature):
         if ch == '(':
             depth_paren += 1
+            saw_close_delim = False
         elif ch == ')':
             depth_paren -= 1
+            saw_close_delim = depth_paren == 0
         elif ch == '[':
             depth_bracket += 1
+            saw_close_delim = False
         elif ch == ']':
             depth_bracket -= 1
+            saw_close_delim = depth_bracket == 0
         elif ch == '{':
             depth_brace += 1
+            saw_close_delim = False
         elif ch == '}':
             depth_brace -= 1
+            saw_close_delim = depth_brace == 0
         elif ch == ':' and depth_paren == 0 and depth_bracket == 0 and depth_brace == 0:
-            last_colon = i
+            if saw_close_delim:
+                last_colon = i
+            saw_close_delim = False
+        elif ch in ' \t\n\r':
+            pass  # don't reset saw_close_delim on whitespace
+        else:
+            saw_close_delim = False
 
     if last_colon == -1:
-        return ""
+        # No param-goal separator found — the entire signature is the goal/type.
+        # Strip leading ':' from no-param theorems (e.g. ": ∃ x, P x" → "∃ x, P x").
+        result = re.sub(r'\s+', ' ', signature).strip()
+        return result.lstrip(':').strip() if result.startswith(':') else result
 
     params = signature[:last_colon].strip()
     goal = signature[last_colon + 1:].strip()
 
-    # Clean up whitespace (multi-line signatures)
+    # Clean up whitespace (multi-line signatures).
+    # Preserve newlines before `let` keywords so they remain valid in Lean.
     params = re.sub(r'\s+', ' ', params)
-    goal = re.sub(r'\s+', ' ', goal)
+    goal = re.sub(r'[ \t]+', ' ', goal)  # only collapse horizontal whitespace in goal
 
     if params:
         return f"∀ {params}, {goal}"
@@ -284,10 +303,15 @@ def _extract_signature_from_formal(formal: str) -> str:
     Strips the leading "theorem <name>" and trailing ":= by" (or ":= by\n  sorry").
     """
     # Strip trailing ":= by sorry", ":= by", ":= sorry", etc.
-    text = re.sub(r'\s*:=\s*(?:by\s+)?(?:sorry\s*)?$', '', formal, flags=re.DOTALL).strip()
+    text = re.sub(r'\s*:=\s*(?:by\s*)?(?:sorry\s*)?$', '', formal, flags=re.DOTALL).strip()
 
     # Strip leading "theorem <name>" (name can contain . and ')
     text = re.sub(r'^theorem\s+[\w\'.]+\s*', '', text).strip()
+
+    # Strip leading ':' left over when theorem has no binder params
+    # e.g. "theorem name : goal" → ": goal" after name strip → "goal"
+    if text.startswith(':'):
+        text = text[1:].strip()
 
     return text
 

@@ -176,7 +176,7 @@ if [ $FORCE -eq 1 ]; then
     MINIF2F_ARGS+=("--force")
 fi
 
-if ! python "${REPO_ROOT}/python/data/download_minif2f.py" "${MINIF2F_ARGS[@]}"; then
+if ! python "${REPO_ROOT}/python/data/minif2f/download.py" "${MINIF2F_ARGS[@]}"; then
     echo "ERROR: miniF2F download failed."
     exit 3
 fi
@@ -189,10 +189,10 @@ echo "=== Step 4: Generate miniF2F benchmark .lean files + oleans ==="
 BENCHMARKS=(
     "minif2f_test.json BenchMinIF2FTest"
     "minif2f_valid.json BenchMinIF2FValid"
-    "minif2f_v2s_test.json BenchMinIF2FV2STest"
-    "minif2f_v2s_valid.json BenchMinIF2FV2SValid"
-    "minif2f_v2c_test.json BenchMinIF2FV2CTest"
-    "minif2f_v2c_valid.json BenchMinIF2FV2CValid"
+    "minif2f_v2s_test.json BenchMinIF2FV2sTest"
+    "minif2f_v2s_valid.json BenchMinIF2FV2sValid"
+    "minif2f_v2c_test.json BenchMinIF2FV2cTest"
+    "minif2f_v2c_valid.json BenchMinIF2FV2cValid"
 )
 
 BENCH_LIBS_TO_BUILD=()
@@ -207,7 +207,7 @@ for pair in "${BENCHMARKS[@]}"; do
 
     # Generate .lean file from JSON
     echo "  Generating ${module_name}.lean from ${json_file}..."
-    python "${REPO_ROOT}/python/data/generate_benchmark_lean.py" \
+    python "${REPO_ROOT}/python/data/minif2f/generate_lean.py" \
         --input "${BENCH_DIR}/${json_file}" \
         --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
         --module-name "${module_name}"

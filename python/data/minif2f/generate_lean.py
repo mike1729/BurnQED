@@ -7,13 +7,13 @@ Without this, complex expressions (involving ℂ, Finset, etc.) can take 60s+
 to elaborate, exceeding the tactic timeout.
 
 Usage:
-    python generate_benchmark_lean.py \
-        --input data/minif2f_v2s_test.json \
-        --output vendor/Pantograph/BenchMinIF2FV2STest.lean \
-        --module-name BenchMinIF2FV2STest
+    python python/data/minif2f/generate_lean.py \
+        --input data/benchmarks/minif2f_v2s_test.json \
+        --output vendor/Pantograph/BenchMinIF2FV2sTest.lean \
+        --module-name BenchMinIF2FV2sTest
 
-    # Then build:
-    #   cd vendor/Pantograph && lake build BenchMinIF2FV2STest
+    # Then compile:
+    #   cd vendor/Pantograph && lake env lean BenchMinIF2FV2sTest.lean
 
 Input format (TheoremIndex JSON):
     {
@@ -100,6 +100,11 @@ def fix_statement(statement: str) -> str:
 
     # Fix: `let c, =` typo in v2s data → `let c :=`
     statement = statement.replace("let c, =", "let c :=")
+
+    # Fix: `let` bindings flattened onto one line need `;` separators.
+    # "let a := expr let b := expr" → "let a := expr; let b := expr"
+    # Only insert `;` when preceded by a non-comma token (avoid breaking ∀ ..., let ...)
+    statement = re.sub(r'(?<=[^\s,])\s+(let\s+\w+\s*:=)', r'; \1', statement)
 
     return statement
 
@@ -190,9 +195,9 @@ def _comma_to_colon_in_binders(body: str) -> str:
 def _handle_compound_statement(name: str, statement: str) -> str:
     """Handle v2c compound statements with abbrev definitions + theorem.
 
-    v2c data encodes some theorems as:
-        ∀ abbrev solution_name : Type := sorry
-        theorem thm_name (args...), ... = solution_name
+    v2c data encodes some theorems as (often on a single line):
+        ∀ abbrev solution_name : Type := sorry theorem thm_name (args...), conclusion
+        abbrev solution_name : Type := sorry theorem thm_name : conclusion
 
     This emits the abbrev(s) as standalone declarations and the theorem
     with a sorry proof.
@@ -200,38 +205,38 @@ def _handle_compound_statement(name: str, statement: str) -> str:
     import re
 
     # Strip leading `∀ ` artifact
-    statement = re.sub(r"^∀ ", "", statement)
+    statement = re.sub(r"^∀\s+", "", statement)
 
-    # Split into declarations: abbrevs end with `:= sorry`, theorem starts with `theorem`
-    parts = re.split(r"\n\s*(?=(?:noncomputable )?(?:abbrev|theorem) )", statement)
+    # Split on `sorry` followed by `theorem` or `abbrev` — handles both
+    # single-line and multi-line compound statements.
+    parts = re.split(r"(?::=\s*sorry\s+)(?=(?:noncomputable\s+)?(?:abbrev|theorem)\s)", statement)
 
     result_lines = []
-    for part in parts:
+    for i, part in enumerate(parts):
         part = part.strip()
         if not part:
             continue
 
         if part.startswith("theorem "):
             # Extract theorem body (everything after `theorem name`)
-            # Apply fix_statement to the body portion
-            m = re.match(r"(theorem \S+)\s*(:?)\s*(.*)", part, re.DOTALL)
+            m = re.match(r"(theorem\s+\S+)\s*(:?)\s*(.*)", part, re.DOTALL)
             if m:
                 header = m.group(1)
                 had_colon = bool(m.group(2))
                 body = fix_statement(m.group(3))
                 if had_colon:
-                    # Type-style: `theorem name : type`
                     result_lines.append(f"{header} : {body} := by sorry")
                 else:
-                    # Binder-style: `theorem name (args...), conclusion`
-                    # Convert ∀-style `,` separator to theorem-style `:`
                     body = _comma_to_colon_in_binders(body)
                     result_lines.append(f"{header} {body} := by sorry")
             else:
                 result_lines.append(f"{part} := by sorry")
+        elif part.startswith(("abbrev ", "noncomputable ")):
+            # abbrev declaration — add `:= sorry` since we split on it
+            result_lines.append(f"{part} := sorry")
         else:
-            # abbrev / noncomputable abbrev — emit as-is (already has `:= sorry`)
-            result_lines.append(part)
+            # Unknown part — skip
+            continue
 
     return "\n\n".join(result_lines)
 
@@ -239,7 +244,8 @@ def _handle_compound_statement(name: str, statement: str) -> str:
 def statement_to_theorem(name: str, statement: str) -> str:
     """Convert a ∀-expression statement to a theorem declaration with sorry proof."""
     # Handle compound v2c statements with abbrev + theorem
-    if statement.lstrip().startswith("∀ abbrev") or statement.lstrip().startswith("∀ noncomputable"):
+    s = statement.lstrip()
+    if any(s.startswith(p) for p in ("∀ abbrev", "∀ noncomputable", "abbrev ", "noncomputable abbrev")):
         return _handle_compound_statement(name, statement)
 
     statement = fix_statement(statement)
@@ -253,7 +259,7 @@ def generate_lean_file(
     lines = [
         f"-- Auto-generated benchmark file: {module_name}",
         "-- Do not edit manually. Regenerate with:",
-        "--   python python/data/generate_benchmark_lean.py",
+        "--   python python/data/minif2f/generate_lean.py",
         "",
         "import Mathlib",
         "",
