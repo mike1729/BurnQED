@@ -64,11 +64,11 @@ Single shared 7B backbone for both policy and value. Rust core (`prover-core`) h
 - B→C: did live EBM gradients help the EBM head?
 - A→C: total system improvement
 
-### v2 Execution Plan (~15 days, ~$49 GPU)
+### v2 Execution Plan (~10-12 days, ~$40-55 GPU)
 
 | Phase | Days | What |
 |-------|------|------|
-| M: Migration | M.0–M.6 | Goedel → Lean 4.26 migration, miniF2F-v2s/v2c porting, LEAN-GitHub integration |
+| M: Migration | M.0–M.11 | Goedel → Lean 4.26 migration, data exploration, miniF2F porting, LEAN-GitHub, release |
 | 0: Data Pipeline | 1–3 | PyTorch EBM port, Lean audit, parallel LeanDojo tracing, sorry filter |
 | 1: SFT Baseline | 3–4 | iter_0 LoRA r=32 on competition data, deep trajectory generation (800 nodes) |
 | 2: Baselines | 5–6 | Embedding metrics, decoupled GoalCond EBM training, miniF2F baseline (v1 + v2s + v2c) |
@@ -117,7 +117,7 @@ burn-qed/
     └── archive/v1/                  # Archived v1 artifacts
 ```
 
-## 15 Gotchas (Hard-Won Lessons)
+## 17 Gotchas (Hard-Won Lessons)
 
 1. **Temperature Double-Dip:** InfoNCE has NO temperature param. EBM head has learnable temperature.
 2. **25M Param Init Explosion:** First EBM layer: `weight.data *= 0.1`
@@ -134,6 +134,8 @@ burn-qed/
 13. **Loss Masking:** `DataCollatorForCompletionOnlyLM` with `response_template="` ``` `\n"` (closing code fence). Only train on tactic tokens after the closing fence. Without this, 90% of LoRA capacity wasted echoing proof states. See `docs/data_format_spec.md` for full format details.
 14. **Prompt Format:** DeepSeek-native format with tactic state as Lean comment inside code fence. No special tokens (`[GOAL]`/`[PROOFSTEP]` are NOT used). See `docs/data_format_spec.md`.
 15. **CPU Worker OOM:** Cap `NUM_WORKERS = min(16, int(cpu_count() * 0.75))`. 30 Lean REPLs will OOM 200GB RAM.
+16. **Phase M Survival Rate:** If Goedel 4.26 migration < 90% survival, SFT dataset may be too small. Below 80%, consider older toolchain.
+17. **Token Geometry Truncation:** Don't assume `--max-length 2048`. Phase M Task M.7 computes actual distribution. If p95 ≤ 1024, using 2048 wastes ~50% VRAM on padding.
 
 ## Success Metrics
 
@@ -149,15 +151,19 @@ burn-qed/
 
 Reference: `docs/v2_execution_plan.md` for full details, code snippets, and gotchas.
 
-### Phase M: Goedel Migration + Data Integration (Days M.0–M.6)
+### Phase M: Goedel Migration + Data Exploration (Days M.0–M.6)
 
-- [ ] **M.0** Clone Goedel, update toolchain to 4.26, attempt `lake build` — log errors, survival count
-- [ ] **M.1** Automated fixes (renames, instance patches), rebuild — improved survival count
-- [ ] **M.2** Manual triage of remaining failures, drop or fix — target ≥95% compilation (≥28,270 of 29,759)
-- [ ] **M.3** Port miniF2F-v2s/v2c statements to 4.26, verify all 488 compile — eval benchmark ready
-- [ ] **M.4** LeanDojo trace on compiled Goedel 4.26 proofs — tactic pairs parquet
-- [ ] **M.5** Download + filter LEAN-GitHub (`internlm/Lean-Github`, 218K tactics), merge with Goedel pairs — unified SFT dataset
-- [ ] **M.6** Release Goedel-4.26 on HuggingFace, write migration notes — community contribution
+- [ ] **M.1** Bulk compile attempt — clone Goedel, update toolchain to 4.26, `lake build`, log survival count
+- [ ] **M.2** Automated fixes (renames, instance patches), rebuild — improved survival count
+- [ ] **M.3** Manual triage of remaining failures, drop or fix — target ≥95% compilation (≥28,270 of 29,759)
+- [ ] **M.4** Port miniF2F-v2s/v2c statements to 4.26, verify all 488 compile — eval benchmark ready
+- [ ] **M.5** LeanDojo trace on compiled Goedel 4.26 proofs — tactic pairs parquet (~10-15h CPU)
+- [ ] **M.6** Compilation & integrity sweep — sorry/admit/sorryAx contamination, malformed states, clean pool count
+- [ ] **M.7** Token geometry — state/tactic/full token length distributions, truncation analysis, recommended max_length
+- [ ] **M.8** Proof structure & tactic vocabulary — depth distribution, contrastive pool sizing, tactic concentration
+- [ ] **M.9** Download + filter LEAN-GitHub (`internlm/Lean-Github`, 218K tactics) — quality filter, format convert
+- [ ] **M.10** Merge into unified SFT dataset — Goedel clean pool + LEAN-GitHub, dedup, split, contrastive pool
+- [ ] **M.11** Release Goedel-4.26 on HuggingFace, write migration notes — community contribution
 
 ### Phase 0: Environment Setup + Data Pipeline (Days 1–3)
 
