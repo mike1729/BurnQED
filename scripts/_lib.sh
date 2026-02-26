@@ -2,6 +2,24 @@
 # Shared helpers for BurnQED scripts.
 # Source this file: source "$(dirname "$0")/_lib.sh"
 
+# ── Canonical path variables ──────────────────────────────────────────────
+# All generated/downloaded artifacts live under data/.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATA_ROOT="${REPO_ROOT}/data"
+LEAN_DIR="${DATA_ROOT}/lean"
+BENCH_DIR="${DATA_ROOT}/benchmarks"
+SFT_DIR="${DATA_ROOT}/sft"
+CKPT_DIR="${DATA_ROOT}/checkpoints"
+LORA_DIR="${CKPT_DIR}/lora"
+EBM_CKPT_DIR="${CKPT_DIR}/ebm"
+MODEL_DIR="${DATA_ROOT}/models"
+BASE_MODEL_DIR="${MODEL_DIR}/base"
+MERGED_MODEL_DIR="${MODEL_DIR}/merged"
+TRAJ_DIR="${DATA_ROOT}/trajectories"
+EMBED_DIR="${DATA_ROOT}/embeddings"
+EVAL_DIR="${DATA_ROOT}/evals"
+LOG_DIR="${DATA_ROOT}/logs"
+
 # Ensure elan (Lean toolchain manager) is on PATH.
 if [ -d "$HOME/.elan/bin" ] && [[ ":$PATH:" != *":$HOME/.elan/bin:"* ]]; then
     export PATH="$HOME/.elan/bin:$PATH"

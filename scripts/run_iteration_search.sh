@@ -24,12 +24,10 @@ PREV=$((ITER - 1))
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$(dirname "$0")/_lib.sh"
-LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
-EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
-TRAJ_DIR="${REPO_ROOT}/trajectories"
-EVAL_DIR="${REPO_ROOT}/eval_results"
-SEARCH_THEOREMS="${REPO_ROOT}/data/iter${ITER}_search_theorems.json"
-THEOREM_INDEX="${THEOREM_INDEX:-${REPO_ROOT}/data/theorem_index.json}"
+LLM_DIR="${MERGED_MODEL_DIR}/iter_${ITER}"
+EBM_DIR="${EBM_CKPT_DIR}/iter_${ITER}"
+SEARCH_THEOREMS="${BENCH_DIR}/iter${ITER}_search_theorems.json"
+THEOREM_INDEX="${THEOREM_INDEX:-${BENCH_DIR}/theorem_index.json}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 ensure_server "$SGLANG_URL" "$LLM_DIR"
@@ -41,9 +39,7 @@ SEARCH_CONFIG="${SEARCH_CONFIG:-${REPO_ROOT}/configs/search_minif2f_bex1.toml}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
-mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$EBM_DIR"
-LOG_DIR="${REPO_ROOT}/logs"
-mkdir -p "$LOG_DIR"
+mkdir -p "$TRAJ_DIR" "$EVAL_DIR" "$EBM_DIR" "$LOG_DIR"
 
 echo "================================================================"
 echo "  Expert Iteration ${ITER} — Search & Eval"

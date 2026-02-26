@@ -44,13 +44,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "${REPO_ROOT}/scripts/_lib.sh"
 LLM_BASE="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
-TRAJ_DIR="${REPO_ROOT}/trajectories"
-CKPT_DIR="${REPO_ROOT}/checkpoints/llm"
-TRAIN_DATA="${REPO_ROOT}/data/sft_train.jsonl"
-VAL_DATA="${REPO_ROOT}/data/sft_val.jsonl"
-LOG_DIR="${REPO_ROOT}/logs"
+TRAIN_DATA="${SFT_DIR}/train.jsonl"
+VAL_DATA="${SFT_DIR}/val.jsonl"
 
-mkdir -p "$CKPT_DIR" "$LOG_DIR"
+mkdir -p "$LORA_DIR" "$LOG_DIR"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 LR="${LR:-$(python3 -c "print(2e-4 / (2 ** ${ITER}))")}"
@@ -64,7 +61,7 @@ echo "================================================================"
 echo "  LLM Fine-tuning — Iteration ${ITER}"
 echo "================================================================"
 echo "  LLM base:       ${LLM_BASE}"
-echo "  Checkpoint dir:  ${CKPT_DIR}/iter_${ITER}"
+echo "  Checkpoint dir:  ${LORA_DIR}/iter_${ITER}"
 echo "  Train data:      ${TRAIN_DATA}"
 echo "  LoRA mode:       ${LORA_MODE}"
 echo "  LoRA rank:       ${LORA_R}, alpha: ${LORA_ALPHA}, MLP: ${LORA_MLP:-0}"
@@ -116,7 +113,7 @@ if [ "$ITER" -eq 0 ]; then
         --data $TRAIN_DATA \
         $VAL_DATA_FLAG \
         $LORA_FLAGS \
-        --output ${CKPT_DIR}/iter_0 \
+        --output ${LORA_DIR}/iter_0 \
         --max-steps $MAX_TRAIN_STEPS \
         --lr $LR \
         $SAVE_STEPS_FLAG $PROBE_DATA_FLAG $MAX_SEQ_LEN_FLAG $RESUME_FLAG
@@ -151,7 +148,7 @@ else
     if [ "$LORA_MODE" = "single-shot" ]; then
         echo "Single-shot LoRA: fresh adapter on raw base model ${LLM_BASE}"
     elif [ "$LORA_MODE" = "fresh" ]; then
-        PREV_MERGED="${REPO_ROOT}/models/llm/iter_${PREV}"
+        PREV_MERGED="${MERGED_MODEL_DIR}/iter_${PREV}"
         if [ ! -d "$PREV_MERGED" ]; then
             echo "ERROR: LORA_MODE=fresh but merged model not found at ${PREV_MERGED}"
             exit 1
@@ -159,8 +156,8 @@ else
         MODEL_NAME="$PREV_MERGED"
         echo "Fresh LoRA: training adapters on merged model ${PREV_MERGED}"
     else
-        BASE_FLAGS="--base ${CKPT_DIR}/iter_${PREV}"
-        echo "Continue LoRA: resuming from adapter ${CKPT_DIR}/iter_${PREV}"
+        BASE_FLAGS="--base ${LORA_DIR}/iter_${PREV}"
+        echo "Continue LoRA: resuming from adapter ${LORA_DIR}/iter_${PREV}"
     fi
 
     # shellcheck disable=SC2086
@@ -170,7 +167,7 @@ else
         --data $TRAIN_DATA \
         $VAL_DATA_FLAG \
         ${EXTRA_DATA_ARGS[*]} \
-        --output ${CKPT_DIR}/iter_${ITER} \
+        --output ${LORA_DIR}/iter_${ITER} \
         $BASE_FLAGS \
         $LORA_FLAGS \
         --max-steps $MAX_TRAIN_STEPS \
@@ -184,6 +181,6 @@ fi
 echo ""
 echo "================================================================"
 echo "  Fine-tuning complete!"
-echo "  LoRA checkpoint: ${CKPT_DIR}/iter_${ITER}"
+echo "  LoRA checkpoint: ${LORA_DIR}/iter_${ITER}"
 echo "  Log:             ${STEP_LOG}"
 echo "================================================================"

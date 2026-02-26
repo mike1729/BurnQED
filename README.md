@@ -73,15 +73,26 @@ BurnQED/
 │   ├── prover-core/     # CLI binary tying everything together
 │   └── burn-contrib/    # Upstream burn-rs PR modules (stub)
 ├── python/
-│   ├── inference_server.py  # Custom sgl.Engine server with in-process mean-pooling
+│   ├── encode_server.py     # Embedding extraction server (nf4)
 │   ├── encode_embeddings.py # Direct PyTorch encoding (bypasses SGLang batch bug)
 │   ├── training/            # LoRA fine-tuning (train_llm.py, export_llm.py)
+│   ├── joint/               # v2 joint training (EBM head, dataset, losses, model, train)
 │   └── data/                # Dataset downloads, benchmark conversion
-├── scripts/             # Pipeline orchestration scripts
+├── scripts/             # Pipeline orchestration scripts (paths from _lib.sh)
 ├── configs/             # search.toml, models.toml
-├── data/                # HF datasets, miniF2F JSONs, SFT training data
 ├── vendor/Pantograph/   # Git submodule (Lean 4 REPL, Mathlib v4.26.0)
-└── docs/                # Architecture plan, experiment guide, known issues
+├── docs/                # Architecture plan, experiment guide, known issues
+│
+└── data/                # ALL generated/downloaded artifacts (gitignored except benchmarks/)
+    ├── lean/            # Raw HF dataset downloads
+    ├── benchmarks/      # Evaluation benchmark JSONs (tracked in git)
+    ├── sft/             # Formatted SFT training data
+    ├── models/          # Model weights (base/ + merged/)
+    ├── checkpoints/     # Training checkpoints (lora/ + ebm/)
+    ├── trajectories/    # Search result parquets
+    ├── embeddings/      # Extracted embeddings per iteration
+    ├── evals/           # Evaluation results & reports
+    └── logs/            # Training and search logs
 ```
 
 ## Prerequisites
@@ -172,8 +183,8 @@ EBM_STEPS=50000 EBM_LR=3e-5 LOSS_TYPE=info_nce ./scripts/run_ebm_train.sh 2
 Custom server wrapping `sgl.Engine` with in-process mean-pooling for encoding:
 
 ```bash
-./scripts/start_inference_server.sh models/llm/iter_1
-PORT=30000 TP=1 ./scripts/start_inference_server.sh
+./scripts/start_sglang.sh data/models/merged/iter_1
+PORT=30000 TP=1 ./scripts/start_sglang.sh
 ```
 
 ## CLI Reference
@@ -186,9 +197,9 @@ All commands are subcommands of `cargo run --release -p prover-core --`:
 cargo run --release -p prover-core -- search \
     --config configs/search.toml \
     --server-url http://localhost:30000 \
-    --theorems data/iter1_search_theorems.json \
-    --output trajectories/iter_1.parquet \
-    --ebm-path checkpoints/ebm/iter_1 \  # optional: EBM value guidance
+    --theorems data/benchmarks/iter1_search_theorems.json \
+    --output data/trajectories/iter_1.parquet \
+    --ebm-path data/checkpoints/ebm/iter_1 \  # optional: EBM value guidance
     --concurrency 8 \
     --num-workers 8 \
     --imports Mathlib
@@ -200,10 +211,10 @@ cargo run --release -p prover-core -- search \
 cargo run --release -p prover-core -- eval \
     --config configs/search.toml \
     --server-url http://localhost:30000 \
-    --theorems data/minif2f_test.json \
+    --theorems data/benchmarks/minif2f_test.json \
     --budgets 600 \
-    --output eval_results/iter_1.json \
-    --ebm-path checkpoints/ebm/iter_1 \
+    --output data/evals/iter_1.json \
+    --ebm-path data/checkpoints/ebm/iter_1 \
     --num-candidates 16 \
     --imports Mathlib
 ```
@@ -212,20 +223,20 @@ cargo run --release -p prover-core -- eval \
 
 ```bash
 cargo run --release -p prover-core -- train-ebm \
-    --trajectories trajectories/iter_0.parquet trajectories/iter_1.parquet \
+    --trajectories data/trajectories/iter_0.parquet data/trajectories/iter_1.parquet \
     --server-url http://localhost:30000 \
-    --output-dir checkpoints/ebm/iter_2 \
+    --output-dir data/checkpoints/ebm/iter_2 \
     --steps 50000 \
-    --embeddings-cache checkpoints/ebm/iter_2/embeddings.parquet \
+    --embeddings-cache data/checkpoints/ebm/iter_2/embeddings.parquet \
     --loss-type info_nce
 ```
 
 ### `summary` / `compare`
 
 ```bash
-cargo run --release -p prover-core -- summary --input trajectories/iter_1.parquet
+cargo run --release -p prover-core -- summary --input data/trajectories/iter_1.parquet
 cargo run --release -p prover-core -- compare \
-    --results eval_results/iter_0.json eval_results/iter_1.json
+    --results data/evals/iter_0.json data/evals/iter_1.json
 ```
 
 ## Configuration

@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./scripts/start_encode_server.sh [model_path]
-#   ENCODE_PORT=30001 ./scripts/start_encode_server.sh models/llm/iter_3
+#   ENCODE_PORT=30001 ./scripts/start_encode_server.sh data/models/merged/iter_3
 #
 # Prerequisites:
 #   pip install transformers torch fastapi uvicorn
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
+MODEL_PATH="${1:-${REPO_ROOT}/data/models/base/deepseek-prover-v2-7b}"
 ENCODE_PORT="${ENCODE_PORT:-30001}"
 ENCODE_DTYPE="${ENCODE_DTYPE:-bfloat16}"
 

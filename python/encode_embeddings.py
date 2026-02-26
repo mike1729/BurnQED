@@ -11,23 +11,23 @@ Usage:
     # Via encode server (preferred — no VRAM needed, coexists with inference)
     python python/encode_embeddings.py \
         --encode-url http://localhost:30001 \
-        --trajectories trajectories/iter_0.parquet trajectories/iter_1.parquet \
-        --output checkpoints/ebm/iter_4/embeddings.parquet \
+        --trajectories data/trajectories/iter_0.parquet data/trajectories/iter_1.parquet \
+        --output data/checkpoints/ebm/iter_4/embeddings.parquet \
         --batch-size 32
 
     # Direct PyTorch (fallback — needs full VRAM, kill SGLang first)
     python python/encode_embeddings.py \
-        --model-path models/llm/iter_3_new \
-        --trajectories trajectories/iter_0.parquet trajectories/iter_1.parquet \
-        --output checkpoints/ebm/iter_4/embeddings.parquet \
+        --model-path data/models/merged/iter_3 \
+        --trajectories data/trajectories/iter_0.parquet data/trajectories/iter_1.parquet \
+        --output data/checkpoints/ebm/iter_4/embeddings.parquet \
         --batch-size 32
 
     # Resume from partial cache (only encodes missing states)
     python python/encode_embeddings.py \
         --encode-url http://localhost:30001 \
-        --trajectories trajectories/*.parquet \
-        --output checkpoints/ebm/iter_4/embeddings.parquet \
-        --cache checkpoints/ebm/old/embeddings.parquet \
+        --trajectories data/trajectories/*.parquet \
+        --output data/checkpoints/ebm/iter_4/embeddings.parquet \
+        --cache data/checkpoints/ebm/old/embeddings.parquet \
         --batch-size 32
 
 Environment:

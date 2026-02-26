@@ -35,10 +35,9 @@ PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 MINIF2F_CONFIG="${REPO_ROOT}/configs/search_minif2f.toml"
 MINIF2F_IMPORT="BenchMinIF2FTest"  # olean lib matching minif2f_test.json
-BASELINES_DIR="${REPO_ROOT}/baselines"
-TRAJ_DIR="${REPO_ROOT}/trajectories"
+BASELINES_DIR="${EVAL_DIR}/baselines"
 
-mkdir -p "$BASELINES_DIR" "$TRAJ_DIR" "${REPO_ROOT}/logs"
+mkdir -p "$BASELINES_DIR" "$TRAJ_DIR" "$LOG_DIR"
 
 echo "================================================================"
 echo "  Phase B: Baseline Raw Model Evaluation"
@@ -55,7 +54,7 @@ echo "================================================================"
 # ── B1. Pipeline validation on test_theorems.json ────────────────────────
 echo ""
 echo "=== B1: Pipeline Validation (test_theorems.json, 10 nodes) ==="
-TEST_THEOREMS="${REPO_ROOT}/data/test_theorems.json"
+TEST_THEOREMS="${BENCH_DIR}/test_theorems.json"
 
 if [ ! -f "$TEST_THEOREMS" ]; then
     echo "ERROR: ${TEST_THEOREMS} not found"
@@ -87,7 +86,7 @@ $PROVER summary --input "${BASELINES_DIR}/raw_test_theorems.parquet"
 # ── B2. miniF2F benchmark evaluation ────────────────────────────────────
 echo ""
 echo "=== B2: miniF2F v1 Evaluation (budget 600) ==="
-MINIF2F="${REPO_ROOT}/data/minif2f_test.json"
+MINIF2F="${BENCH_DIR}/minif2f_test.json"
 
 if [ -f "$MINIF2F" ]; then
     $PROVER eval \
@@ -109,12 +108,12 @@ fi
 # ── B2b. miniF2F-v2s benchmark evaluation ──────────────────────────────
 echo ""
 echo "=== B2b: miniF2F v2s Evaluation (budget 600) ==="
-MINIF2F_V2S="${REPO_ROOT}/data/minif2f_v2s_test.json"
+MINIF2F_V2S="${BENCH_DIR}/minif2f_v2s_test.json"
 MINIF2F_V2S_IMPORT="BenchMinIF2FV2STest"
 
 if [ ! -f "$MINIF2F_V2S" ]; then
     # Fall back to valid split if test not available
-    MINIF2F_V2S="${REPO_ROOT}/data/minif2f_v2s_valid.json"
+    MINIF2F_V2S="${BENCH_DIR}/minif2f_v2s_valid.json"
     MINIF2F_V2S_IMPORT="BenchMinIF2FV2SValid"
 fi
 
@@ -138,7 +137,7 @@ fi
 # ── B3. Full theorem_index search ───────────────────────────────────────
 echo ""
 echo "=== B3: Full Theorem Index Search (training data collection) ==="
-THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
+THEOREM_INDEX="${BENCH_DIR}/theorem_index.json"
 
 if [ -f "$THEOREM_INDEX" ]; then
     $PROVER search \
@@ -162,12 +161,12 @@ fi
 # ── B3b. Train baseline EBM ──────────────────────────────────────────────
 echo ""
 echo "=== B3b: Baseline EBM Training ==="
-BASELINE_EBM_DIR="${REPO_ROOT}/checkpoints/ebm/baseline"
+BASELINE_EBM_DIR="${EBM_CKPT_DIR}/baseline"
 mkdir -p "$BASELINE_EBM_DIR"
 
 if [ -f "${TRAJ_DIR}/baseline_raw.parquet" ]; then
     TACTIC_PAIRS_FLAG=""
-    TACTIC_PAIRS_FILE="${REPO_ROOT}/data/sft_train.jsonl"
+    TACTIC_PAIRS_FILE="${SFT_DIR}/train.jsonl"
     if [ -f "$TACTIC_PAIRS_FILE" ]; then
         TACTIC_PAIRS_FLAG="--tactic-pairs ${TACTIC_PAIRS_FILE}"
     fi

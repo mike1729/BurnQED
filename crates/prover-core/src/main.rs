@@ -225,7 +225,7 @@ enum Command {
         #[arg(long, required = true, num_args = 1..)]
         trajectories: Vec<PathBuf>,
         /// Directory for saving checkpoints.
-        #[arg(long, default_value = "checkpoints/ebm")]
+        #[arg(long, default_value = "data/checkpoints/ebm")]
         output_dir: PathBuf,
         /// URL of the SGLang inference server (for embedding precomputation).
         #[arg(long)]

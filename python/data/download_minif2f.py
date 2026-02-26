@@ -5,9 +5,9 @@ Supports both v1 (yangky11/miniF2F-lean4, .lean parsing) and v2
 (roozbeh-yz/miniF2F_v2, JSON datasets with v2s/v2c variants).
 
 Usage:
-    python python/data/download_minif2f.py --output-dir data/                 # all versions
-    python python/data/download_minif2f.py --output-dir data/ --version v1    # v1 only
-    python python/data/download_minif2f.py --output-dir data/ --version v2    # v2 only
+    python python/data/download_minif2f.py --output-dir data/benchmarks       # all versions
+    python python/data/download_minif2f.py --output-dir data/benchmarks --version v1    # v1 only
+    python python/data/download_minif2f.py --output-dir data/benchmarks --version v2    # v2 only
 """
 
 import argparse
@@ -305,8 +305,8 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=str,
-        required=True,
-        help="Output directory (e.g., data/)",
+        default="data/benchmarks",
+        help="Output directory (default: data/benchmarks)",
     )
     parser.add_argument(
         "--version",

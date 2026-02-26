@@ -79,29 +79,42 @@ Single shared 7B backbone for both policy and value. Rust core (`prover-core`) h
 
 ```
 burn-qed/
-├── docs/
-│   ├── v2_execution_plan.md     # THE PLAN — 1145 lines, 15 gotchas, all red-team fixes
-│   ├── burn-qed_plan.md         # Original v1 architecture plan
-│   ├── ebm_overhaul.md          # EBM architecture upgrade (v1)
-│   └── experiment_guide.md      # Scripts, env vars, tuning
-├── crates/                      # Rust core (search, lean-repl, policy, trajectory, prover-core)
-│   └── ebm/                     # burn-rs EBM (v1, behind --features burn-ebm)
+├── docs/                            # Documentation
+│   ├── v2_execution_plan.md         # THE PLAN — 1145 lines, 15 gotchas, all red-team fixes
+│   ├── burn-qed_plan.md             # Original v1 architecture plan
+│   ├── ebm_overhaul.md              # EBM architecture upgrade (v1)
+│   └── experiment_guide.md          # Scripts, env vars, tuning
+├── crates/                          # Rust core (search, lean-repl, policy, trajectory, prover-core)
+│   └── ebm/                         # burn-rs EBM (v1, behind --features burn-ebm)
 ├── python/
-│   ├── encode_server.py         # Embedding extraction server (nf4)
-│   ├── training/                # LLM fine-tuning scripts (SFT)
-│   └── joint/                   # v2 joint training stubs
-│       ├── ebm_head.py          # GoalConditionedEnergyHead
-│       ├── dataset.py           # JointDataset (SFT + contrastive streams)
-│       ├── losses.py            # InfoNCE (no temperature — EBM head handles it)
-│       ├── model.py             # JointProver
-│       ├── monitoring.py        # separation_probe, ebm_metrics
-│       └── train.py             # Main training loop
-├── data/                        # HF datasets, miniF2F JSONs, traced tactic pairs
-├── iterations/
-│   ├── iter_0/                  # SFT-only baseline + decoupled EBM + trajectories
-│   └── iter_1/                  # Joint-trained model + jointly-trained EBM
-├── archive/v1/                  # Archived v1 artifacts and burn-rs scripts
-└── scripts/                     # Server startup, eval orchestration
+│   ├── encode_server.py             # Embedding extraction server (nf4)
+│   ├── training/                    # LLM fine-tuning scripts (SFT)
+│   └── joint/                       # v2 joint training stubs
+│       ├── ebm_head.py              # GoalConditionedEnergyHead
+│       ├── dataset.py               # JointDataset (SFT + contrastive streams)
+│       ├── losses.py                # InfoNCE (no temperature — EBM head handles it)
+│       ├── model.py                 # JointProver
+│       ├── monitoring.py            # separation_probe, ebm_metrics
+│       └── train.py                 # Main training loop
+├── scripts/                         # Pipeline orchestration (paths from _lib.sh)
+├── configs/                         # TOML configs (search, models)
+├── vendor/                          # Git submodules (Pantograph)
+│
+└── data/                            # ALL generated/downloaded artifacts (gitignored)
+    ├── lean/                        # Raw HF dataset downloads
+    │   ├── workbook/                # internlm/Lean-Workbook
+    │   ├── goedel_proofs/           # Goedel-LM/Lean-workbook-proofs
+    │   ├── lean_github/             # internlm/Lean-Github
+    │   └── numinamath/              # AI-MO/NuminaMath-LEAN
+    ├── benchmarks/                  # Evaluation benchmark JSONs (tracked in git)
+    ├── sft/                         # Formatted SFT training data (train.jsonl, val.jsonl)
+    ├── models/                      # Model weights (base/ + merged/)
+    ├── checkpoints/                 # Training checkpoints (lora/ + ebm/)
+    ├── trajectories/                # Search result parquets
+    ├── embeddings/                  # Extracted embeddings per iteration
+    ├── evals/                       # Evaluation results & reports
+    ├── logs/                        # Training and search logs
+    └── archive/v1/                  # Archived v1 artifacts
 ```
 
 ## 15 Gotchas (Hard-Won Lessons)
@@ -173,13 +186,13 @@ Reference: `docs/v2_execution_plan.md` for full details, code snippets, and gotc
 
 ### Phase 2: Embedding + EBM Baseline (Days 5–6)
 
-- [ ] **2.1** Extract embeddings from iter_0 — STATES AND GOALS (2h GPU) — save to `iterations/iter_0/embeddings/` (Gotcha 9: extract both z_state and z_goal)
+- [ ] **2.1** Extract embeddings from iter_0 — STATES AND GOALS (2h GPU) — save to `data/embeddings/iter_0/` (Gotcha 9: extract both z_state and z_goal)
 - [ ] **2.2** Compute embedding baseline metrics (2h, no GPU) — centroid_l2, linear_probe, norm_gap, sibling_l2, variance spectrum, depth-stratified clustering, dual-label rate
 - [ ] **2.3** Generate embedding visualizations (1h) — t-SNE/UMAP, depth coloring, sibling histograms, eigenvalue spectrum
-- [ ] **2.4** Train decoupled goal-conditioned EBM on frozen iter_0 embeddings (3h GPU) — SAME architecture as iter_1. Save to `iterations/iter_0/ebm/`
+- [ ] **2.4** Train decoupled goal-conditioned EBM on frozen iter_0 embeddings (3h GPU) — SAME architecture as iter_1. Save to `data/checkpoints/ebm/iter_0/`
 - [ ] **2.5** Compute EBM baseline metrics (1h) — rank-1 accuracy (overall + by depth), energy gap, sibling discrimination, active ratio
 - [ ] **2.6** EBM-augmented miniF2F search (2–3h GPU) — needs Python encode server wrapping GoalConditionedEnergyHead
-- [ ] **2.7** Compile baseline report (1h) — `iterations/iter_0/baselines/baseline_report.md`
+- [ ] **2.7** Compile baseline report (1h) — `data/evals/iter_0/baseline_report.md`
 
 ### Phase 3: Joint Training Loop (Days 7–8)
 
@@ -192,9 +205,9 @@ Reference: `docs/v2_execution_plan.md` for full details, code snippets, and gotc
 ### Phase 4: Joint Training + Evaluation (Days 9–11)
 
 - [ ] **4.1** Train iter_1 joint (6–8h GPU) — LoRA r=64, lr_lora=2e-5, lr_ebm=3e-5, λ_ebm=0.1, 6K steps. Monitor abort conditions: centroid_l2 <3.0, SFT loss >0.5 after 2K steps, temperature floor/ceiling
-- [ ] **4.2** Export and deploy (0.5h) — merge LoRA, save EBM head to `iterations/iter_1/`
+- [ ] **4.2** Export and deploy (0.5h) — merge LoRA to `data/models/merged/iter_1/`, save EBM head to `data/checkpoints/ebm/iter_1/`
 - [ ] **4.3** Repeat ALL baseline measurements on iter_1 (4h GPU) — 3-config comparison: A (iter_0 decoupled), B (iter_1 LoRA + decoupled EBM), C (iter_1 full joint)
-- [ ] **4.4** Comparative analysis (2h) — `iterations/iter_1/analysis/comparison_report.md`: did competition data help? did joint training protect embeddings? did goal conditioning help? end-to-end miniF2F delta?
+- [ ] **4.4** Comparative analysis (2h) — `data/evals/iter_1/analysis/comparison_report.md`: did competition data help? did joint training protect embeddings? did goal conditioning help? end-to-end miniF2F delta?
 - [ ] **4.5** Decision point — iter_1 > iter_0 + centroid held → plan iter_2; iter_0 >> old but iter_1 ≈ iter_0 → data was bottleneck; centroid collapsed → debug joint training
 
 ## Settled Architecture Decisions (Do NOT Revisit)

@@ -46,8 +46,8 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 4
 
     # Data
-    sft_data_path: Path = field(default_factory=lambda: Path("data/sft_train.jsonl"))
-    contrastive_data_path: Path = field(default_factory=lambda: Path("iterations/iter_0/trajectories"))
+    sft_data_path: Path = field(default_factory=lambda: Path("data/sft/train.jsonl"))
+    contrastive_data_path: Path = field(default_factory=lambda: Path("data/trajectories/iter_0"))
 
     # Monitoring
     log_interval: int = 50
@@ -56,8 +56,8 @@ class TrainingConfig:
     temperature_abort: bool = True
 
     # Output
-    output_dir: Path = field(default_factory=lambda: Path("iterations/iter_1/model"))
-    ebm_output_dir: Path = field(default_factory=lambda: Path("iterations/iter_1/ebm"))
+    output_dir: Path = field(default_factory=lambda: Path("data/checkpoints/lora/iter_1"))
+    ebm_output_dir: Path = field(default_factory=lambda: Path("data/checkpoints/ebm/iter_1"))
 
     # Wandb
     wandb_project: Optional[str] = "burn-qed-v2"

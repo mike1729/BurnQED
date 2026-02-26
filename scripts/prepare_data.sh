@@ -29,10 +29,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/scripts/_lib.sh"
 
 # ── Configuration ───────────────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
-DATA_DIR="${REPO_ROOT}/data"
 VENV_DIR="${REPO_ROOT}/.venv"
 PANTOGRAPH_DIR="${REPO_ROOT}/vendor/Pantograph"
 
@@ -65,7 +66,7 @@ echo "  BurnQED v2 Data Preparation"
 echo "================================================================"
 echo "  Skip HF datasets: $([ $SKIP_DATASETS -eq 1 ] && echo 'yes' || echo 'no')"
 echo "  Force re-download: $([ $FORCE -eq 1 ] && echo 'yes' || echo 'no')"
-echo "  Output dir:        ${DATA_DIR}"
+echo "  Output dir:        ${DATA_ROOT}"
 echo "================================================================"
 
 # ── Step 1: Python environment ──────────────────────────────────────────────
@@ -140,10 +141,10 @@ if [ $SKIP_DATASETS -eq 1 ]; then
     echo "Skipping HF dataset downloads (--skip-datasets)."
 else
     HF_DATASETS=(
-        "internlm/Lean-Workbook|data/workbook"
-        "Goedel-LM/Lean-workbook-proofs|data/goedel_proofs"
-        "internlm/Lean-Github|data/lean_github"
-        "AI-MO/NuminaMath-LEAN|data/numinamath"
+        "internlm/Lean-Workbook|data/lean/workbook"
+        "Goedel-LM/Lean-workbook-proofs|data/lean/goedel_proofs"
+        "internlm/Lean-Github|data/lean/lean_github"
+        "AI-MO/NuminaMath-LEAN|data/lean/numinamath"
     )
 
     for entry in "${HF_DATASETS[@]}"; do
@@ -170,7 +171,7 @@ fi
 echo ""
 echo "=== Step 3: Download miniF2F benchmarks ==="
 
-MINIF2F_ARGS=("--output-dir" "$DATA_DIR" "--version" "all")
+MINIF2F_ARGS=("--output-dir" "$BENCH_DIR" "--version" "all")
 if [ $FORCE -eq 1 ]; then
     MINIF2F_ARGS+=("--force")
 fi
@@ -199,7 +200,7 @@ BENCH_LIBS_TO_BUILD=()
 for pair in "${BENCHMARKS[@]}"; do
     read -r json_file module_name <<< "$pair"
 
-    if [ ! -f "${DATA_DIR}/${json_file}" ]; then
+    if [ ! -f "${BENCH_DIR}/${json_file}" ]; then
         echo "  ${json_file} not found, skipping ${module_name}"
         continue
     fi
@@ -207,7 +208,7 @@ for pair in "${BENCHMARKS[@]}"; do
     # Generate .lean file from JSON
     echo "  Generating ${module_name}.lean from ${json_file}..."
     python "${REPO_ROOT}/python/data/generate_benchmark_lean.py" \
-        --input "${DATA_DIR}/${json_file}" \
+        --input "${BENCH_DIR}/${json_file}" \
         --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
         --module-name "${module_name}"
 
@@ -320,28 +321,28 @@ check_lean_file() {
 
 # HF datasets (required unless --skip-datasets)
 if [ $SKIP_DATASETS -eq 0 ]; then
-    check_dir "${DATA_DIR}/workbook"       "required" "data/workbook (Lean Workbook)"
-    check_dir "${DATA_DIR}/goedel_proofs"  "required" "data/goedel_proofs (Goedel proofs)"
-    check_dir "${DATA_DIR}/lean_github"    "required" "data/lean_github (LEAN-GitHub)"
-    check_dir "${DATA_DIR}/numinamath"     "required" "data/numinamath (NuminaMath)"
+    check_dir "${LEAN_DIR}/workbook"       "required" "data/lean/workbook (Lean Workbook)"
+    check_dir "${LEAN_DIR}/goedel_proofs"  "required" "data/lean/goedel_proofs (Goedel proofs)"
+    check_dir "${LEAN_DIR}/lean_github"    "required" "data/lean/lean_github (LEAN-GitHub)"
+    check_dir "${LEAN_DIR}/numinamath"     "required" "data/lean/numinamath (NuminaMath)"
 else
     echo "  SKIP  HF datasets (--skip-datasets)"
 fi
 
 # miniF2F v1 (required)
-check_json_theorems "${DATA_DIR}/minif2f_test.json"  1 "required" "minif2f_test.json (v1 test)"
-check_json_theorems "${DATA_DIR}/minif2f_valid.json" 1 "required" "minif2f_valid.json (v1 valid)"
+check_json_theorems "${BENCH_DIR}/minif2f_test.json"  1 "required" "minif2f_test.json (v1 test)"
+check_json_theorems "${BENCH_DIR}/minif2f_valid.json" 1 "required" "minif2f_valid.json (v1 valid)"
 
 # miniF2F v2 — valid splits required, test splits optional
-check_json_theorems "${DATA_DIR}/minif2f_v2s_valid.json" 1 "required" "minif2f_v2s_valid.json (v2s valid)"
-check_json_theorems "${DATA_DIR}/minif2f_v2c_valid.json" 1 "required" "minif2f_v2c_valid.json (v2c valid)"
-check_json_theorems "${DATA_DIR}/minif2f_v2s_test.json"  1 "optional" "minif2f_v2s_test.json (v2s test)"
-check_json_theorems "${DATA_DIR}/minif2f_v2c_test.json"  1 "optional" "minif2f_v2c_test.json (v2c test)"
+check_json_theorems "${BENCH_DIR}/minif2f_v2s_valid.json" 1 "required" "minif2f_v2s_valid.json (v2s valid)"
+check_json_theorems "${BENCH_DIR}/minif2f_v2c_valid.json" 1 "required" "minif2f_v2c_valid.json (v2c valid)"
+check_json_theorems "${BENCH_DIR}/minif2f_v2s_test.json"  1 "optional" "minif2f_v2s_test.json (v2s test)"
+check_json_theorems "${BENCH_DIR}/minif2f_v2c_test.json"  1 "optional" "minif2f_v2c_test.json (v2c test)"
 
 # Benchmark .lean files
 for pair in "${BENCHMARKS[@]}"; do
     read -r json_file module_name <<< "$pair"
-    if [ -f "${DATA_DIR}/${json_file}" ]; then
+    if [ -f "${BENCH_DIR}/${json_file}" ]; then
         check_lean_file "${PANTOGRAPH_DIR}/${module_name}.lean" "${module_name}.lean"
     fi
 done
@@ -359,12 +360,12 @@ echo "  Results: ${PASS} passed, ${FAIL} failed, ${WARN} warnings"
 echo ""
 echo "  Output files:"
 for f in \
-    "${DATA_DIR}/minif2f_test.json" \
-    "${DATA_DIR}/minif2f_valid.json" \
-    "${DATA_DIR}/minif2f_v2s_valid.json" \
-    "${DATA_DIR}/minif2f_v2c_valid.json" \
-    "${DATA_DIR}/minif2f_v2s_test.json" \
-    "${DATA_DIR}/minif2f_v2c_test.json"; do
+    "${BENCH_DIR}/minif2f_test.json" \
+    "${BENCH_DIR}/minif2f_valid.json" \
+    "${BENCH_DIR}/minif2f_v2s_valid.json" \
+    "${BENCH_DIR}/minif2f_v2c_valid.json" \
+    "${BENCH_DIR}/minif2f_v2s_test.json" \
+    "${BENCH_DIR}/minif2f_v2c_test.json"; do
     if [ -f "$f" ]; then
         local_path="${f#"$REPO_ROOT/"}"
         size=$(du -h "$f" 2>/dev/null | cut -f1)

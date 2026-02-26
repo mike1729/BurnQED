@@ -4,15 +4,15 @@ positive/negative proof states for a given model checkpoint.
 
 Usage:
     python python/run_separation_probe.py \
-        --model models/llm/iter_5 \
-        --probe-data data/separation_probe.json \
+        --model data/models/merged/iter_5 \
+        --probe-data data/benchmarks/separation_probe.json \
         --dtype nf4
 
     # With LoRA adapter (unmerged):
     python python/run_separation_probe.py \
-        --model models/llm/iter_4 \
-        --adapter checkpoints/llm/iter_5 \
-        --probe-data data/separation_probe.json
+        --model data/models/merged/iter_4 \
+        --adapter data/checkpoints/lora/iter_5 \
+        --probe-data data/benchmarks/separation_probe.json
 """
 
 import argparse

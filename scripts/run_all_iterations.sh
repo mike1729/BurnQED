@@ -18,6 +18,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/scripts/_lib.sh"
 MAX_ITER=${MAX_ITER:-4}
 SKIP_BASELINE=${SKIP_BASELINE:-0}
 export CONCURRENCY="${CONCURRENCY:-6}"
@@ -25,7 +27,7 @@ export NUM_WORKERS="${NUM_WORKERS:-6}"
 export MAX_THEOREMS="${MAX_THEOREMS:-2000}"
 export EBM_STEPS="${EBM_STEPS:-2000}"
 
-mkdir -p "${REPO_ROOT}/logs"
+mkdir -p "$LOG_DIR"
 
 echo "================================================================"
 echo "  BurnQED Expert Iteration Experiment"
@@ -40,7 +42,7 @@ echo "================================================================"
 if [ "$SKIP_BASELINE" -eq 0 ]; then
     echo ""
     echo ">>> Phase B: Running baseline evaluation..."
-    LOG_FILE="${REPO_ROOT}/logs/baseline.log"
+    LOG_FILE="${LOG_DIR}/baseline.log"
 
     if bash "${REPO_ROOT}/scripts/run_baseline.sh" 2>&1 | tee "$LOG_FILE"; then
         echo ">>> Phase B completed successfully."
@@ -56,7 +58,7 @@ fi
 
 # ── Phase C-E: Expert Iterations ─────────────────────────────────────────
 for i in $(seq 0 "$MAX_ITER"); do
-    LOG_FILE="${REPO_ROOT}/logs/iter_${i}.log"
+    LOG_FILE="${LOG_DIR}/iter_${i}.log"
 
     echo ""
     echo ">>> Starting iteration ${i} (log: ${LOG_FILE})"
@@ -78,8 +80,7 @@ echo "  Phase F: Final Cross-Iteration Comparison"
 echo "================================================================"
 
 PROVER="cargo run --release -p prover-core --"
-EVAL_DIR="${REPO_ROOT}/eval_results"
-BASELINES_DIR="${REPO_ROOT}/baselines"
+BASELINES_DIR="${EVAL_DIR}/baselines"
 
 # F1. Full cross-iteration comparison (including baseline if available)
 COMPARE_ARGS=()
@@ -109,7 +110,7 @@ if [ -f "$LAST_ITER_EVAL" ] && [ -f "$LAST_ITER_NO_EBM" ]; then
 fi
 
 # F2b. Baseline EBM artifact note
-BASELINE_EBM="${REPO_ROOT}/checkpoints/ebm/baseline"
+BASELINE_EBM="${EBM_CKPT_DIR}/baseline"
 if [ -d "$BASELINE_EBM" ] && [ -f "${BASELINE_EBM}/final.mpk" ]; then
     echo ""
     echo "  Baseline EBM: checkpoints/ebm/baseline/"
@@ -125,21 +126,21 @@ echo "  Iteration  │ EBM │ Results File"
 echo "  ───────────┼─────┼─────────────────────"
 
 if [ -f "${BASELINES_DIR}/raw_minif2f.json" ]; then
-    echo "  Raw base   │ No  │ baselines/raw_minif2f.json"
+    echo "  Raw base   │ No  │ data/evals/baselines/raw_minif2f.json"
 fi
 if [ -d "$BASELINE_EBM" ] && [ -f "${BASELINE_EBM}/final.mpk" ]; then
-    echo "  Baseline   │ Yes │ checkpoints/ebm/baseline/"
+    echo "  Baseline   │ Yes │ data/checkpoints/ebm/baseline/"
 fi
 for i in $(seq 0 "$MAX_ITER"); do
     if [ -f "${EVAL_DIR}/iter_${i}.json" ]; then
         if [ "$i" -eq 0 ]; then
-            echo "  Iter ${i}     │ No  │ eval_results/iter_${i}.json"
+            echo "  Iter ${i}     │ No  │ data/evals/iter_${i}.json"
         else
-            echo "  Iter ${i}     │ Yes │ eval_results/iter_${i}.json"
+            echo "  Iter ${i}     │ Yes │ data/evals/iter_${i}.json"
         fi
     fi
     if [ -f "${EVAL_DIR}/iter_${i}_no_ebm.json" ]; then
-        echo "  Iter ${i} abl │ No  │ eval_results/iter_${i}_no_ebm.json"
+        echo "  Iter ${i} abl │ No  │ data/evals/iter_${i}_no_ebm.json"
     fi
 done
 
@@ -147,7 +148,7 @@ done
 echo ""
 echo "  Artifacts:"
 echo "  ─────────"
-for d in baselines eval_results trajectories checkpoints/llm checkpoints/ebm models/llm; do
+for d in data/evals data/trajectories data/checkpoints/lora data/checkpoints/ebm data/models/merged; do
     full_path="${REPO_ROOT}/${d}"
     if [ -d "$full_path" ]; then
         count=$(find "$full_path" -maxdepth 1 -type f 2>/dev/null | wc -l)

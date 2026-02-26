@@ -122,15 +122,15 @@ async fn test_mock_pipeline_unproved_theorem() {
 /// Load test_theorems.json and verify it has the expected theorems.
 #[test]
 fn test_load_test_theorems() {
-    // Find data/test_theorems.json relative to workspace root
+    // Find data/benchmarks/test_theorems.json relative to workspace root
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let workspace_root = std::path::Path::new(manifest_dir)
         .parent()
         .unwrap()
         .parent()
         .unwrap();
-    let json_path = workspace_root.join("data").join("test_theorems.json");
-    assert!(json_path.exists(), "data/test_theorems.json not found at {}", json_path.display());
+    let json_path = workspace_root.join("data").join("benchmarks").join("test_theorems.json");
+    assert!(json_path.exists(), "data/benchmarks/test_theorems.json not found at {}", json_path.display());
 
     let index = TheoremIndex::from_json(&json_path).unwrap();
     assert!(index.len() >= 10, "Expected at least 10 theorems, got {}", index.len());

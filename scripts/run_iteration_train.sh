@@ -27,43 +27,39 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck disable=SC1091
 source "${REPO_ROOT}/scripts/_lib.sh"
 LLM_BASE="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
-LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
-TRAJ_DIR="${REPO_ROOT}/trajectories"
-CKPT_DIR="${REPO_ROOT}/checkpoints/llm"
-TRAIN_DATA="${REPO_ROOT}/data/sft_train.jsonl"
-VAL_DATA="${REPO_ROOT}/data/sft_val.jsonl"
-EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
+LLM_DIR="${MERGED_MODEL_DIR}/iter_${ITER}"
+TRAIN_DATA="${SFT_DIR}/train.jsonl"
+VAL_DATA="${SFT_DIR}/val.jsonl"
+EBM_DIR="${EBM_CKPT_DIR}/iter_${ITER}"
 
 # Pre/post eval model: iter 0 uses base HF model, iter N uses previous iter's export
 if [ "$ITER" -eq 0 ]; then
     PRE_MODEL="$LLM_BASE"
 else
-    PRE_MODEL="${REPO_ROOT}/models/llm/iter_${PREV}"
+    PRE_MODEL="${MERGED_MODEL_DIR}/iter_${PREV}"
 fi
 
 # Eval configuration
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
-EVAL_DIR="${REPO_ROOT}/eval_results"
+# EVAL_DIR already set by _lib.sh
 EVAL_BUDGET="${EVAL_BUDGET:-300}"
 EVAL_MAX_THEOREMS_TRAIN="${EVAL_MAX_THEOREMS_TRAIN:-100}"
 CONCURRENCY="${CONCURRENCY:-5}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
-TRAIN_EVAL_THEOREMS="${REPO_ROOT}/data/train_eval_theorems.json"
-MINIF2F="${REPO_ROOT}/data/minif2f_v2s_test.json"
+TRAIN_EVAL_THEOREMS="${BENCH_DIR}/train_eval_theorems.json"
+MINIF2F="${BENCH_DIR}/minif2f_v2s_test.json"
 MINIF2F_IMPORT="BenchMinIF2FV2STest"  # olean lib matching MINIF2F data file
 MINIF2F_CONFIG="${REPO_ROOT}/configs/search_minif2f.toml"
 SEARCH_CONFIG="${REPO_ROOT}/configs/search.toml"
 # Default: always run separation probe during fine-tuning
-PROBE_DATA="${PROBE_DATA:-${REPO_ROOT}/data/separation_probe.json}"
+PROBE_DATA="${PROBE_DATA:-${BENCH_DIR}/separation_probe.json}"
 export PROBE_DATA
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
 START_STEP="${START_STEP:-0}"
 
-mkdir -p "$CKPT_DIR" "$LLM_DIR" "$EVAL_DIR"
-LOG_DIR="${REPO_ROOT}/logs"
-mkdir -p "$LOG_DIR"
+mkdir -p "$LORA_DIR" "$LLM_DIR" "$EVAL_DIR" "$LOG_DIR"
 
 echo "================================================================"
 echo "  Expert Iteration ${ITER} — Training"
@@ -71,7 +67,7 @@ echo "================================================================"
 echo "  LLM base:       ${LLM_BASE}"
 echo "  Pre-train model: ${PRE_MODEL}"
 echo "  LLM output:     ${LLM_DIR}"
-echo "  Checkpoint dir:  ${CKPT_DIR}"
+echo "  Checkpoint dir:  ${LORA_DIR}"
 echo "  Train data:      ${TRAIN_DATA}"
 echo "  Eval theorems:   ${TRAIN_EVAL_THEOREMS}"
 echo "  Eval budget:     ${EVAL_BUDGET}"
@@ -132,7 +128,7 @@ if [ "$START_STEP" -le 1 ]; then
     echo "  Logging to: ${STEP_LOG}"
     run_logged "$STEP_LOG" python3 \
         ${REPO_ROOT}/python/training/export_llm.py \
-        --checkpoint ${CKPT_DIR}/iter_${ITER} \
+        --checkpoint ${LORA_DIR}/iter_${ITER} \
         --base-model $LLM_BASE \
         --output $LLM_DIR \
         --verify
@@ -287,7 +283,7 @@ fi
 echo ""
 echo "================================================================"
 echo "  Training complete!"
-echo "  LoRA checkpoint: ${CKPT_DIR}/iter_${ITER}"
+echo "  LoRA checkpoint: ${LORA_DIR}/iter_${ITER}"
 echo "  Merged model:    ${LLM_DIR}"
 if [ -f "${EVAL_DIR}/iter_${ITER}_pre_train.json" ]; then
     echo "  Pre-train eval:  ${EVAL_DIR}/iter_${ITER}_pre_train.json"

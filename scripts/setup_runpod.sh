@@ -14,7 +14,7 @@
 #   It mounts at /workspace/ (or /runpod-volume/ in some templates).
 #   The script auto-detects /workspace/ as PERSIST_DIR if present.
 #
-#   Pre-place model weights at /workspace/models/deepseek-prover-v2-7b/
+#   Pre-place model weights at /workspace/data/models/base/deepseek-prover-v2-7b/
 #   to avoid re-downloading on pod restarts.
 #
 # Spot Instances:
@@ -74,7 +74,8 @@ if [ -n "$PERSIST_DIR" ]; then
         mkdir -p "$PERSIST_DIR"
     fi
 
-    PERSIST_DIRS=(models trajectories checkpoints baselines eval_results data logs)
+    # All artifacts live under data/ in the new layout
+    PERSIST_DIRS=(data)
 
     for dir in "${PERSIST_DIRS[@]}"; do
         persist_path="${PERSIST_DIR}/${dir}"
@@ -125,7 +126,7 @@ if [ -n "$PERSIST_DIR" ]; then
         echo "  ~/.cache/huggingface → linked (new)"
     fi
 
-    MODEL_CHECK="${PERSIST_DIR}/models/deepseek-prover-v2-7b"
+    MODEL_CHECK="${PERSIST_DIR}/data/models/base/deepseek-prover-v2-7b"
     if [ -d "$MODEL_CHECK" ] && [ -n "$(ls -A "$MODEL_CHECK"/*.safetensors 2>/dev/null)" ]; then
         echo ""
         echo "  Model weights found at ${MODEL_CHECK}"
@@ -254,14 +255,14 @@ BENCHMARKS=(
 HAS_BENCHMARKS=0
 for pair in "${BENCHMARKS[@]}"; do
     read -r json_file _ <<< "$pair"
-    if [ -f "${REPO_ROOT}/data/${json_file}" ]; then
+    if [ -f "${REPO_ROOT}/data/benchmarks/${json_file}" ]; then
         HAS_BENCHMARKS=1
         break
     fi
 done
 
 if [ "$HAS_BENCHMARKS" -eq 0 ]; then
-    echo "No miniF2F JSON files found in data/ — skipping."
+    echo "No miniF2F JSON files found in data/benchmarks/ — skipping."
     echo "Run ./scripts/prepare_data.sh first, then re-run this step."
 else
     BENCH_LIBS_TO_BUILD=()
@@ -269,7 +270,7 @@ else
     for pair in "${BENCHMARKS[@]}"; do
         read -r json_file module_name <<< "$pair"
 
-        if [ ! -f "${REPO_ROOT}/data/${json_file}" ]; then
+        if [ ! -f "${REPO_ROOT}/data/benchmarks/${json_file}" ]; then
             echo "  ${json_file} not found, skipping ${module_name}"
             continue
         fi
@@ -277,7 +278,7 @@ else
         # Generate .lean file from JSON
         echo "  Generating ${module_name}.lean from ${json_file}..."
         python3 "${REPO_ROOT}/python/data/generate_benchmark_lean.py" \
-            --input "${REPO_ROOT}/data/${json_file}" \
+            --input "${REPO_ROOT}/data/benchmarks/${json_file}" \
             --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
             --module-name "${module_name}"
 
@@ -309,7 +310,7 @@ cargo build --release -p prover-core
 # ── Step 9: Verify model weights ──────────────────────────────────────────
 echo ""
 echo "=== Step 9: Model weights ==="
-MODEL_DIR="${REPO_ROOT}/models/deepseek-prover-v2-7b"
+MODEL_DIR="${REPO_ROOT}/data/models/base/deepseek-prover-v2-7b"
 if [ -d "$MODEL_DIR" ] && [ -n "$(ls -A "$MODEL_DIR"/*.safetensors 2>/dev/null)" ]; then
     echo "Model weights found at ${MODEL_DIR}"
 else

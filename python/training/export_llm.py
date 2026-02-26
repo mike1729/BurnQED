@@ -10,13 +10,13 @@ The output directory contains everything needed by TacticGenerator::load():
 
 Usage:
     python python/training/export_llm.py \
-        --checkpoint checkpoints/llm/iter_0 \
-        --output models/llm/iter_0
+        --checkpoint data/checkpoints/lora/iter_0 \
+        --output data/models/merged/iter_0
 
     # Verify the merged model
     python python/training/export_llm.py \
-        --checkpoint checkpoints/llm/iter_0 \
-        --output models/llm/iter_0 \
+        --checkpoint data/checkpoints/lora/iter_0 \
+        --output data/models/merged/iter_0 \
         --verify
 """
 

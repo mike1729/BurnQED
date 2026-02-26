@@ -13,11 +13,12 @@ set -euo pipefail
 ITER=${1:?"Usage: ./scripts/resume_search.sh <iteration_number>"}
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TRAJ_DIR="${REPO_ROOT}/trajectories"
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/scripts/_lib.sh"
 TRAJ_OUTPUT="${TRAJ_DIR}/iter_${ITER}.parquet"
-LLM_DIR="${REPO_ROOT}/models/llm/iter_${ITER}"
-EBM_DIR="${REPO_ROOT}/checkpoints/ebm/iter_${ITER}"
-THEOREM_INDEX="${REPO_ROOT}/data/theorem_index.json"
+LLM_DIR="${MERGED_MODEL_DIR}/iter_${ITER}"
+EBM_DIR="${EBM_CKPT_DIR}/iter_${ITER}"
+THEOREM_INDEX="${BENCH_DIR}/theorem_index.json"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"

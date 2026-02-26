@@ -11,17 +11,17 @@ Usage:
     # Iteration 0: train on competition tactic pairs
     accelerate launch python/training/train_llm.py \
         --model-name deepseek-ai/DeepSeek-Prover-V2-7B \
-        --data data/sft_train.jsonl \
-        --val-data data/sft_val.jsonl \
-        --output checkpoints/llm/iter_0
+        --data data/sft/train.jsonl \
+        --val-data data/sft/val.jsonl \
+        --output data/checkpoints/lora/iter_0
 
     # Iteration N>0: add trajectory data from previous iterations
     accelerate launch python/training/train_llm.py \
         --model-name deepseek-ai/DeepSeek-Prover-V2-7B \
-        --data data/sft_train.jsonl \
-        --extra-data trajectories/iter_*.parquet \
-        --base checkpoints/llm/iter_0 \
-        --output checkpoints/llm/iter_1 \
+        --data data/sft/train.jsonl \
+        --extra-data data/trajectories/iter_*.parquet \
+        --base data/checkpoints/lora/iter_0 \
+        --output data/checkpoints/lora/iter_1 \
         --epochs 1 --lr 1e-4
 """
 

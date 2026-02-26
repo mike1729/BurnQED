@@ -10,8 +10,8 @@ Two endpoints:
   GET  /health  — Returns 200
 
 Usage:
-  python python/encode_server.py --model-path models/deepseek-prover-v2-7b
-  python python/encode_server.py --model-path models/llm/iter_3 --port 30001
+  python python/encode_server.py --model-path data/models/base/deepseek-prover-v2-7b
+  python python/encode_server.py --model-path data/models/merged/iter_3 --port 30001
 
 Environment variables (override CLI args):
   ENCODE_PORT   — Server port (default: 30001)
@@ -312,7 +312,7 @@ def parse_args():
         "--save-quantized",
         type=str,
         default=None,
-        help="Save quantized model to this directory (e.g. models/llm/iter_4_nf4). "
+        help="Save quantized model to this directory (e.g. data/models/merged/iter_4_nf4). "
              "Subsequent loads from this path are faster (~10s vs ~70s).",
     )
     return parser.parse_args()

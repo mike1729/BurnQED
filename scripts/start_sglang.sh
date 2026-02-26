@@ -11,7 +11,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MODEL_PATH="${1:-${REPO_ROOT}/models/deepseek-prover-v2-7b}"
+MODEL_PATH="${1:-${REPO_ROOT}/data/models/base/deepseek-prover-v2-7b}"
 PORT="${PORT:-30000}"
 TP="${TP:-1}"
 
