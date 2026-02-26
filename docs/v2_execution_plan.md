@@ -25,29 +25,14 @@
 This is the highest-risk task. If versions are incompatible, the entire data plan changes.
 
 ```
-Your LeanDojo setup:     Lean ??? / Mathlib ???
-Lean Workbook:           Lean v4.8.0-rc1 / Mathlib v4.8.0-rc1
-NuminaMath-LEAN:         Lean ??? (check HF card)
-Goedel-Prover proofs:    Lean v4.9 (Phase M migrates to 4.26)
+Our Pantograph setup:    Lean v4.26.0 / Mathlib v4.26.0
+Lean Workbook:           Lean v4.8.0-rc1 / Mathlib v4.8.0-rc1  (18 minor versions behind)
+NuminaMath-LEAN:         Lean v4.15.0 / Mathlib v4.15.0         (11 minor versions behind)
+Goedel-Prover proofs:    Lean v4.9                               (17 minor versions behind; Phase M migrates to 4.26)
+LEAN-GitHub:             Mixed (pre-traced strings, version-agnostic for SFT)
 ```
 
-Steps:
-1. Check your current LeanDojo Lean/Mathlib version: `lean --version` in your project
-2. Download Lean Workbook repo, inspect `lean-toolchain` and `lakefile.lean`
-3. Download NuminaMath-LEAN, check which Lean version its statements compile against
-4. If mismatch: set up a separate conda env with the correct Lean version for tracing
-
-**Decision point:**
-```
-IF versions match within one minor version:
-    → Trace directly, minor fixups expected
-IF major mismatch (e.g., v4.3 vs v4.8):
-    → Set up parallel Lean installation for tracing only
-    → Budget an extra half-day
-IF Workbook proofs simply won't trace:
-    → Fall back to NuminaMath-LEAN only
-    → Or use Goedel-Prover-V2's data which may be on a newer Lean
-```
+**COMPLETED.** Major version mismatch confirmed (v4.8–4.15 vs our v4.26). Decision: Phase M migrates Goedel proofs to 4.26 before tracing. LEAN-GitHub pre-traced pairs bypass version issues entirely. NuminaMath (v4.15, closest) deferred to Phase 2. Primary risk: Mathlib lemma renames across 11-18 minor versions. See `docs/datasets.md` sections 3-4 for full compatibility matrix and port status research.
 
 #### Task 0.2: Archive old iterations (1h)
 
