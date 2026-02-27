@@ -166,6 +166,8 @@ struct SamplingParams {
     top_p: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     n: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
 }
 
 
@@ -221,6 +223,7 @@ impl SglangClient {
                 temperature: Some(0.0),
                 top_p: None,
                 n: None,
+                stop: None,
             },
             return_logprob: false,
             return_hidden_states: true,
@@ -276,6 +279,7 @@ impl SglangClient {
                     temperature: Some(self.config.temperature),
                     top_p: Some(self.config.top_p),
                     n: None,
+                    stop: Some(vec!["```".to_string(), "\n\n".to_string()]),
                 },
                 return_logprob: true,
                 return_hidden_states: false,
@@ -407,6 +411,7 @@ impl SglangClient {
                 temperature: Some(self.config.temperature),
                 top_p: Some(self.config.top_p),
                 n: None,
+                stop: Some(vec!["```".to_string(), "\n\n".to_string()]),
             },
             return_logprob: true,
             return_hidden_states: false,
@@ -691,6 +696,7 @@ impl SglangClient {
                 temperature: Some(0.0),
                 top_p: None,
                 n: None,
+                stop: None,
             },
             return_logprob: false,
             return_hidden_states: true,
@@ -812,15 +818,23 @@ impl SglangClient {
     /// Format a proof state into the full chat prompt for SGLang.
     ///
     /// Uses DeepSeek special token markers as text to produce the chat-formatted
-    /// prompt matching the model's training data.
+    /// prompt matching the model's training data. The assistant prefix includes
+    /// the code fence + tactic state echo + `example := by` so the model is
+    /// positioned inside a tactic block and only generates the next tactic.
     fn format_prompt(&self, proof_state: &str) -> String {
         let message = format_tactic_message(proof_state);
-        // DeepSeek-Prover-V2 chat template:
-        // <｜begin▁of▁sentence｜><｜User｜>{message}<｜Assistant｜>
+        // DeepSeek-Prover-V2 chat template with assistant prefix:
+        // The assistant echoes the tactic state inside a code fence, then starts
+        // an `example := by` block. The model continues with just the tactic.
         format!(
             "<\u{ff5c}begin\u{2581}of\u{2581}sentence\u{ff5c}>\
              <\u{ff5c}User\u{ff5c}>{message}\
-             <\u{ff5c}Assistant\u{ff5c}>"
+             <\u{ff5c}Assistant\u{ff5c}>\
+             ```lean4\n\
+             /- tactic state:\n\
+             {proof_state}\n\
+             -/\n\
+             example := by\n  "
         )
     }
 
@@ -913,6 +927,7 @@ impl SglangClient {
                 temperature: Some(0.0),
                 top_p: None,
                 n: None,
+                stop: None,
             },
             return_logprob: false,
             return_hidden_states: false,
@@ -964,6 +979,7 @@ mod tests {
             temperature: Some(0.6),
             top_p: Some(0.95),
             n: Some(4),
+            stop: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["max_new_tokens"], 128);
@@ -978,6 +994,7 @@ mod tests {
             temperature: None,
             top_p: None,
             n: None,
+            stop: None,
         };
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["max_new_tokens"], 1);
@@ -995,6 +1012,7 @@ mod tests {
                 temperature: None,
                 top_p: None,
                 n: None,
+                stop: None,
             },
             return_logprob: false,
             return_hidden_states: false,
@@ -1014,6 +1032,7 @@ mod tests {
                 temperature: Some(0.0),
                 top_p: None,
                 n: None,
+                stop: None,
             },
             return_logprob: false,
             return_hidden_states: true,
@@ -1095,6 +1114,7 @@ mod tests {
                 temperature: None,
                 top_p: None,
                 n: None,
+                stop: None,
             },
             return_logprob: true,
             return_hidden_states: true,
@@ -1205,6 +1225,7 @@ mod tests {
                 temperature: Some(0.6),
                 top_p: Some(0.95),
                 n: None,
+                stop: None,
             },
             return_logprob: true,
             return_hidden_states: false,

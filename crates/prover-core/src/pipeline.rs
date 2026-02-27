@@ -766,6 +766,21 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     // Run search with progress bar
     let engine = SearchEngine::new(setup.config);
     let mut writer = TrajectoryWriter::new(args.output.clone());
+
+    // When resume_from == output (same file), pre-load existing records so they
+    // aren't lost if the run fails or is interrupted before any new results.
+    if let Some(ref resume_path) = args.resume_from {
+        if resume_path == &args.output {
+            if let Ok(old_records) = TrajectoryReader::read_all(resume_path) {
+                tracing::info!(
+                    count = old_records.len(),
+                    "Pre-loaded existing records into writer (same-file resume)"
+                );
+                writer.record_all(old_records);
+            }
+        }
+    }
+
     let total = theorems_to_search.len() as u32;
     let mut agg = SearchAggregator::default();
 
