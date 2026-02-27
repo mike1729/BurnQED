@@ -20,17 +20,10 @@ pub fn format_tactic_message(proof_state: &str) -> String {
 
 /// Extract the first complete tactic from model output.
 ///
-/// With the `example := by\n  ` prompt prefix, the model generates tactic
-/// code directly. This function:
-/// 1. Strips code fences, leading comments, and focus dots
-/// 2. Uses indentation to find the first complete tactic (may be multi-line)
-/// 3. A new independent tactic starts when a non-empty, non-comment line
-///    returns to the same or lesser indentation as the first tactic line
-///
-/// Examples:
-/// - `"intro h\nexact h"` → `"intro h"` (two independent tactics)
-/// - `"simp [a,\n  b, c]"` → `"simp [a,\n  b, c]"` (one multi-line tactic)
-/// - `"have h := by\n  exact foo\nring"` → `"have h := by\n  exact foo"` (one tactic)
+/// Takes the first line, then continues onto subsequent lines only if
+/// brackets are unclosed (`[`, `(`, `{`). This handles multi-line
+/// `simp [a,\n  b]` while stopping before independent tactics like
+/// `intro h\nexact h`.
 pub fn extract_first_tactic(raw: &str) -> String {
     let text = raw.trim();
     // Strip code fence if present
@@ -66,7 +59,6 @@ pub fn extract_first_tactic(raw: &str) -> String {
         lines[0] = rest;
     } else if first == "·" || first == "·" {
         lines.remove(0);
-        // Re-drop leading empty lines after removing dot
         while let Some(f) = lines.first() {
             if f.trim().is_empty() { lines.remove(0); } else { break; }
         }
@@ -76,33 +68,46 @@ pub fn extract_first_tactic(raw: &str) -> String {
         return String::new();
     }
 
-    // Determine base indentation from first tactic line
-    let base_indent = lines[0].len() - lines[0].trim_start().len();
+    // Take first line, then continue only while brackets are unclosed
+    let mut result = lines[0].trim().to_string();
+    let mut depth: i32 = bracket_depth(&result);
 
-    // Collect lines belonging to the first tactic:
-    // continuation lines are indented more than base, or are comments
-    let mut result_lines = vec![lines[0]];
     for line in &lines[1..] {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            break; // blank line ends the tactic
-        }
-        if trimmed.starts_with("--") || trimmed.starts_with("/-") {
-            // inline comment — include as part of current tactic
-            result_lines.push(line);
-            continue;
-        }
-        let indent = line.len() - line.trim_start().len();
-        if indent > base_indent {
-            // continuation of current tactic
-            result_lines.push(line);
-        } else {
-            // same or lesser indent = new tactic, stop
+        if depth <= 0 {
             break;
         }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            break;
+        }
+        result.push('\n');
+        result.push_str(trimmed);
+        depth += bracket_depth(trimmed);
     }
 
-    result_lines.join("\n").trim().to_string()
+    result.trim().to_string()
+}
+
+/// Count net bracket depth change for a line.
+/// Positive = more opens than closes.
+fn bracket_depth(s: &str) -> i32 {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut prev = '\0';
+    for c in s.chars() {
+        if c == '"' && prev != '\\' {
+            in_string = !in_string;
+        }
+        if !in_string {
+            match c {
+                '[' | '(' | '{' => depth += 1,
+                ']' | ')' | '}' => depth -= 1,
+                _ => {}
+            }
+        }
+        prev = c;
+    }
+    depth
 }
 
 /// Extract all valid tactic lines from model output.
@@ -187,22 +192,21 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_first_tactic_multiline_continuation() {
-        // Multi-line tactic with indented continuation
+    fn test_extract_first_tactic_multiline_bracket() {
+        // Unclosed bracket continues to next line
         let raw = "simp_all [lemma1, lemma2,\n  lemma3, lemma4]";
-        assert_eq!(extract_first_tactic(raw), "simp_all [lemma1, lemma2,\n  lemma3, lemma4]");
+        assert_eq!(extract_first_tactic(raw), "simp_all [lemma1, lemma2,\nlemma3, lemma4]");
     }
 
     #[test]
     fn test_extract_first_tactic_have_by() {
-        // have ... := by includes indented body, stops at next tactic
+        // have with no unclosed bracket — first line only
         let raw = "have h := by\n  exact foo\nring";
-        assert_eq!(extract_first_tactic(raw), "have h := by\n  exact foo");
+        assert_eq!(extract_first_tactic(raw), "have h := by");
     }
 
     #[test]
     fn test_extract_first_tactic_two_independent() {
-        // Two independent tactics at same indent — take only first
         let raw = "intro h\nexact h";
         assert_eq!(extract_first_tactic(raw), "intro h");
     }
@@ -220,10 +224,24 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_first_tactic_induction_block() {
-        // induction with match arms — all indented deeper
-        let raw = "induction n with\n  | zero => rfl\n  | succ n ih => simp";
-        assert_eq!(extract_first_tactic(raw), "induction n with\n  | zero => rfl\n  | succ n ih => simp");
+    fn test_extract_first_tactic_nested_brackets() {
+        // Multiple bracket types
+        let raw = "rw [show (a + b) = c from\n  by ring]";
+        assert_eq!(extract_first_tactic(raw), "rw [show (a + b) = c from\nby ring]");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_closed_bracket_single_line() {
+        // Brackets closed on same line — no continuation
+        let raw = "simp [lemma1, lemma2]\nexact h";
+        assert_eq!(extract_first_tactic(raw), "simp [lemma1, lemma2]");
+    }
+
+    #[test]
+    fn test_extract_first_tactic_intro_then_multi() {
+        // Real pattern: intro then continuation tactics — take only intro
+        let raw = "intro z h₀\n   subst h₀\n   norm_num";
+        assert_eq!(extract_first_tactic(raw), "intro z h₀");
     }
 
     #[test]
