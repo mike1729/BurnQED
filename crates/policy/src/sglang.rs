@@ -315,9 +315,11 @@ impl SglangClient {
                         .to_string();
 
                     // Sum logprobs from meta_info.output_token_logprobs: [[lp, id, ...], ...]
-                    let log_prob = val.get("meta_info")
+                    let logprobs_array = val.get("meta_info")
                         .and_then(|m| m.get("output_token_logprobs"))
-                        .and_then(|lps| lps.as_array())
+                        .and_then(|lps| lps.as_array());
+                    let num_output_tokens = logprobs_array.map(|a| a.len()).unwrap_or(0);
+                    let log_prob = logprobs_array
                         .map(|lps| {
                             lps.iter()
                                 .filter_map(|entry| entry.as_array()?.first()?.as_f64())
@@ -325,6 +327,11 @@ impl SglangClient {
                         })
                         .unwrap_or(0.0);
 
+                    tracing::trace!(
+                        candidate = i,
+                        tokens = num_output_tokens,
+                        "Generated response"
+                    );
                     responses.push((text, log_prob));
                 }
                 Err(e) => {
