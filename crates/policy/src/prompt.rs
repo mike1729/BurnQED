@@ -270,7 +270,7 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
                     || next_trimmed.starts_with('|')
                     || next_trimmed.starts_with('_')
                 {
-                    body_lines.push(next_trimmed.to_string());
+                    body_lines.push(lines[i].to_string());
                     i += 1;
                 } else {
                     break;
@@ -341,12 +341,31 @@ fn is_block_opener(line: &str) -> bool {
         || t == "by"
 }
 
-/// Build a tactic string from an opener line and its body lines.
+/// Build a tactic string from an opener line and its raw (untrimmed) body lines.
 ///
 /// For `by` blocks with a single-line body, collapse inline:
-///   `have h := by` + `[nlinarith]` → `have h := by nlinarith`
-/// For multi-line bodies, indent with 2 spaces so Lean parses the block:
-///   `have h := by` + `[nlinarith, exact h]` → `have h := by\n  nlinarith\n  exact h`
+///   `have h := by` + `    nlinarith` → `have h := by nlinarith`
+/// For multi-line bodies, preserve relative indentation so nested blocks
+/// survive Lean's indentation-sensitive parser:
+///   ```text
+///   have h := by       ← opener
+///       rw [foo]       ← raw body, indent 8
+///       simp           ← raw body, indent 8
+///   →  have h := by
+///        rw [foo]      ← 2 + (8-8) = 2 spaces
+///        simp          ← 2 + (8-8) = 2 spaces
+///   ```
+/// Nested blocks get deeper relative indent preserved:
+///   ```text
+///   have h := by             ← opener
+///       have h₂ := by       ← raw body, indent 8 (base)
+///           nlinarith        ← raw body, indent 12
+///       exact h₂             ← raw body, indent 8
+///   →  have h := by
+///        have h₂ := by      ← 2 + 0 = 2 spaces
+///            nlinarith       ← 2 + 4 = 6 spaces
+///        exact h₂            ← 2 + 0 = 2 spaces
+///   ```
 fn build_block_tactic(opener: &str, body: &[String]) -> String {
     if body.is_empty() {
         return opener.to_string();
@@ -359,15 +378,30 @@ fn build_block_tactic(opener: &str, body: &[String]) -> String {
 
     if is_by_block && body.len() == 1 {
         // Single-line by body → collapse inline
-        return format!("{} {}", opener, body[0]);
+        return format!("{} {}", opener, body[0].trim());
     }
 
-    // Multi-line body → indent each line under the opener
+    // Find the base indentation from the first non-empty body line
+    let base_indent = body
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| indent_of(l))
+        .unwrap_or(0);
+
+    // Multi-line body → preserve relative indentation
     let mut result = opener.to_string();
     for line in body {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let current_indent = indent_of(line);
+        let relative = current_indent.saturating_sub(base_indent);
         result.push('\n');
-        result.push_str("  ");
-        result.push_str(line);
+        // 2-space base indent + relative nesting from original source
+        for _ in 0..(2 + relative) {
+            result.push(' ');
+        }
+        result.push_str(line.trim());
     }
     result
 }
@@ -760,6 +794,39 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], "have h := by\n  rw [foo]\n  simp");
         assert_eq!(result[1], "exact h");
+    }
+
+    #[test]
+    fn test_structured_nested_by_blocks() {
+        // Nested by blocks must preserve relative indentation.
+        // The model generates valid Lean with deeper indent for inner blocks:
+        //   have h₃ : u = 34 := by          (indent 4, opener)
+        //     have h₃₁ : 34 ∈ S := by       (indent 6, body base)
+        //       rw [h₀]                      (indent 8, nested)
+        //       norm_num [Nat.ModEq]          (indent 8, nested)
+        //     exact h₁.unique h₃₁            (indent 6, body)
+        let raw = "    have h\u{2083} : u = 34 := by\n      have h\u{2083}\u{2081} : 34 \u{2208} S := by\n        rw [h\u{2080}]\n        norm_num [Nat.ModEq]\n      exact h\u{2081}.unique h\u{2083}\u{2082}\n    simp";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 2);
+        // Inner nesting preserved: h₃₁ at 2 spaces, rw/norm_num at 4 spaces
+        assert_eq!(
+            result[0],
+            "have h\u{2083} : u = 34 := by\n  have h\u{2083}\u{2081} : 34 \u{2208} S := by\n    rw [h\u{2080}]\n    norm_num [Nat.ModEq]\n  exact h\u{2081}.unique h\u{2083}\u{2082}"
+        );
+        assert_eq!(result[1], "simp");
+    }
+
+    #[test]
+    fn test_structured_deeply_nested_by() {
+        // Three levels of nesting
+        let raw = "  have a := by\n    have b := by\n      have c := by\n        omega\n      exact c\n    exact b\n  exact a";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result[0],
+            "have a := by\n  have b := by\n    have c := by\n      omega\n    exact c\n  exact b"
+        );
+        assert_eq!(result[1], "exact a");
     }
 
     #[test]
