@@ -17,9 +17,9 @@ probe_tactics = []
 # Hybrid whole-proof search
 hybrid_num_proofs = 16
 hybrid_expand_proofs = 8
-hybrid_max_rounds = 30
+hybrid_max_rounds = 60
 hybrid_max_tokens = 1024
-hybrid_budget = 256
+hybrid_budget = 512
 
 [lean_pool]
 num_workers = 8               # Matched to concurrency default

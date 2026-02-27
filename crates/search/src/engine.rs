@@ -258,10 +258,11 @@ impl SearchEngine {
             } else {
                 None
             };
-            let root_score = trie.frontier_score(0, ebm, arena[0].llm_log_prob, None, self.config.alpha, self.config.exploration_c);
+            let raw_score = trie.frontier_score(0, ebm, arena[0].llm_log_prob, None, self.config.alpha, self.config.exploration_c);
+            let goal_penalty = self.config.goal_count_penalty * (arena[0].goals.len() as f64 - 1.0).max(0.0);
             frontier.push(ScoredNode {
                 node_index: 0,
-                score: OrderedFloat(root_score),
+                score: OrderedFloat(raw_score - goal_penalty),
             });
         }
 
@@ -671,10 +672,11 @@ impl SearchEngine {
                     } else {
                         None
                     };
-                    let score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
+                    let raw_score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
+                    let goal_penalty = self.config.goal_count_penalty * (node.goals.len() as f64 - 1.0).max(0.0);
                     frontier.push(ScoredNode {
                         node_index: idx,
-                        score: OrderedFloat(score),
+                        score: OrderedFloat(raw_score - goal_penalty),
                     });
                 }
             }
@@ -689,7 +691,9 @@ impl SearchEngine {
                     } else {
                         None
                     };
-                    let score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
+                    let raw_score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
+                    let goal_penalty = self.config.goal_count_penalty * (node.goals.len() as f64 - 1.0).max(0.0);
+                    let score = raw_score - goal_penalty;
                     frontier.push(ScoredNode {
                         node_index: idx,
                         score: OrderedFloat(score),

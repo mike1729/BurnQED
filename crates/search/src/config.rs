@@ -75,6 +75,13 @@ pub struct SearchConfig {
     /// 0 = disabled. Default: 3.
     #[serde(default = "default_max_goal_unchanged")]
     pub max_goal_unchanged_steps: u32,
+
+    /// Penalty per extra open goal beyond the first in frontier scoring.
+    /// Deprioritizes nodes with many subgoals (from `have h : T` decomposition)
+    /// in favor of nodes closer to a complete proof.
+    /// Score adjustment: `-penalty * max(0, n_goals - 1)`. Default: 0.3.
+    #[serde(default = "default_goal_count_penalty")]
+    pub goal_count_penalty: f64,
 }
 
 fn default_max_nodes() -> u32 {
@@ -125,6 +132,9 @@ fn default_exploration_c() -> f64 {
 }
 fn default_max_goal_unchanged() -> u32 {
     3
+}
+fn default_goal_count_penalty() -> f64 {
+    0.3
 }
 
 impl SearchConfig {
@@ -188,6 +198,7 @@ impl Default for SearchConfig {
             hybrid_budget: default_hybrid_budget(),
             exploration_c: default_exploration_c(),
             max_goal_unchanged_steps: default_max_goal_unchanged(),
+            goal_count_penalty: default_goal_count_penalty(),
         }
     }
 }

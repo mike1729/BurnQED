@@ -172,6 +172,16 @@ fn bracket_depth(line: &str) -> i32 {
 ///
 /// Code fences, comments, and theorem/lemma declarations are stripped.
 pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
+    extract_all_tactics_impl(raw, true)
+}
+
+/// Internal implementation with decomposition control.
+///
+/// When `decompose` is true, typed `have`/`let` blocks with multi-line bodies
+/// are split into a bare declaration + individual body tactics.
+/// When false, all blocks are kept as multi-line strings (for recursive body
+/// extraction — only the outermost block is decomposed).
+fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
     let text = raw.trim_end();
     // Strip code fence if present (preserve indentation of inner lines)
     let text = if text.trim_start().starts_with("```") {
@@ -278,13 +288,14 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
             }
             // Decompose typed have/let blocks with multi-line bodies
             // into a bare declaration (creates subgoal) + individual body tactics.
-            // Multi-line blocks always fail in Pantograph's apply_tactic (0% success);
-            // decomposed single-line tactics succeed at ~81%.
-            if body_lines.len() > 1 {
+            // Only the outermost block is decomposed (decompose=true from public API).
+            // Inner blocks are kept as multi-line strings to reduce goal debt.
+            if decompose && body_lines.len() > 1 {
                 if let Some(stripped) = strip_by_to_bare_have(first_line) {
                     tactics.push(stripped);
                     let body_text = body_lines.join("\n");
-                    let body_tactics = extract_all_tactics_structured(&body_text);
+                    // Recurse with decompose=false: inner blocks stay as multi-line
+                    let body_tactics = extract_all_tactics_impl(&body_text, false);
                     tactics.extend(body_tactics);
                     continue;
                 }
@@ -848,20 +859,16 @@ mod tests {
 
     #[test]
     fn test_structured_nested_by_blocks_decomposed() {
-        // Typed have blocks with multi-line bodies are decomposed into
-        // a bare declaration + individual body tactics.
-        // "have h₃ : u = 34 := by" → "have h₃ : u = 34" + body tactics
+        // Only the outermost typed have is decomposed.
+        // Inner blocks stay as multi-line strings (reduces goal debt).
         let raw = "    have h\u{2083} : u = 34 := by\n      have h\u{2083}\u{2081} : 34 \u{2208} S := by\n        rw [h\u{2080}]\n        norm_num [Nat.ModEq]\n      exact h\u{2081}.unique h\u{2083}\u{2082}\n    simp";
         let result = extract_all_tactics_structured(raw);
-        // Outer and inner typed haves both decomposed recursively
-        assert_eq!(result, vec![
-            "have h\u{2083} : u = 34",
-            "have h\u{2083}\u{2081} : 34 \u{2208} S",
-            "rw [h\u{2080}]",
-            "norm_num [Nat.ModEq]",
-            "exact h\u{2081}.unique h\u{2083}\u{2082}",
-            "simp",
-        ]);
+        // Outer decomposed, inner kept as multi-line block
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], "have h\u{2083} : u = 34");
+        assert_eq!(result[1], "have h\u{2083}\u{2081} : 34 \u{2208} S := by\n  rw [h\u{2080}]\n  norm_num [Nat.ModEq]");
+        assert_eq!(result[2], "exact h\u{2081}.unique h\u{2083}\u{2082}");
+        assert_eq!(result[3], "simp");
     }
 
     #[test]
@@ -936,25 +943,20 @@ mod tests {
 
     #[test]
     fn test_decompose_real_is_least_proof() {
-        // Real model output for the IsLeast problem — this pattern was 100% failing
-        // as a multi-line block. Decomposition makes each step a single-line tactic.
+        // Real model output for the IsLeast problem.
+        // Outer have decomposed, inner blocks kept as multi-line.
         let raw = "  have h\u{2083} : u = 34 := by\n    have h\u{2083}\u{2081} : 34 \u{2208} S := by\n      rw [h\u{2080}]\n      norm_num [Nat.ModEq]\n    have h\u{2083}\u{2082} : IsLeast S 34 := by\n      exact \u{27e8}h\u{2083}\u{2081}, fun x hx => by omega\u{27e9}\n    exact h\u{2081}.unique h\u{2083}\u{2082}\n  exact h\u{2083}";
         let result = extract_all_tactics_structured(raw);
-        // All tactics are single-line
-        for (i, t) in result.iter().enumerate() {
-            assert!(
-                !t.contains('\n'),
-                "tactic {} is multi-line: {:?}", i, t
-            );
-        }
+        // Outer decomposed → bare "have h₃ : u = 34"
         assert_eq!(result[0], "have h\u{2083} : u = 34");
-        assert_eq!(result[1], "have h\u{2083}\u{2081} : 34 \u{2208} S");
-        assert_eq!(result[2], "rw [h\u{2080}]");
-        assert_eq!(result[3], "norm_num [Nat.ModEq]");
-        // Inner single-body have is inlined
-        assert!(result[4].starts_with("have h\u{2083}\u{2082} : IsLeast S 34 := by"));
-        assert_eq!(result[5], "exact h\u{2081}.unique h\u{2083}\u{2082}");
-        assert_eq!(result[6], "exact h\u{2083}");
+        // Inner h₃₁ has multi-line body → kept as multi-line block
+        assert!(result[1].starts_with("have h\u{2083}\u{2081} : 34 \u{2208} S := by"));
+        assert!(result[1].contains("rw [h\u{2080}]"));
+        assert!(result[1].contains("norm_num [Nat.ModEq]"));
+        // Inner h₃₂ has single-line body → inlined
+        assert!(result[2].starts_with("have h\u{2083}\u{2082} : IsLeast S 34 := by"));
+        assert_eq!(result[3], "exact h\u{2081}.unique h\u{2083}\u{2082}");
+        assert_eq!(result[4], "exact h\u{2083}");
     }
 
     #[test]
