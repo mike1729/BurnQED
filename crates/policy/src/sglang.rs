@@ -279,7 +279,7 @@ impl SglangClient {
                     temperature: Some(self.config.temperature),
                     top_p: Some(self.config.top_p),
                     n: None,
-                    stop: Some(vec!["```".to_string(), "\n\n".to_string()]),
+                    stop: Some(vec!["```".to_string(), "\n\n".to_string(), "\n".to_string()]),
                 },
                 return_logprob: true,
                 return_hidden_states: false,
@@ -421,7 +421,7 @@ impl SglangClient {
                 temperature: Some(self.config.temperature),
                 top_p: Some(self.config.top_p),
                 n: None,
-                stop: Some(vec!["```".to_string(), "\n\n".to_string()]),
+                stop: Some(vec!["```".to_string(), "\n\n".to_string(), "\n".to_string()]),
             },
             return_logprob: true,
             return_hidden_states: false,
@@ -838,6 +838,13 @@ impl SglangClient {
     /// prompt matching the model's training data. The assistant prefix includes
     /// the code fence + tactic state echo + `example := by` so the model is
     /// positioned inside a tactic block and only generates the next tactic.
+    ///
+    /// **Stop strings** (`\n`, `\n\n`, `` ``` ``): we force single-line tactic
+    /// generation by stopping at the first newline. This prevents the model from
+    /// emitting multi-step `have ... := by\n  body` chains that our one-tactic-
+    /// per-step search cannot use, at the cost of losing multi-line tactics like
+    /// `simp [a,\n  b]`. If multi-line brackets become important, consider
+    /// removing `\n` from stop and relying on `extract_first_tactic` instead.
     fn format_prompt(&self, proof_state: &str) -> String {
         let message = format_tactic_message(proof_state);
         // DeepSeek-Prover-V2 chat template with assistant prefix:
