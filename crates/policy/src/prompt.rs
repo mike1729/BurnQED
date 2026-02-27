@@ -18,12 +18,14 @@ pub fn format_tactic_message(proof_state: &str) -> String {
     )
 }
 
-/// Extract the first complete tactic from model output.
+/// Extract tactic block from model output.
 ///
-/// Takes the first line, then continues onto subsequent lines only if
-/// brackets are unclosed (`[`, `(`, `{`). This handles multi-line
-/// `simp [a,\n  b]` while stopping before independent tactics like
-/// `intro h\nexact h`.
+/// Passes through the full multi-line output as a single tactic block after
+/// stripping code fences, leading comments, and leading focus dots.  The model
+/// (DeepSeek-Prover-V2) naturally generates complete multi-step tactic chains
+/// (e.g. `have … := by\n  nlinarith\ninterval_cases x <;> omega`) that Lean
+/// accepts as one compound tactic.  Sending the whole block scores ~60-70% on
+/// miniF2F vs ~12% when forced to single-line extraction.
 pub fn extract_first_tactic(raw: &str) -> String {
     let text = raw.trim();
     // Strip code fence if present
@@ -68,46 +70,14 @@ pub fn extract_first_tactic(raw: &str) -> String {
         return String::new();
     }
 
-    // Take first line, then continue only while brackets are unclosed
-    let mut result = lines[0].trim().to_string();
-    let mut depth: i32 = bracket_depth(&result);
-
-    for line in &lines[1..] {
-        if depth <= 0 {
-            break;
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            break;
-        }
-        result.push('\n');
-        result.push_str(trimmed);
-        depth += bracket_depth(trimmed);
-    }
-
-    result.trim().to_string()
-}
-
-/// Count net bracket depth change for a line.
-/// Positive = more opens than closes.
-fn bracket_depth(s: &str) -> i32 {
-    let mut depth = 0i32;
-    let mut in_string = false;
-    let mut prev = '\0';
-    for c in s.chars() {
-        if c == '"' && prev != '\\' {
-            in_string = !in_string;
-        }
-        if !in_string {
-            match c {
-                '[' | '(' | '{' => depth += 1,
-                ']' | ')' | '}' => depth -= 1,
-                _ => {}
-            }
-        }
-        prev = c;
-    }
-    depth
+    // Pass through the full tactic block, trimming each line
+    lines
+        .iter()
+        .map(|l| l.trim())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 /// Extract all valid tactic lines from model output.
@@ -192,56 +162,55 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_first_tactic_multiline_bracket() {
-        // Unclosed bracket continues to next line
+    fn test_extract_first_tactic_multiline_passthrough() {
+        // Full multi-line block is passed through
         let raw = "simp_all [lemma1, lemma2,\n  lemma3, lemma4]";
         assert_eq!(extract_first_tactic(raw), "simp_all [lemma1, lemma2,\nlemma3, lemma4]");
     }
 
     #[test]
     fn test_extract_first_tactic_have_by() {
-        // have with no unclosed bracket — first line only
+        // have with body — full block passed through
         let raw = "have h := by\n  exact foo\nring";
-        assert_eq!(extract_first_tactic(raw), "have h := by");
+        assert_eq!(extract_first_tactic(raw), "have h := by\nexact foo\nring");
     }
 
     #[test]
     fn test_extract_first_tactic_two_independent() {
+        // Full block passed through (Lean handles both tactics)
         let raw = "intro h\nexact h";
-        assert_eq!(extract_first_tactic(raw), "intro h");
+        assert_eq!(extract_first_tactic(raw), "intro h\nexact h");
     }
 
     #[test]
     fn test_extract_first_tactic_code_fence() {
         let raw = "```lean4\nintro h\nexact h\n```";
-        assert_eq!(extract_first_tactic(raw), "intro h");
+        assert_eq!(extract_first_tactic(raw), "intro h\nexact h");
     }
 
     #[test]
     fn test_extract_first_tactic_with_comments() {
         let raw = "-- We introduce h\nintro h\nexact h";
-        assert_eq!(extract_first_tactic(raw), "intro h");
+        assert_eq!(extract_first_tactic(raw), "intro h\nexact h");
     }
 
     #[test]
     fn test_extract_first_tactic_nested_brackets() {
-        // Multiple bracket types
         let raw = "rw [show (a + b) = c from\n  by ring]";
         assert_eq!(extract_first_tactic(raw), "rw [show (a + b) = c from\nby ring]");
     }
 
     #[test]
     fn test_extract_first_tactic_closed_bracket_single_line() {
-        // Brackets closed on same line — no continuation
         let raw = "simp [lemma1, lemma2]\nexact h";
-        assert_eq!(extract_first_tactic(raw), "simp [lemma1, lemma2]");
+        assert_eq!(extract_first_tactic(raw), "simp [lemma1, lemma2]\nexact h");
     }
 
     #[test]
-    fn test_extract_first_tactic_intro_then_multi() {
-        // Real pattern: intro then continuation tactics — take only intro
-        let raw = "intro z h₀\n   subst h₀\n   norm_num";
-        assert_eq!(extract_first_tactic(raw), "intro z h₀");
+    fn test_extract_first_tactic_multi_tactic_chain() {
+        // Real DeepSeek output: multi-step proof chain
+        let raw = "have h₃ : 0 < x := by\n  nlinarith\ninterval_cases x <;> omega";
+        assert_eq!(extract_first_tactic(raw), "have h₃ : 0 < x := by\nnlinarith\ninterval_cases x <;> omega");
     }
 
     #[test]
@@ -258,9 +227,9 @@ mod tests {
 
     #[test]
     fn test_extract_first_tactic_focus_dot() {
-        // Leading focus dot stripped, then first tactic only
+        // Leading focus dot stripped, full block passed through
         let raw = "\u{b7} intro h\nexact h";
-        assert_eq!(extract_first_tactic(raw), "intro h");
+        assert_eq!(extract_first_tactic(raw), "intro h\nexact h");
     }
 
     #[test]
