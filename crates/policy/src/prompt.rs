@@ -102,7 +102,7 @@ pub fn extract_first_tactic(raw: &str) -> String {
         }
     }
 
-    result_lines.join("\n").trim_end().to_string()
+    result_lines.join("\n").trim().to_string()
 }
 
 /// Extract all valid tactic lines from model output.
