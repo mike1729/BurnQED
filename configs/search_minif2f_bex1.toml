@@ -7,16 +7,16 @@ beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
 timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ observed)
-harvest_siblings = true       # Mine sibling states from proof path after finding proof
+harvest_siblings = false # Mine sibling states from proof path after finding proof
 batch_expansion_size = 1      # Pop 1 node — minimize SGLang batch size to reduce gen latency
 batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
 ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
 ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
-probe_tactics = ["ring", "omega", "norm_num", "trivial", "rfl", "tauto", "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left", "right", "ext"]
+probe_tactics = []
 
 [lean_pool]
 num_workers = 8               # Matched to concurrency default
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
-tactic_timeout_secs = 30
+tactic_timeout_secs = 60

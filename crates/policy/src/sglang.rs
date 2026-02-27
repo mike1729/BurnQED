@@ -351,17 +351,20 @@ impl SglangClient {
             let tactic_text = extract_first_tactic(raw_text);
             let log_prob = *log_prob;
 
+            tracing::debug!(
+                candidate = i,
+                raw = %raw_text.chars().take(120).collect::<String>(),
+                extracted = %tactic_text.chars().take(120).collect::<String>(),
+                "Candidate generated"
+            );
+
             if tactic_text.is_empty() {
-                tracing::debug!(
-                    candidate = i,
-                    raw = %raw_text.chars().take(80).collect::<String>(),
-                    "Empty tactic after extraction, skipping"
-                );
                 continue;
             }
 
             // Deduplicate: skip if we already have this tactic text
             if tactics.iter().any(|t: &GeneratedTactic| t.text == tactic_text) {
+                tracing::trace!(candidate = i, tactic = %tactic_text.chars().take(60).collect::<String>(), "Dedup skip");
                 continue;
             }
 
@@ -484,8 +487,15 @@ impl SglangClient {
 
             // Extract, dedup, sort — same logic as generate_candidates()
             let mut tactics = Vec::new();
-            for (raw_text, log_prob) in &responses {
+            for (j, (raw_text, log_prob)) in responses.iter().enumerate() {
                 let tactic_text = extract_first_tactic(raw_text);
+                tracing::debug!(
+                    state = state_idx,
+                    candidate = j,
+                    raw = %raw_text.chars().take(120).collect::<String>(),
+                    extracted = %tactic_text.chars().take(120).collect::<String>(),
+                    "Batch candidate"
+                );
                 if tactic_text.is_empty() {
                     continue;
                 }
