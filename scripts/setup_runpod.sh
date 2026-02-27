@@ -150,12 +150,38 @@ if command -v apt-get &>/dev/null; then
     apt-get install -y -qq \
         build-essential git curl wget pkg-config \
         libssl-dev libclang-dev cmake libnuma1 \
+	vim tmux htop \
         python3 python3-pip python3-venv \
         2>/dev/null || \
     sudo apt-get install -y -qq \
         build-essential git curl wget pkg-config \
         libssl-dev libclang-dev cmake libnuma1 \
+	vim tmux htop \
         python3 python3-pip python3-venv
+fi
+
+# ── Step 1b: CUDA Toolkit 12.8 ───────────────────────────────────────────
+# Blackwell GPUs (RTX PRO 4500/5000, B200, etc.) require compute_120a
+# which needs nvcc from CUDA 12.8+. RunPod templates often ship 12.4.
+echo ""
+echo "=== Step 1b: CUDA Toolkit ==="
+NVCC_VERSION=$(nvcc --version 2>/dev/null | grep -oP 'V\K[0-9]+\.[0-9]+' || echo "0.0")
+REQUIRED_CUDA="12.8"
+
+if [ "$(printf '%s\n' "$REQUIRED_CUDA" "$NVCC_VERSION" | sort -V | head -1)" != "$REQUIRED_CUDA" ]; then
+    echo "nvcc ${NVCC_VERSION} is too old (need >= ${REQUIRED_CUDA} for Blackwell)"
+    echo "Installing CUDA Toolkit 12.8..."
+    apt-get install -y cuda-toolkit-12-8 2>&1 | tail -5
+    # Point /usr/local/cuda symlink to 12.8
+    if [ -L /usr/local/cuda ]; then
+        rm /usr/local/cuda
+    fi
+    ln -sf /usr/local/cuda-12.8 /usr/local/cuda
+    export PATH="/usr/local/cuda-12.8/bin:$PATH"
+    export LD_LIBRARY_PATH="/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH:-}"
+    echo "CUDA Toolkit 12.8 installed: $(nvcc --version 2>/dev/null | grep 'release')"
+else
+    echo "nvcc ${NVCC_VERSION} is sufficient (>= ${REQUIRED_CUDA})"
 fi
 
 # ── Step 2: Rust ──────────────────────────────────────────────────────────
@@ -323,7 +349,7 @@ fi
 echo ""
 echo "=== Step 10: Persist PATH in .bashrc ==="
 BASHRC="$HOME/.bashrc"
-for line in 'source "$HOME/.cargo/env"' 'export PATH="$HOME/.elan/bin:$PATH"'; do
+for line in 'source "$HOME/.cargo/env"' 'export PATH="$HOME/.elan/bin:$PATH"' 'export PATH="/usr/local/cuda/bin:$PATH"'; do
     if ! grep -qF "$line" "$BASHRC" 2>/dev/null; then
         echo "$line" >> "$BASHRC"
         echo "  Added: $line"

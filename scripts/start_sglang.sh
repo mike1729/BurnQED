@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
+# Ensure JIT compilation uses CUDA 12.8+ (required for Blackwell compute_120a)
+if [ -d "/usr/local/cuda-12.8" ]; then
+    export CUDA_HOME="/usr/local/cuda-12.8"
+    export PATH="/usr/local/cuda-12.8/bin:$PATH"
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODEL_PATH="${1:-${REPO_ROOT}/data/models/base/deepseek-prover-v2-7b}"
 PORT="${PORT:-30000}"
