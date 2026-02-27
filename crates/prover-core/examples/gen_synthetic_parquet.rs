@@ -30,6 +30,8 @@ fn make_record(
         ebm_score: 0.0,
         is_proof_complete: complete,
         timestamp_ms: 1700000000000 + state_id,
+        q_value: 0.0,
+        visits: 0,
     }
 }
 

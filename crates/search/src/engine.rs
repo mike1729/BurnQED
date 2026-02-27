@@ -225,7 +225,7 @@ impl SearchEngine {
             } else {
                 None
             };
-            let root_score = trie.frontier_score(0, ebm, None, self.config.alpha, self.config.exploration_c);
+            let root_score = trie.frontier_score(0, ebm, arena[0].llm_log_prob, None, self.config.alpha, self.config.exploration_c);
             frontier.push(ScoredNode {
                 node_index: 0,
                 score: OrderedFloat(root_score),
@@ -618,7 +618,7 @@ impl SearchEngine {
                     } else {
                         None
                     };
-                    let score = trie.frontier_score(idx, ebm, node.parent, self.config.alpha, self.config.exploration_c);
+                    let score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
                     frontier.push(ScoredNode {
                         node_index: idx,
                         score: OrderedFloat(score),
@@ -636,7 +636,7 @@ impl SearchEngine {
                     } else {
                         None
                     };
-                    let score = trie.frontier_score(idx, ebm, node.parent, self.config.alpha, self.config.exploration_c);
+                    let score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
                     frontier.push(ScoredNode {
                         node_index: idx,
                         score: OrderedFloat(score),

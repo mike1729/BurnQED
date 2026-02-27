@@ -159,6 +159,8 @@ fn test_eval_reads_parquet() {
             ebm_score: 0.0,
             is_proof_complete: i == 4,
             timestamp_ms: 1700000000000 + i,
+            q_value: 0.0,
+            visits: 0,
         });
     }
     for i in 0..3 {
@@ -175,6 +177,8 @@ fn test_eval_reads_parquet() {
             ebm_score: 0.0,
             is_proof_complete: false,
             timestamp_ms: 1700000000000 + i,
+            q_value: 0.0,
+            visits: 0,
         });
     }
     writer.finish().unwrap();
@@ -305,6 +309,8 @@ fn make_record(
         ebm_score: 0.0,
         is_proof_complete: complete,
         timestamp_ms: 1700000000000 + state_id,
+        q_value: 0.0,
+        visits: 0,
     }
 }
 

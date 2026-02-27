@@ -101,20 +101,23 @@ impl ReplayTrie {
 
     /// PUCT-style frontier score for a node.
     ///
-    /// Blends a prior (EBM score or 0) with empirical Q-value, plus UCB exploration:
+    /// Blends a prior with empirical Q-value, plus UCB exploration:
     ///
     /// ```text
-    /// alpha_t = alpha / (1 + visits)          // trust prior when unvisited, shift to Q
+    /// prior   = ebm_score ?? llm_log_prob     // EBM when available, else LLM confidence
+    /// alpha_t = alpha / (1 + visits)           // trust prior when unvisited, shift to Q
     /// value   = alpha_t * prior + (1 - alpha_t) * q_value
     /// explore = c * sqrt(ln(parent_visits + 1) / (1 + visits))
     /// score   = value + explore
     /// ```
     ///
-    /// This is AlphaZero's PUCT formula adapted for proof search.
+    /// Without EBM, `llm_log_prob` differentiates unvisited siblings (high-confidence
+    /// tactics score higher). With EBM, the energy score overrides as a stronger signal.
     pub fn frontier_score(
         &self,
         idx: usize,
         ebm_score: Option<f64>,
+        llm_log_prob: f64,
         parent_idx: Option<usize>,
         alpha: f64,
         exploration_c: f64,
@@ -125,7 +128,7 @@ impl ReplayTrie {
             .and_then(|p| self.stats.get(&p))
             .map_or(0, |s| s.visits);
 
-        let prior = ebm_score.unwrap_or(0.0);
+        let prior = ebm_score.unwrap_or(llm_log_prob);
 
         // Alpha blending: trust EBM prior when visits=0, shift to Q as visits grow
         let alpha_t = alpha / (1.0 + visits as f64);
@@ -308,12 +311,13 @@ mod tests {
 
         let alpha = 0.5;
         let c = 1.41;
-        let score = trie.frontier_score(1, None, Some(0), alpha, c);
+        let llm_lp = -1.5; // log-prob of tactic that created node 1
+        let score = trie.frontier_score(1, None, llm_lp, Some(0), alpha, c);
         let q = 0.5; // 1/2
         // alpha_t = 0.5 / (1 + 2) = 0.1667
         let alpha_t = alpha / (1.0 + 2.0);
-        // prior = 0.0 (no EBM)
-        let value = alpha_t * 0.0 + (1.0 - alpha_t) * q;
+        // prior = llm_log_prob (no EBM)
+        let value = alpha_t * llm_lp + (1.0 - alpha_t) * q;
         let explore = c * ((10.0_f64 + 1.0).ln() / 3.0).sqrt();
         let expected = value + explore;
         assert!((score - expected).abs() < 1e-6);
@@ -326,7 +330,8 @@ mod tests {
 
         let alpha = 0.5;
         let c = 1.41;
-        let score = trie.frontier_score(1, Some(0.8), Some(0), alpha, c);
+        // EBM overrides llm_log_prob as prior
+        let score = trie.frontier_score(1, Some(0.8), -2.0, Some(0), alpha, c);
         let q = 0.5; // 2/4
         // alpha_t = 0.5 / (1 + 4) = 0.1
         let alpha_t = alpha / 5.0;
@@ -342,14 +347,30 @@ mod tests {
         let trie = ReplayTrie::new();
         let alpha = 0.5;
         let c = 1.41;
-        // Unvisited node with EBM score
-        let score = trie.frontier_score(0, Some(0.8), None, alpha, c);
+        // Unvisited node with EBM score — EBM overrides llm_log_prob
+        let score = trie.frontier_score(0, Some(0.8), -1.0, None, alpha, c);
         // alpha_t = 0.5 / 1.0 = 0.5, q = 0.0
         let value = 0.5 * 0.8 + 0.5 * 0.0;
         let explore = c * ((1.0_f64).ln() / 1.0).sqrt(); // ln(1) = 0
         let expected = value + explore;
         assert!((score - expected).abs() < 1e-9);
         assert!(score > 0.0, "Unvisited node with good EBM should have positive score");
+    }
+
+    #[test]
+    fn test_frontier_score_llm_logprob_differentiates_siblings() {
+        let trie = ReplayTrie::new();
+        let alpha = 0.5;
+        let c = 1.41;
+        // Two unvisited siblings, no EBM — llm_log_prob breaks the tie
+        let score_confident = trie.frontier_score(1, None, -0.5, None, alpha, c);
+        let score_uncertain = trie.frontier_score(2, None, -3.0, None, alpha, c);
+        assert!(
+            score_confident > score_uncertain,
+            "Higher log-prob tactic should score higher: {} vs {}",
+            score_confident,
+            score_uncertain
+        );
     }
 
     #[test]
