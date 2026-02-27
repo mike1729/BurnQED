@@ -276,6 +276,19 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
                     break;
                 }
             }
+            // Decompose typed have/let blocks with multi-line bodies
+            // into a bare declaration (creates subgoal) + individual body tactics.
+            // Multi-line blocks always fail in Pantograph's apply_tactic (0% success);
+            // decomposed single-line tactics succeed at ~81%.
+            if body_lines.len() > 1 {
+                if let Some(stripped) = strip_by_to_bare_have(first_line) {
+                    tactics.push(stripped);
+                    let body_text = body_lines.join("\n");
+                    let body_tactics = extract_all_tactics_structured(&body_text);
+                    tactics.extend(body_tactics);
+                    continue;
+                }
+            }
             tactics.push(build_block_tactic(first_line, &body_lines));
             continue;
         }
@@ -339,6 +352,45 @@ fn is_block_opener(line: &str) -> bool {
         || t.ends_with(" =>")
         || t.ends_with(":= by")
         || t == "by"
+}
+
+/// Strip `:= by` or trailing `by` from a typed `have`/`let` line,
+/// returning the bare tactic that creates a subgoal in Lean 4.
+///
+/// `have h : T := by`  → `Some("have h : T")`
+/// `let x : T := by`   → `Some("let x : T")`
+/// `have h := by`       → `None` (no type annotation, can't decompose)
+/// `conv => by`          → `None` (not a have/let)
+///
+/// Returns `None` when decomposition isn't safe (no type annotation or
+/// not a have/let — we can't create a typed subgoal without a type).
+fn strip_by_to_bare_have(line: &str) -> Option<String> {
+    let t = line.trim();
+
+    // Only decompose have/let — these create subgoals in tactic mode
+    if !t.starts_with("have ") && !t.starts_with("let ") {
+        return None;
+    }
+
+    // Strip trailing ":= by" or " by"
+    let core = if t.ends_with(":= by") {
+        &t[..t.len() - 5]
+    } else if t.ends_with(" by") {
+        &t[..t.len() - 3]
+    } else {
+        return None;
+    };
+
+    let core = core.trim_end();
+
+    // Must have a type annotation (contains " : ")
+    // "have h : T" ✓ → can create subgoal
+    // "have h"     ✗ → can't infer type without body
+    if !core.contains(" : ") {
+        return None;
+    }
+
+    Some(core.to_string())
 }
 
 /// Build a tactic string from an opener line and its raw (untrimmed) body lines.
@@ -777,13 +829,11 @@ mod tests {
 
     #[test]
     fn test_structured_have_wrapper_whole_proof() {
-        // Model wraps entire proof in `have : (goal) := by ...` at the root
+        // Model wraps entire proof in `have : (goal) := by ...` at the root.
+        // Typed have with multi-line body → decomposed.
         let raw = "have h : P := by\n  intro x\n  exact x\nexact h";
         let result = extract_all_tactics_structured(raw);
-        // The have block consumes indented body; exact h is a separate tactic
-        assert_eq!(result.len(), 2);
-        assert!(result[0].starts_with("have h : P := by"));
-        assert_eq!(result[1], "exact h");
+        assert_eq!(result, vec!["have h : P", "intro x", "exact x", "exact h"]);
     }
 
     #[test]
@@ -797,28 +847,27 @@ mod tests {
     }
 
     #[test]
-    fn test_structured_nested_by_blocks() {
-        // Nested by blocks must preserve relative indentation.
-        // The model generates valid Lean with deeper indent for inner blocks:
-        //   have h₃ : u = 34 := by          (indent 4, opener)
-        //     have h₃₁ : 34 ∈ S := by       (indent 6, body base)
-        //       rw [h₀]                      (indent 8, nested)
-        //       norm_num [Nat.ModEq]          (indent 8, nested)
-        //     exact h₁.unique h₃₁            (indent 6, body)
+    fn test_structured_nested_by_blocks_decomposed() {
+        // Typed have blocks with multi-line bodies are decomposed into
+        // a bare declaration + individual body tactics.
+        // "have h₃ : u = 34 := by" → "have h₃ : u = 34" + body tactics
         let raw = "    have h\u{2083} : u = 34 := by\n      have h\u{2083}\u{2081} : 34 \u{2208} S := by\n        rw [h\u{2080}]\n        norm_num [Nat.ModEq]\n      exact h\u{2081}.unique h\u{2083}\u{2082}\n    simp";
         let result = extract_all_tactics_structured(raw);
-        assert_eq!(result.len(), 2);
-        // Inner nesting preserved: h₃₁ at 2 spaces, rw/norm_num at 4 spaces
-        assert_eq!(
-            result[0],
-            "have h\u{2083} : u = 34 := by\n  have h\u{2083}\u{2081} : 34 \u{2208} S := by\n    rw [h\u{2080}]\n    norm_num [Nat.ModEq]\n  exact h\u{2081}.unique h\u{2083}\u{2082}"
-        );
-        assert_eq!(result[1], "simp");
+        // Outer and inner typed haves both decomposed recursively
+        assert_eq!(result, vec![
+            "have h\u{2083} : u = 34",
+            "have h\u{2083}\u{2081} : 34 \u{2208} S",
+            "rw [h\u{2080}]",
+            "norm_num [Nat.ModEq]",
+            "exact h\u{2081}.unique h\u{2083}\u{2082}",
+            "simp",
+        ]);
     }
 
     #[test]
-    fn test_structured_deeply_nested_by() {
-        // Three levels of nesting
+    fn test_structured_deeply_nested_untyped_not_decomposed() {
+        // Untyped have blocks (no " : ") can't be decomposed — no type for subgoal.
+        // They fall through to build_block_tactic as multi-line blocks.
         let raw = "  have a := by\n    have b := by\n      have c := by\n        omega\n      exact c\n    exact b\n  exact a";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result.len(), 2);
@@ -827,6 +876,85 @@ mod tests {
             "have a := by\n  have b := by\n    have c := by\n      omega\n    exact c\n  exact b"
         );
         assert_eq!(result[1], "exact a");
+    }
+
+    #[test]
+    fn test_structured_typed_have_decomposed_basic() {
+        // Basic typed have with 2 body lines → decomposed
+        let raw = "  have h : T := by\n    rw [foo]\n    simp\n  exact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["have h : T", "rw [foo]", "simp", "exact h"]);
+    }
+
+    #[test]
+    fn test_strip_by_to_bare_have() {
+        // Typed have → stripped
+        assert_eq!(
+            strip_by_to_bare_have("have h : T := by"),
+            Some("have h : T".to_string())
+        );
+        assert_eq!(
+            strip_by_to_bare_have("have h₃ : u = 34 := by"),
+            Some("have h\u{2083} : u = 34".to_string())
+        );
+        // let also works
+        assert_eq!(
+            strip_by_to_bare_have("let x : Nat := by"),
+            Some("let x : Nat".to_string())
+        );
+        // "have h : T by" (no :=) also stripped
+        assert_eq!(
+            strip_by_to_bare_have("have h : T by"),
+            Some("have h : T".to_string())
+        );
+        // Untyped have → None (can't create subgoal without type)
+        assert_eq!(strip_by_to_bare_have("have h := by"), None);
+        // Not a have/let → None
+        assert_eq!(strip_by_to_bare_have("conv => by"), None);
+        assert_eq!(strip_by_to_bare_have("simp only [foo] by"), None);
+        // No "by" at end → None
+        assert_eq!(strip_by_to_bare_have("have h : T := foo"), None);
+    }
+
+    #[test]
+    fn test_decompose_does_not_affect_single_body() {
+        // Typed have with single body line → still inlined (not decomposed)
+        let raw = "  have h : T := by\n    omega\n  exact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["have h : T := by omega", "exact h"]);
+    }
+
+    #[test]
+    fn test_decompose_does_not_affect_conv() {
+        // conv blocks are not have/let, so not decomposed
+        let raw = "  conv =>\n    rw [foo]\n    simp\n  exact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 2);
+        assert!(result[0].starts_with("conv =>"));
+        assert_eq!(result[1], "exact h");
+    }
+
+    #[test]
+    fn test_decompose_real_is_least_proof() {
+        // Real model output for the IsLeast problem — this pattern was 100% failing
+        // as a multi-line block. Decomposition makes each step a single-line tactic.
+        let raw = "  have h\u{2083} : u = 34 := by\n    have h\u{2083}\u{2081} : 34 \u{2208} S := by\n      rw [h\u{2080}]\n      norm_num [Nat.ModEq]\n    have h\u{2083}\u{2082} : IsLeast S 34 := by\n      exact \u{27e8}h\u{2083}\u{2081}, fun x hx => by omega\u{27e9}\n    exact h\u{2081}.unique h\u{2083}\u{2082}\n  exact h\u{2083}";
+        let result = extract_all_tactics_structured(raw);
+        // All tactics are single-line
+        for (i, t) in result.iter().enumerate() {
+            assert!(
+                !t.contains('\n'),
+                "tactic {} is multi-line: {:?}", i, t
+            );
+        }
+        assert_eq!(result[0], "have h\u{2083} : u = 34");
+        assert_eq!(result[1], "have h\u{2083}\u{2081} : 34 \u{2208} S");
+        assert_eq!(result[2], "rw [h\u{2080}]");
+        assert_eq!(result[3], "norm_num [Nat.ModEq]");
+        // Inner single-body have is inlined
+        assert!(result[4].starts_with("have h\u{2083}\u{2082} : IsLeast S 34 := by"));
+        assert_eq!(result[5], "exact h\u{2081}.unique h\u{2083}\u{2082}");
+        assert_eq!(result[6], "exact h\u{2083}");
     }
 
     #[test]
