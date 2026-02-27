@@ -539,70 +539,75 @@ impl SglangClient {
         max_tokens: usize,
     ) -> anyhow::Result<Vec<GeneratedTactic>> {
         let prompt = self.format_prompt(proof_state);
-
-        // Build flat batch of n copies
-        let flat_prompts: Vec<String> = vec![prompt; n];
-
-        let timeout_secs = ((flat_prompts.len() as u64) / 2).clamp(15, 120);
-
-        let request = BatchGenerateRequest {
-            text: flat_prompts,
-            sampling_params: SamplingParams {
-                max_new_tokens: max_tokens,
-                temperature: Some(self.config.temperature),
-                top_p: Some(self.config.top_p),
-                n: None,
-                stop: Some(vec!["```".to_string()]),
-            },
-            return_logprob: true,
-            return_hidden_states: false,
-        };
-
         let url = self.base_url.join("/generate")?;
-        let resp = self
-            .post_with_retry(&url, &request, Some(Duration::from_secs(timeout_secs)))
-            .await?;
-        let body: serde_json::Value = resp.json().await.map_err(|e| {
-            anyhow::anyhow!("Failed to decode SGLang whole-proof response: {e}")
-        })?;
 
-        let items = body.as_array().ok_or_else(|| {
-            let preview: String = body.to_string().chars().take(200).collect();
-            anyhow::anyhow!(
-                "Expected JSON array for whole-proof response, got: {preview}"
-            )
-        })?;
-
+        // Sub-batch to avoid KV cache OOM: 8 sequences at a time.
+        const CHUNK_SIZE: usize = 8;
         let mut tactics = Vec::with_capacity(n);
-        for (i, item) in items.iter().enumerate() {
-            let text = item
-                .get("text")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
 
-            let log_prob = item
-                .get("meta_info")
-                .and_then(|m| m.get("output_token_logprobs"))
-                .and_then(|lps| lps.as_array())
-                .map(|lps| {
-                    lps.iter()
-                        .filter_map(|entry| entry.as_array()?.first()?.as_f64())
-                        .sum::<f64>()
-                })
-                .unwrap_or(0.0);
+        for chunk_start in (0..n).step_by(CHUNK_SIZE) {
+            let chunk_n = CHUNK_SIZE.min(n - chunk_start);
+            let flat_prompts: Vec<String> = vec![prompt.clone(); chunk_n];
 
-            if text.trim().is_empty() {
-                tracing::debug!(candidate = i, "Empty whole-proof text, skipping");
-                continue;
+            let timeout_secs = (chunk_n as u64 * 3 + 30).clamp(60, 300);
+
+            let request = BatchGenerateRequest {
+                text: flat_prompts,
+                sampling_params: SamplingParams {
+                    max_new_tokens: max_tokens,
+                    temperature: Some(self.config.temperature),
+                    top_p: Some(self.config.top_p),
+                    n: None,
+                    stop: Some(vec!["```".to_string()]),
+                },
+                return_logprob: true,
+                return_hidden_states: false,
+            };
+
+            let resp = self
+                .post_with_retry(&url, &request, Some(Duration::from_secs(timeout_secs)))
+                .await?;
+            let body: serde_json::Value = resp.json().await.map_err(|e| {
+                anyhow::anyhow!("Failed to decode SGLang whole-proof response: {e}")
+            })?;
+
+            let items = body.as_array().ok_or_else(|| {
+                let preview: String = body.to_string().chars().take(200).collect();
+                anyhow::anyhow!(
+                    "Expected JSON array for whole-proof response, got: {preview}"
+                )
+            })?;
+
+            for (i, item) in items.iter().enumerate() {
+                let text = item
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let log_prob = item
+                    .get("meta_info")
+                    .and_then(|m| m.get("output_token_logprobs"))
+                    .and_then(|lps| lps.as_array())
+                    .map(|lps| {
+                        lps.iter()
+                            .filter_map(|entry| entry.as_array()?.first()?.as_f64())
+                            .sum::<f64>()
+                    })
+                    .unwrap_or(0.0);
+
+                if text.trim().is_empty() {
+                    tracing::debug!(candidate = chunk_start + i, "Empty whole-proof text, skipping");
+                    continue;
+                }
+
+                tactics.push(GeneratedTactic {
+                    text: text.clone(),
+                    raw_text: text,
+                    log_prob,
+                    tokens: Vec::new(),
+                });
             }
-
-            tactics.push(GeneratedTactic {
-                text: text.clone(),
-                raw_text: text,
-                log_prob,
-                tokens: Vec::new(),
-            });
         }
 
         tracing::debug!(

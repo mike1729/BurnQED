@@ -34,6 +34,8 @@ fn make_record(
         ebm_score: 0.0,
         is_proof_complete: complete,
         timestamp_ms: 1700000000000 + state_id,
+        q_value: 0.0,
+        visits: 0,
     }
 }
 
@@ -66,6 +68,7 @@ fn test_label_roundtrip_through_parquet() {
         wall_time_ms: 500,
         all_records: records,
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     // Label → write → read
@@ -213,6 +216,7 @@ fn test_multi_theorem_pipeline() {
             make_record("proved_thm", 3, Some(0), 1, false),
         ],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     // Theorem 2: not proved (5 dead-end nodes)
@@ -232,6 +236,7 @@ fn test_multi_theorem_pipeline() {
             make_record("failed_thm", 14, Some(12), 3, false),
         ],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     // Theorem 3: proved (trivial — root → 1 QED)
@@ -248,6 +253,7 @@ fn test_multi_theorem_pipeline() {
             make_record("trivial_thm", 21, Some(20), 1, true),
         ],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     // Label and write all
@@ -307,6 +313,7 @@ fn test_overlapping_state_ids_across_theorems() {
             make_record("thm_a", 2, Some(1), 2, true),
         ],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     // Theorem B: unproved (root 0 → 1 dead end, → 2 dead end)
@@ -325,6 +332,7 @@ fn test_overlapping_state_ids_across_theorems() {
             make_record("thm_b", 2, Some(0), 1, false),
         ],
         stats: SearchStats::default(),
+        failure_reason: String::new(),
     };
 
     // Label independently and write

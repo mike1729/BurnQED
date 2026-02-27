@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Arrow schema for trajectory Parquet files (12 columns).
+/// Arrow schema for trajectory Parquet files (14 columns).
 pub fn trajectory_schema() -> Schema {
     Schema::new(vec![
         Field::new("theorem_name", DataType::Utf8, false),
@@ -25,6 +25,8 @@ pub fn trajectory_schema() -> Schema {
         Field::new("ebm_score", DataType::Float64, false),
         Field::new("is_proof_complete", DataType::Boolean, false),
         Field::new("timestamp_ms", DataType::UInt64, false),
+        Field::new("q_value", DataType::Float64, false),
+        Field::new("visits", DataType::UInt32, false),
     ])
 }
 
@@ -236,6 +238,8 @@ fn build_record_batch(records: &[TrajectoryRecord]) -> anyhow::Result<RecordBatc
     let ebm_scores: Float64Array = records.iter().map(|r| Some(r.ebm_score)).collect();
     let proof_complete: BooleanArray = records.iter().map(|r| Some(r.is_proof_complete)).collect();
     let timestamps: UInt64Array = records.iter().map(|r| Some(r.timestamp_ms)).collect();
+    let q_values: Float64Array = records.iter().map(|r| Some(r.q_value)).collect();
+    let visits: UInt32Array = records.iter().map(|r| Some(r.visits)).collect();
 
     let columns: Vec<Arc<dyn arrow::array::Array>> = vec![
         Arc::new(theorem_names),
@@ -250,6 +254,8 @@ fn build_record_batch(records: &[TrajectoryRecord]) -> anyhow::Result<RecordBatc
         Arc::new(ebm_scores),
         Arc::new(proof_complete),
         Arc::new(timestamps),
+        Arc::new(q_values),
+        Arc::new(visits),
     ];
 
     Ok(RecordBatch::try_new(schema, columns)?)
@@ -283,13 +289,15 @@ mod tests {
             ebm_score: 0.0,
             is_proof_complete: false,
             timestamp_ms: 1700000000000 + state_id,
+            q_value: 0.0,
+            visits: 0,
         }
     }
 
     #[test]
-    fn test_trajectory_schema_has_12_columns() {
+    fn test_trajectory_schema_has_14_columns() {
         let schema = trajectory_schema();
-        assert_eq!(schema.fields().len(), 12);
+        assert_eq!(schema.fields().len(), 14);
         assert_eq!(schema.field(0).name(), "theorem_name");
         assert_eq!(schema.field(4).name(), "parent_state_id");
         assert!(schema.field(4).is_nullable());
@@ -354,6 +362,7 @@ mod tests {
             wall_time_ms: 1000,
             all_records: vec![root, n1, n2, n3, n4],
             stats: SearchStats::default(),
+            failure_reason: String::new(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -397,6 +406,7 @@ mod tests {
             wall_time_ms: 10,
             all_records: vec![root],
             stats: SearchStats::default(),
+            failure_reason: String::new(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -424,6 +434,7 @@ mod tests {
             wall_time_ms: 500,
             all_records: records,
             stats: SearchStats::default(),
+            failure_reason: String::new(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -466,6 +477,7 @@ mod tests {
             wall_time_ms: 1000,
             all_records: vec![root, n1, n2, n3, n4],
             stats: SearchStats::default(),
+            failure_reason: String::new(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);
@@ -505,6 +517,7 @@ mod tests {
             wall_time_ms: 5000,
             all_records: records,
             stats: SearchStats::default(),
+            failure_reason: String::new(),
         };
 
         let labeled = TrajectoryWriter::from_search_result(&result);

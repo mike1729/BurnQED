@@ -61,6 +61,12 @@ pub struct TrajectoryRecord {
     pub is_proof_complete: bool,
     /// Unix timestamp in milliseconds when this state was created.
     pub timestamp_ms: u64,
+    /// Q-value from trie statistics (successes / visits). 0.0 if unvisited.
+    #[serde(default)]
+    pub q_value: f64,
+    /// Visit count from trie statistics. 0 if unvisited.
+    #[serde(default)]
+    pub visits: u32,
 }
 
 /// Detailed statistics from a single proof search.
@@ -295,6 +301,8 @@ mod tests {
             ebm_score: 0.0,
             is_proof_complete: false,
             timestamp_ms: 1700000000000,
+            q_value: 0.0,
+            visits: 0,
         };
         assert_eq!(record.state_id, 0);
         assert!(record.parent_state_id.is_none());

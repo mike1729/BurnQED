@@ -216,6 +216,14 @@ fn extract_records_from_batch(batch: &RecordBatch) -> anyhow::Result<Vec<Traject
         .downcast_ref::<UInt64Array>()
         .ok_or_else(|| anyhow::anyhow!("Column timestamp_ms is not UInt64Array"))?;
 
+    // Optional columns for backward compatibility with older Parquet files
+    let q_values = batch
+        .column_by_name("q_value")
+        .and_then(|c| c.as_any().downcast_ref::<Float64Array>());
+    let visits_col = batch
+        .column_by_name("visits")
+        .and_then(|c| c.as_any().downcast_ref::<UInt32Array>());
+
     let mut records = Vec::with_capacity(batch.num_rows());
     for i in 0..batch.num_rows() {
         let parent_state_id = if parent_ids.is_null(i) {
@@ -237,6 +245,8 @@ fn extract_records_from_batch(batch: &RecordBatch) -> anyhow::Result<Vec<Traject
             ebm_score: ebm_scores.value(i),
             is_proof_complete: proof_complete.value(i),
             timestamp_ms: timestamps.value(i),
+            q_value: q_values.map_or(0.0, |a| a.value(i)),
+            visits: visits_col.map_or(0, |a| a.value(i)),
         });
     }
 
@@ -272,6 +282,8 @@ mod tests {
             ebm_score: 0.0,
             is_proof_complete: false,
             timestamp_ms: 1700000000000 + state_id,
+            q_value: 0.0,
+            visits: 0,
         }
     }
 

@@ -937,6 +937,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
 
         join_set.spawn(async move {
             let _permit = permit; // held for task lifetime
+            // Stagger theorem starts so concurrent batches don't all hit SGLang simultaneously
+            let jitter = Duration::from_millis(rand::random::<u64>() % 3000);
+            tokio::time::sleep(jitter).await;
             if interrupted.load(Ordering::Relaxed) {
                 return SearchOutcome {
                     name,

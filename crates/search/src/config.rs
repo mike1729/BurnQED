@@ -64,6 +64,11 @@ pub struct SearchConfig {
     /// Total proof generation budget (sum of N across all rounds).
     #[serde(default = "default_hybrid_budget")]
     pub hybrid_budget: u32,
+
+    /// UCB exploration constant for PUCT frontier scoring.
+    /// Higher values encourage visiting less-explored nodes.
+    #[serde(default = "default_exploration_c")]
+    pub exploration_c: f64,
 }
 
 fn default_max_nodes() -> u32 {
@@ -108,6 +113,9 @@ fn default_hybrid_max_tokens() -> usize {
 }
 fn default_hybrid_budget() -> u32 {
     256
+}
+fn default_exploration_c() -> f64 {
+    1.41
 }
 
 impl SearchConfig {
@@ -169,6 +177,7 @@ impl Default for SearchConfig {
             hybrid_max_rounds: default_hybrid_max_rounds(),
             hybrid_max_tokens: default_hybrid_max_tokens(),
             hybrid_budget: default_hybrid_budget(),
+            exploration_c: default_exploration_c(),
         }
     }
 }
@@ -192,6 +201,7 @@ mod tests {
         assert_eq!(cfg.hybrid_max_rounds, 30);
         assert_eq!(cfg.hybrid_max_tokens, 1024);
         assert_eq!(cfg.hybrid_budget, 256);
+        assert!((cfg.exploration_c - 1.41).abs() < 1e-9);
     }
 
     #[test]

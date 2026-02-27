@@ -166,7 +166,7 @@ impl SearchEngine {
 
         if root_terminal {
             let wall_time_ms = start_time.elapsed().as_millis() as u64;
-            let records = build_trajectory_records(&arena, theorem_name);
+            let records = build_trajectory_records(&arena, theorem_name, &trie);
             return Ok(SearchResult {
                 theorem_name: theorem_name.to_string(),
                 proved: true,
@@ -212,7 +212,7 @@ impl SearchEngine {
             } else {
                 None
             };
-            let root_score = trie.frontier_score(0, ebm, None);
+            let root_score = trie.frontier_score(0, ebm, None, self.config.alpha, self.config.exploration_c);
             frontier.push(ScoredNode {
                 node_index: 0,
                 score: OrderedFloat(root_score),
@@ -268,6 +268,7 @@ impl SearchEngine {
                 }
             };
             expanded.insert(leaf_idx);
+            nodes_expanded += 1;
 
             if frontier.len() + 1 > stats.peak_frontier_size {
                 stats.peak_frontier_size = frontier.len() + 1;
@@ -297,7 +298,7 @@ impl SearchEngine {
                 stats.trie_cache_hits = trie.cache_hits;
                 let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
                 let wall_time_ms = start_time.elapsed().as_millis() as u64;
-                let records = build_trajectory_records(&arena, theorem_name);
+                let records = build_trajectory_records(&arena, theorem_name, &trie);
 
                 return Ok(SearchResult {
                     theorem_name: theorem_name.to_string(),
@@ -329,8 +330,8 @@ impl SearchEngine {
             let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
             stats.gen_latencies_us.push(gen_us);
-            total_proofs += n as u32;
-            stats.hybrid_proofs_generated += n as u32;
+            total_proofs += raw_proofs.len() as u32;
+            stats.hybrid_proofs_generated += raw_proofs.len() as u32;
 
             tracing::debug!(
                 round,
@@ -339,6 +340,9 @@ impl SearchEngine {
                 n_proofs = raw_proofs.len(),
                 "Hybrid round: generated whole proofs"
             );
+
+            // Track first proof found during this round (continue replaying for trie coverage)
+            let mut first_proof_terminal: Option<usize> = None;
 
             // Replay each proof through the trie
             for proof in &raw_proofs {
@@ -361,6 +365,10 @@ impl SearchEngine {
                                 stats.trie_cache_hits += 1;
                                 trie.cache_hits += 1;
                                 current_idx = child_idx;
+                                // If we replayed into a terminal, this proof is done
+                                if arena[child_idx].is_terminal {
+                                    break;
+                                }
                                 continue;
                             }
                             TrieEntry::Failed => {
@@ -390,22 +398,10 @@ impl SearchEngine {
                                 .collect::<Vec<_>>()
                                 .join("\n\n");
 
-                            // Loop detection
+                            // Loop detection — block future replays through this loop
                             if visited_states.contains(&state_pp) {
                                 stats.loops_detected += 1;
-                                let looped_idx = arena.len();
-                                arena.push(SearchNode {
-                                    state_id: child_state_id,
-                                    state_pp,
-                                    goals,
-                                    parent: Some(current_idx),
-                                    tactic_applied: tactic.clone(),
-                                    depth: child_depth,
-                                    llm_log_prob: proof.log_prob,
-                                    ebm_score: 0.0,
-                                    is_terminal: false,
-                                });
-                                trie.insert_success(current_idx, tactic, looped_idx);
+                                trie.insert_failure(current_idx, tactic);
                                 break;
                             }
                             visited_states.insert(state_pp.clone());
@@ -441,28 +437,18 @@ impl SearchEngine {
                             )
                             .await?
                             {
-                                // Probe found a proof!
+                                // Probe found a proof — record but continue replaying
                                 trie.record_proof_success(terminal, &arena);
-
-                                stats.nodes_expanded = nodes_expanded;
-                                stats.hybrid_rounds = round + 1;
-                                stats.trie_cache_hits = trie.cache_hits;
-                                let proof_tactics = extract_tactic_sequence(&arena, terminal);
-                                let wall_time_ms = start_time.elapsed().as_millis() as u64;
-                                let records = build_trajectory_records(&arena, theorem_name);
-
-                                return Ok(SearchResult {
-                                    theorem_name: theorem_name.to_string(),
-                                    proved: true,
-                                    proof_tactics,
-                                    nodes_expanded,
-                                    total_states: arena.len() as u32,
-                                    max_depth_reached,
-                                    wall_time_ms,
-                                    all_records: records,
-                                    stats,
-                                    failure_reason: "proved".to_string(),
-                                });
+                                if first_proof_terminal.is_none() {
+                                    first_proof_terminal = Some(terminal);
+                                    tracing::debug!(
+                                        theorem = theorem_name,
+                                        round,
+                                        terminal_idx = terminal,
+                                        "Proof found via probe during replay, continuing replay"
+                                    );
+                                }
+                                break; // This proof is done, move to next
                             }
 
                             current_idx = child_idx;
@@ -490,35 +476,16 @@ impl SearchEngine {
                             trie.insert_success(current_idx, tactic, terminal_idx);
                             trie.record_proof_success(terminal_idx, &arena);
 
-                            stats.nodes_expanded = nodes_expanded;
-                            stats.hybrid_rounds = round + 1;
-                            stats.trie_cache_hits = trie.cache_hits;
-                            let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
-                            let wall_time_ms = start_time.elapsed().as_millis() as u64;
-                            let records = build_trajectory_records(&arena, theorem_name);
-
-                            tracing::debug!(
-                                theorem = theorem_name,
-                                steps = proof_tactics.len(),
-                                rounds = round + 1,
-                                total_proofs,
-                                trie_hits = trie.cache_hits,
-                                time_ms = wall_time_ms,
-                                "Proof found via hybrid search"
-                            );
-
-                            return Ok(SearchResult {
-                                theorem_name: theorem_name.to_string(),
-                                proved: true,
-                                proof_tactics,
-                                nodes_expanded,
-                                total_states: arena.len() as u32,
-                                max_depth_reached,
-                                wall_time_ms,
-                                all_records: records,
-                                stats,
-                                failure_reason: "proved".to_string(),
-                            });
+                            if first_proof_terminal.is_none() {
+                                first_proof_terminal = Some(terminal_idx);
+                                tracing::debug!(
+                                    theorem = theorem_name,
+                                    round,
+                                    terminal_idx,
+                                    "Proof found via replay, continuing replay"
+                                );
+                            }
+                            break; // This proof is done, move to next
                         }
                         TacticResult::Failed { message } => {
                             stats.total_tactic_failures += 1;
@@ -573,6 +540,28 @@ impl SearchEngine {
                 }
             }
 
+            // Re-insert existing nodes whose trie stats changed during this round.
+            // This ensures frontier scores reflect updated Q-values from replay.
+            let updated_existing = trie.drain_updated_indices(arena_before);
+            for idx in updated_existing {
+                if expanded.contains(&idx) || arena[idx].is_terminal {
+                    continue;
+                }
+                let node = &arena[idx];
+                if node.depth < self.config.max_depth {
+                    let ebm = if scorer.is_some() && !self.config.should_skip_ebm(node.depth) {
+                        Some(node.ebm_score)
+                    } else {
+                        None
+                    };
+                    let score = trie.frontier_score(idx, ebm, node.parent, self.config.alpha, self.config.exploration_c);
+                    frontier.push(ScoredNode {
+                        node_index: idx,
+                        score: OrderedFloat(score),
+                    });
+                }
+            }
+
             // Push scored new nodes to the persistent frontier
             for &idx in &new_nodes {
                 let node = &arena[idx];
@@ -582,7 +571,7 @@ impl SearchEngine {
                     } else {
                         None
                     };
-                    let score = trie.frontier_score(idx, ebm, node.parent);
+                    let score = trie.frontier_score(idx, ebm, node.parent, self.config.alpha, self.config.exploration_c);
                     frontier.push(ScoredNode {
                         node_index: idx,
                         score: OrderedFloat(score),
@@ -590,7 +579,40 @@ impl SearchEngine {
                 }
             }
 
-            nodes_expanded += 1;
+            // If a proof was found during replay, return after scoring/frontier update
+            if let Some(terminal_idx) = first_proof_terminal {
+                stats.nodes_expanded = nodes_expanded;
+                stats.hybrid_rounds = round + 1;
+                stats.trie_cache_hits = trie.cache_hits;
+                let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
+                let wall_time_ms = start_time.elapsed().as_millis() as u64;
+                let records = build_trajectory_records(&arena, theorem_name, &trie);
+
+                tracing::debug!(
+                    theorem = theorem_name,
+                    steps = proof_tactics.len(),
+                    rounds = round + 1,
+                    total_proofs,
+                    trie_hits = trie.cache_hits,
+                    arena_size = arena.len(),
+                    time_ms = wall_time_ms,
+                    "Proof found via hybrid search"
+                );
+
+                return Ok(SearchResult {
+                    theorem_name: theorem_name.to_string(),
+                    proved: true,
+                    proof_tactics,
+                    nodes_expanded,
+                    total_states: arena.len() as u32,
+                    max_depth_reached,
+                    wall_time_ms,
+                    all_records: records,
+                    stats,
+                    failure_reason: "proved".to_string(),
+                });
+            }
+
             round += 1;
         }
 
@@ -599,7 +621,7 @@ impl SearchEngine {
         stats.trie_cache_hits = trie.cache_hits;
 
         let wall_time_ms = start_time.elapsed().as_millis() as u64;
-        let records = build_trajectory_records(&arena, theorem_name);
+        let records = build_trajectory_records(&arena, theorem_name, &trie);
 
         tracing::debug!(
             theorem = theorem_name,
@@ -740,7 +762,7 @@ async fn harvest_siblings(
 }
 
 /// Convert the search arena into trajectory records for Parquet output.
-fn build_trajectory_records(arena: &[SearchNode], theorem_name: &str) -> Vec<TrajectoryRecord> {
+fn build_trajectory_records(arena: &[SearchNode], theorem_name: &str, trie: &ReplayTrie) -> Vec<TrajectoryRecord> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -748,8 +770,11 @@ fn build_trajectory_records(arena: &[SearchNode], theorem_name: &str) -> Vec<Tra
 
     arena
         .iter()
-        .map(|node| {
+        .enumerate()
+        .map(|(idx, node)| {
             let parent_state_id = node.parent.map(|p_idx| arena[p_idx].state_id);
+            let q_value = trie.q_value(idx);
+            let visits = trie.get_stats(idx).map_or(0, |s| s.visits);
             TrajectoryRecord {
                 theorem_name: theorem_name.to_string(),
                 state_id: node.state_id,
@@ -763,6 +788,8 @@ fn build_trajectory_records(arena: &[SearchNode], theorem_name: &str) -> Vec<Tra
                 ebm_score: node.ebm_score,
                 is_proof_complete: node.is_terminal,
                 timestamp_ms: now_ms,
+                q_value,
+                visits,
             }
         })
         .collect()
@@ -1183,10 +1210,10 @@ mod tests {
             .unwrap();
 
         assert!(!result.proved);
-        // The loop node should be in the arena but not lead to infinite expansion
+        // Loop is detected and recorded as failure in trie (not pushed to arena)
         assert!(result.stats.loops_detected > 0, "Should detect at least one loop");
-        // Arena should have root + first success + looped node
-        assert!(result.all_records.len() >= 2);
+        // Arena has only root — looped nodes are not added to arena
+        assert!(result.all_records.len() >= 1);
     }
 
     #[tokio::test]

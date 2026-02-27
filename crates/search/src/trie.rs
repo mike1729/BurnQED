@@ -5,7 +5,7 @@
 //! to avoid re-sending to Lean. Q-values (successes/visits) are backpropagated on
 //! proof success for UCB-based frontier scoring.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::node::SearchNode;
 
@@ -37,6 +37,9 @@ pub struct ReplayTrie {
     stats: HashMap<usize, TrieNodeStats>,
     /// Total cache hit count.
     pub cache_hits: u32,
+    /// Nodes whose stats were updated since last drain. Used to re-score
+    /// existing frontier entries after replay rounds.
+    updated_indices: HashSet<usize>,
 }
 
 impl ReplayTrie {
@@ -46,6 +49,7 @@ impl ReplayTrie {
             cache: HashMap::new(),
             stats: HashMap::new(),
             cache_hits: 0,
+            updated_indices: HashSet::new(),
         }
     }
 
@@ -73,6 +77,7 @@ impl ReplayTrie {
     /// Increment visit count for a node.
     pub fn record_visit(&mut self, idx: usize) {
         self.stats.entry(idx).or_default().visits += 1;
+        self.updated_indices.insert(idx);
     }
 
     /// After a proof is found at `terminal_idx`, walk the parent chain and
@@ -81,6 +86,7 @@ impl ReplayTrie {
         let mut current = Some(terminal_idx);
         while let Some(idx) = current {
             self.stats.entry(idx).or_default().successes += 1;
+            self.updated_indices.insert(idx);
             current = arena[idx].parent;
         }
     }
@@ -93,31 +99,43 @@ impl ReplayTrie {
         }
     }
 
-    /// Frontier score for a node.
+    /// PUCT-style frontier score for a node.
     ///
-    /// With EBM: `alpha * ebm_score + (1 - alpha) * q_value`
-    /// Without EBM: UCB1: `q + c * sqrt(ln(parent_visits) / visits)`
+    /// Blends a prior (EBM score or 0) with empirical Q-value, plus UCB exploration:
+    ///
+    /// ```text
+    /// alpha_t = alpha / (1 + visits)          // trust prior when unvisited, shift to Q
+    /// value   = alpha_t * prior + (1 - alpha_t) * q_value
+    /// explore = c * sqrt(ln(parent_visits + 1) / (1 + visits))
+    /// score   = value + explore
+    /// ```
+    ///
+    /// This is AlphaZero's PUCT formula adapted for proof search.
     pub fn frontier_score(
         &self,
         idx: usize,
         ebm_score: Option<f64>,
         parent_idx: Option<usize>,
+        alpha: f64,
+        exploration_c: f64,
     ) -> f64 {
         let q = self.q_value(idx);
-        match ebm_score {
-            Some(ebm) => {
-                let alpha = 0.5;
-                alpha * ebm + (1.0 - alpha) * q
-            }
-            None => {
-                let visits = self.stats.get(&idx).map_or(1, |s| s.visits.max(1));
-                let parent_visits = parent_idx
-                    .and_then(|p| self.stats.get(&p))
-                    .map_or(1, |s| s.visits.max(1));
-                let c = 1.41;
-                q + c * ((parent_visits as f64).ln() / visits as f64).sqrt()
-            }
-        }
+        let visits = self.stats.get(&idx).map_or(0, |s| s.visits);
+        let parent_visits = parent_idx
+            .and_then(|p| self.stats.get(&p))
+            .map_or(0, |s| s.visits);
+
+        let prior = ebm_score.unwrap_or(0.0);
+
+        // Alpha blending: trust EBM prior when visits=0, shift to Q as visits grow
+        let alpha_t = alpha / (1.0 + visits as f64);
+        let value = alpha_t * prior + (1.0 - alpha_t) * q;
+
+        // UCB exploration bonus
+        let explore = exploration_c
+            * ((parent_visits as f64 + 1.0).ln() / (1.0 + visits as f64)).sqrt();
+
+        value + explore
     }
 
     /// Collect all non-terminal leaf nodes (nodes with no successful children in the trie).
@@ -155,6 +173,18 @@ impl ReplayTrie {
     /// Get stats for a node.
     pub fn get_stats(&self, idx: usize) -> Option<&TrieNodeStats> {
         self.stats.get(&idx)
+    }
+
+    /// Drain all node indices whose stats were updated since last drain.
+    ///
+    /// Used to re-insert these nodes into the frontier with updated scores
+    /// after a replay round. Only returns non-terminal, non-new nodes that
+    /// existed before `arena_before`.
+    pub fn drain_updated_indices(&mut self, arena_before: usize) -> Vec<usize> {
+        self.updated_indices
+            .drain()
+            .filter(|&idx| idx < arena_before)
+            .collect()
     }
 
     /// Total number of cached entries.
@@ -267,15 +297,22 @@ mod tests {
     }
 
     #[test]
-    fn test_frontier_score_ucb() {
+    fn test_frontier_score_puct() {
         let mut trie = ReplayTrie::new();
         // Parent visited 10 times, child visited 2 times, 1 success
         trie.stats.insert(0, TrieNodeStats { visits: 10, successes: 3 });
         trie.stats.insert(1, TrieNodeStats { visits: 2, successes: 1 });
 
-        let score = trie.frontier_score(1, None, Some(0));
+        let alpha = 0.5;
+        let c = 1.41;
+        let score = trie.frontier_score(1, None, Some(0), alpha, c);
         let q = 0.5; // 1/2
-        let expected = q + 1.41 * ((10.0_f64).ln() / 2.0).sqrt();
+        // alpha_t = 0.5 / (1 + 2) = 0.1667
+        let alpha_t = alpha / (1.0 + 2.0);
+        // prior = 0.0 (no EBM)
+        let value = alpha_t * 0.0 + (1.0 - alpha_t) * q;
+        let explore = c * ((10.0_f64 + 1.0).ln() / 3.0).sqrt();
+        let expected = value + explore;
         assert!((score - expected).abs() < 1e-6);
     }
 
@@ -284,9 +321,32 @@ mod tests {
         let mut trie = ReplayTrie::new();
         trie.stats.insert(1, TrieNodeStats { visits: 4, successes: 2 });
 
-        let score = trie.frontier_score(1, Some(0.8), Some(0));
-        // alpha=0.5: 0.5 * 0.8 + 0.5 * 0.5 = 0.65
-        assert!((score - 0.65).abs() < 1e-9);
+        let alpha = 0.5;
+        let c = 1.41;
+        let score = trie.frontier_score(1, Some(0.8), Some(0), alpha, c);
+        let q = 0.5; // 2/4
+        // alpha_t = 0.5 / (1 + 4) = 0.1
+        let alpha_t = alpha / 5.0;
+        let value = alpha_t * 0.8 + (1.0 - alpha_t) * q;
+        // parent_visits = 0 (no stats for 0)
+        let explore = c * ((0.0_f64 + 1.0).ln() / 5.0).sqrt();
+        let expected = value + explore;
+        assert!((score - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_frontier_score_unvisited_trusts_prior() {
+        let trie = ReplayTrie::new();
+        let alpha = 0.5;
+        let c = 1.41;
+        // Unvisited node with EBM score
+        let score = trie.frontier_score(0, Some(0.8), None, alpha, c);
+        // alpha_t = 0.5 / 1.0 = 0.5, q = 0.0
+        let value = 0.5 * 0.8 + 0.5 * 0.0;
+        let explore = c * ((1.0_f64).ln() / 1.0).sqrt(); // ln(1) = 0
+        let expected = value + explore;
+        assert!((score - expected).abs() < 1e-9);
+        assert!(score > 0.0, "Unvisited node with good EBM should have positive score");
     }
 
     #[test]
