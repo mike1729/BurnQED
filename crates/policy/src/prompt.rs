@@ -309,7 +309,25 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
         return Vec::new();
     }
 
+    // Filter out tactics that can never work as standalone Lean tactics.
+    // These arise from model output artifacts (dangling combinators, focus dots).
+    tactics.retain(|t| !should_skip_tactic(t));
+
     tactics
+}
+
+/// Tactics that should be silently dropped from extracted proof sequences.
+///
+/// Dangling `<;>` combinators and focus dots (`·`) arise when the model
+/// generates multi-tactic combinator chains that get split into individual
+/// lines. These always fail in Pantograph as standalone tactics.
+fn should_skip_tactic(tactic: &str) -> bool {
+    let trimmed = tactic.trim();
+    trimmed.is_empty()
+        || trimmed == "<;>"
+        || trimmed.starts_with("<;> ")
+        || trimmed == "·"
+        || trimmed == "."
 }
 
 /// Check whether a tactic line ends with a block opener keyword.
@@ -742,5 +760,35 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[0], "have h := by\n  rw [foo]\n  simp");
         assert_eq!(result[1], "exact h");
+    }
+
+    #[test]
+    fn test_should_skip_tactic() {
+        assert!(should_skip_tactic("<;>"));
+        assert!(should_skip_tactic("<;> omega"));
+        assert!(should_skip_tactic("·"));
+        assert!(should_skip_tactic("."));
+        assert!(should_skip_tactic(""));
+        assert!(should_skip_tactic("  "));
+        // These should NOT be skipped
+        assert!(!should_skip_tactic("simp"));
+        assert!(!should_skip_tactic("interval_cases x <;> omega"));
+        assert!(!should_skip_tactic("have h := by linarith"));
+    }
+
+    #[test]
+    fn test_structured_filters_dangling_combinators() {
+        // Model output with dangling <;> after tactic splitting
+        let raw = "interval_cases x\n<;> omega\n<;>\nsimp";
+        let result = extract_all_tactics_structured(raw);
+        // <;> omega and <;> should be filtered out
+        assert_eq!(result, vec!["interval_cases x", "simp"]);
+    }
+
+    #[test]
+    fn test_structured_filters_focus_dot() {
+        let raw = "·\nintro h\n·\nexact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["intro h", "exact h"]);
     }
 }

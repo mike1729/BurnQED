@@ -27,6 +27,39 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Extract the concatenated goal targets from a list of goals.
+///
+/// The "target" is the part after `⊢` — the actual statement to prove.
+/// Hypotheses (context) are excluded. Two states with the same targets
+/// but different hypotheses are "goal-unchanged".
+fn goal_targets(goals: &[Goal]) -> String {
+    goals
+        .iter()
+        .map(|g| g.target.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Count consecutive goal-unchanged ancestors starting from `idx`.
+///
+/// Walks up the parent chain, counting how many consecutive nodes have
+/// the same goal targets as their parent. Stops at root or when goals change.
+fn count_goal_unchanged_ancestors(arena: &[SearchNode], idx: usize) -> u32 {
+    let mut count = 0;
+    let mut current = idx;
+    while let Some(parent_idx) = arena[current].parent {
+        let current_targets = goal_targets(&arena[current].goals);
+        let parent_targets = goal_targets(&arena[parent_idx].goals);
+        if current_targets == parent_targets {
+            count += 1;
+            current = parent_idx;
+        } else {
+            break;
+        }
+    }
+    count
+}
+
 /// Errors that can occur during proof search.
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
@@ -487,6 +520,26 @@ impl SearchEngine {
                             });
                             trie.insert_success(current_idx, tactic, child_idx);
 
+                            // Goal-unchanged counter: block context-stuffing loops
+                            // where the model adds redundant hypotheses without
+                            // changing the actual goal target.
+                            if self.config.max_goal_unchanged_steps > 0 {
+                                let unchanged = count_goal_unchanged_ancestors(
+                                    &arena, child_idx,
+                                );
+                                if unchanged >= self.config.max_goal_unchanged_steps {
+                                    stats.context_stuffing_blocked += 1;
+                                    tracing::debug!(
+                                        parent = current_idx,
+                                        child = child_idx,
+                                        unchanged_steps = unchanged,
+                                        tactic = tactic.as_str(),
+                                        "Goal-unchanged limit reached, pruning branch"
+                                    );
+                                    break;
+                                }
+                            }
+
                             // Try probe tactics at this new node
                             if let Some(terminal) = try_probes_at_node(
                                 child_idx,
@@ -703,6 +756,8 @@ impl SearchEngine {
             total_proofs,
             trie_hits = trie.cache_hits,
             arena_size = arena.len(),
+            context_stuffing = stats.context_stuffing_blocked,
+            loops = stats.loops_detected,
             time_ms = wall_time_ms,
             "Hybrid search exhausted without proof"
         );
@@ -1341,5 +1396,95 @@ mod tests {
 
         assert!(result.proved);
         assert_eq!(result.proof_tactics, vec!["branch_a", "solve_a"]);
+    }
+
+    #[test]
+    fn test_goal_targets_single() {
+        let goals = vec![Goal::parse(0, "h : P\n⊢ Q")];
+        assert_eq!(goal_targets(&goals), "Q");
+    }
+
+    #[test]
+    fn test_goal_targets_multi() {
+        let goals = vec![
+            Goal::parse(0, "⊢ A"),
+            Goal::parse(1, "h : X\n⊢ B"),
+        ];
+        assert_eq!(goal_targets(&goals), "A\n\nB");
+    }
+
+    #[test]
+    fn test_count_unchanged_no_parent() {
+        // Root node has no parent, count = 0
+        let arena = vec![SearchNode {
+            state_id: 0,
+            state_pp: "⊢ P".to_string(),
+            goals: vec![Goal::parse(0, "⊢ P")],
+            parent: None,
+            tactic_applied: String::new(),
+            depth: 0,
+            llm_log_prob: 0.0,
+            ebm_score: 0.0,
+            is_terminal: false,
+        }];
+        assert_eq!(count_goal_unchanged_ancestors(&arena, 0), 0);
+    }
+
+    #[test]
+    fn test_count_unchanged_chain() {
+        // root → child1 (same goal) → child2 (same goal) → child3 (different goal)
+        let arena = vec![
+            SearchNode {
+                state_id: 0,
+                state_pp: "⊢ P".to_string(),
+                goals: vec![Goal::parse(0, "⊢ P")],
+                parent: None,
+                tactic_applied: String::new(),
+                depth: 0,
+                llm_log_prob: 0.0,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+            SearchNode {
+                state_id: 1,
+                state_pp: "h₁ : X\n⊢ P".to_string(),
+                goals: vec![Goal::parse(0, "h₁ : X\n⊢ P")],
+                parent: Some(0),
+                tactic_applied: "have h₁ : X := by linarith".to_string(),
+                depth: 1,
+                llm_log_prob: -0.5,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+            SearchNode {
+                state_id: 2,
+                state_pp: "h₁ : X\nh₂ : Y\n⊢ P".to_string(),
+                goals: vec![Goal::parse(0, "h₁ : X\nh₂ : Y\n⊢ P")],
+                parent: Some(1),
+                tactic_applied: "have h₂ : Y := by omega".to_string(),
+                depth: 2,
+                llm_log_prob: -0.5,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+            SearchNode {
+                state_id: 3,
+                state_pp: "h₁ : X\nh₂ : Y\n⊢ Q".to_string(),
+                goals: vec![Goal::parse(0, "h₁ : X\nh₂ : Y\n⊢ Q")],
+                parent: Some(2),
+                tactic_applied: "apply f".to_string(),
+                depth: 3,
+                llm_log_prob: -0.3,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+        ];
+
+        // child1: parent target P == own target P → 1 unchanged
+        assert_eq!(count_goal_unchanged_ancestors(&arena, 1), 1);
+        // child2: own P == parent P → 1, parent P == grandparent P → 2
+        assert_eq!(count_goal_unchanged_ancestors(&arena, 2), 2);
+        // child3: own Q != parent P → 0
+        assert_eq!(count_goal_unchanged_ancestors(&arena, 3), 0);
     }
 }

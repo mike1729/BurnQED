@@ -69,13 +69,19 @@ pub struct SearchConfig {
     /// Higher values encourage visiting less-explored nodes.
     #[serde(default = "default_exploration_c")]
     pub exploration_c: f64,
+
+    /// Maximum consecutive tactic steps that leave the goal target unchanged.
+    /// Blocks context-stuffing loops where the model adds redundant hypotheses.
+    /// 0 = disabled. Default: 3.
+    #[serde(default = "default_max_goal_unchanged")]
+    pub max_goal_unchanged_steps: u32,
 }
 
 fn default_max_nodes() -> u32 {
     600
 }
 fn default_max_depth() -> u32 {
-    50
+    25
 }
 fn default_alpha() -> f64 {
     0.5
@@ -116,6 +122,9 @@ fn default_hybrid_budget() -> u32 {
 }
 fn default_exploration_c() -> f64 {
     1.41
+}
+fn default_max_goal_unchanged() -> u32 {
+    3
 }
 
 impl SearchConfig {
@@ -178,6 +187,7 @@ impl Default for SearchConfig {
             hybrid_max_tokens: default_hybrid_max_tokens(),
             hybrid_budget: default_hybrid_budget(),
             exploration_c: default_exploration_c(),
+            max_goal_unchanged_steps: default_max_goal_unchanged(),
         }
     }
 }
@@ -190,7 +200,7 @@ mod tests {
     fn test_default_values() {
         let cfg = SearchConfig::default();
         assert_eq!(cfg.max_nodes, 600);
-        assert_eq!(cfg.max_depth, 50);
+        assert_eq!(cfg.max_depth, 25);
         assert!((cfg.alpha - 0.5).abs() < 1e-9);
         assert!((cfg.beta - 0.5).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 600);
@@ -213,7 +223,7 @@ mod tests {
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.max_nodes, 100);
         assert!((cfg.beta - 0.7).abs() < 1e-9);
-        assert_eq!(cfg.max_depth, 50);
+        assert_eq!(cfg.max_depth, 25);
     }
 
     #[test]

@@ -98,6 +98,8 @@ pub struct SearchStats {
     pub loops_detected: u32,
     /// Number of sibling states mined after proof found.
     pub sibling_states_mined: u32,
+    /// Number of tactics blocked by goal-unchanged counter (context stuffing).
+    pub context_stuffing_blocked: u32,
 
     // --- Timing breakdown (added for profiling) ---
 
