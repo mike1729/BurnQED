@@ -189,46 +189,24 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
         return Vec::new();
     }
 
-    // Skip past theorem/lemma declarations; find the first tactic line
-    let mut start = 0;
-    let mut past_declaration = false;
-    while start < lines.len() {
-        let trimmed = lines[start].trim();
-        if trimmed.is_empty() || trimmed.starts_with("--") || trimmed.starts_with("/-") || trimmed.starts_with("-/") {
-            start += 1;
-            continue;
-        }
-        if trimmed.starts_with("theorem ")
-            || trimmed.starts_with("lemma ")
-            || trimmed.starts_with("example ")
-        {
-            past_declaration = true;
-            start += 1;
-            continue;
-        }
-        break;
-    }
-
-    if start >= lines.len() {
-        return Vec::new();
-    }
-
-    // Determine base indent from first tactic line
-    let base_indent = indent_of(lines[start]);
-
     let mut tactics: Vec<String> = Vec::new();
-    let mut i = start;
+    let mut i = 0;
+    let mut past_declaration = false;
 
     while i < lines.len() {
         let trimmed = lines[i].trim();
 
         // Skip empty lines and comments
-        if trimmed.is_empty() || trimmed.starts_with("--") || trimmed.starts_with("/-") || trimmed.starts_with("-/") {
+        if trimmed.is_empty()
+            || trimmed.starts_with("--")
+            || trimmed.starts_with("/-")
+            || trimmed.starts_with("-/")
+        {
             i += 1;
             continue;
         }
 
-        // Skip declarations that appear mid-stream
+        // Skip declarations (theorem/lemma/example headers)
         if trimmed.starts_with("theorem ")
             || trimmed.starts_with("lemma ")
             || trimmed.starts_with("example ")
@@ -239,22 +217,6 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
         }
 
         let line_indent = indent_of(lines[i]);
-
-        // Lines deeper than base are orphaned continuations — skip them
-        // (shouldn't happen in well-formed output, but be safe)
-        if line_indent > base_indent && tactics.is_empty() {
-            i += 1;
-            continue;
-        }
-
-        // Only start new tactics at base indent level
-        if line_indent > base_indent {
-            // This is a continuation of... nothing? Skip.
-            i += 1;
-            continue;
-        }
-
-        // Start a new tactic block at base indent
         let first_line = trimmed;
 
         // Check if this is a calc block
@@ -268,8 +230,7 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
                     continue;
                 }
                 let next_indent = indent_of(lines[i]);
-                // Continuation: deeper indent OR starts with _
-                if next_indent > base_indent || next_trimmed.starts_with('_') {
+                if next_indent > line_indent || next_trimmed.starts_with('_') {
                     block.push(next_trimmed.to_string());
                     i += 1;
                 } else {
@@ -281,46 +242,41 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
         }
 
         // Check if this line ends with a block opener
-        let ends_with_block_opener = {
-            let t = first_line.trim_end();
-            t.ends_with(" by")
-                || t.ends_with(" where")
-                || t.ends_with(" do")
-                || t.ends_with(" =>")
-                || t.ends_with(":= by")
-                || t == "by"
-        };
+        let ends_with_block_opener = is_block_opener(first_line);
 
         // Check for match expression
         let is_match = first_line.starts_with("match ");
 
         if ends_with_block_opener || is_match {
-            // Consume indented body
-            let mut block = vec![first_line.to_string()];
+            // Consume body lines indented deeper than this opener
+            let mut body_lines: Vec<String> = Vec::new();
             i += 1;
             while i < lines.len() {
                 let next_trimmed = lines[i].trim();
                 if next_trimmed.is_empty() {
-                    // Blank lines inside a block — peek ahead to see if more body follows
+                    // Peek ahead: if more indented body follows, skip blank line
                     let mut peek = i + 1;
                     while peek < lines.len() && lines[peek].trim().is_empty() {
                         peek += 1;
                     }
-                    if peek < lines.len() && indent_of(lines[peek]) > base_indent {
+                    if peek < lines.len() && indent_of(lines[peek]) > line_indent {
                         i += 1;
                         continue;
                     }
                     break;
                 }
                 let next_indent = indent_of(lines[i]);
-                if next_indent > base_indent || next_trimmed.starts_with('|') || next_trimmed.starts_with('_') {
-                    block.push(next_trimmed.to_string());
+                if next_indent > line_indent
+                    || next_trimmed.starts_with('|')
+                    || next_trimmed.starts_with('_')
+                {
+                    body_lines.push(next_trimmed.to_string());
                     i += 1;
                 } else {
                     break;
                 }
             }
-            tactics.push(block.join("\n"));
+            tactics.push(build_block_tactic(first_line, &body_lines));
             continue;
         }
 
@@ -354,6 +310,48 @@ pub fn extract_all_tactics_structured(raw: &str) -> Vec<String> {
     }
 
     tactics
+}
+
+/// Check whether a tactic line ends with a block opener keyword.
+fn is_block_opener(line: &str) -> bool {
+    let t = line.trim_end();
+    t.ends_with(" by")
+        || t.ends_with(" where")
+        || t.ends_with(" do")
+        || t.ends_with(" =>")
+        || t.ends_with(":= by")
+        || t == "by"
+}
+
+/// Build a tactic string from an opener line and its body lines.
+///
+/// For `by` blocks with a single-line body, collapse inline:
+///   `have h := by` + `[nlinarith]` → `have h := by nlinarith`
+/// For multi-line bodies, indent with 2 spaces so Lean parses the block:
+///   `have h := by` + `[nlinarith, exact h]` → `have h := by\n  nlinarith\n  exact h`
+fn build_block_tactic(opener: &str, body: &[String]) -> String {
+    if body.is_empty() {
+        return opener.to_string();
+    }
+
+    let is_by_block = {
+        let t = opener.trim_end();
+        t.ends_with(" by") || t.ends_with(":= by") || t == "by"
+    };
+
+    if is_by_block && body.len() == 1 {
+        // Single-line by body → collapse inline
+        return format!("{} {}", opener, body[0]);
+    }
+
+    // Multi-line body → indent each line under the opener
+    let mut result = opener.to_string();
+    for line in body {
+        result.push('\n');
+        result.push_str("  ");
+        result.push_str(line);
+    }
+    result
 }
 
 /// Extract all valid tactic lines from model output.
@@ -591,11 +589,11 @@ mod tests {
 
     #[test]
     fn test_structured_multiline_have() {
-        // have with by block opener → consume indented body
+        // have with by block opener → single-line body collapsed inline
         let raw = "  intro h\n  have h\u{2082} := by\n    nlinarith\n  exact h\u{2082}";
         assert_eq!(
             extract_all_tactics_structured(raw),
-            vec!["intro h", "have h\u{2082} := by\nnlinarith", "exact h\u{2082}"]
+            vec!["intro h", "have h\u{2082} := by nlinarith", "exact h\u{2082}"]
         );
     }
 
@@ -610,19 +608,21 @@ mod tests {
 
     #[test]
     fn test_structured_conv_block() {
+        // conv => with single-line body gets 2-space indent (not a `by` block)
         let raw = "  conv =>\n    rw [foo]\n  simp";
         assert_eq!(
             extract_all_tactics_structured(raw),
-            vec!["conv =>\nrw [foo]", "simp"]
+            vec!["conv =>\n  rw [foo]", "simp"]
         );
     }
 
     #[test]
     fn test_structured_match_arms() {
+        // match arms preserved with 2-space indent
         let raw = "  match h with\n  | inl a => exact a\n  | inr b => exact b";
         assert_eq!(
             extract_all_tactics_structured(raw),
-            vec!["match h with\n| inl a => exact a\n| inr b => exact b"]
+            vec!["match h with\n  | inl a => exact a\n  | inr b => exact b"]
         );
     }
 
@@ -688,12 +688,59 @@ mod tests {
 
     #[test]
     fn test_structured_deepseek_real_output() {
-        // Real DeepSeek output: have + body, then sibling have + body, then close
+        // Real DeepSeek output: have + single-line body → collapsed inline
         let raw = "  have h\u{2083} : 0 < x := by\n    nlinarith\n  have h\u{2084} : x \u{2264} 80 := by\n    nlinarith\n  interval_cases x <;> omega";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result.len(), 3);
-        assert_eq!(result[0], "have h\u{2083} : 0 < x := by\nnlinarith");
-        assert_eq!(result[1], "have h\u{2084} : x \u{2264} 80 := by\nnlinarith");
+        assert_eq!(result[0], "have h\u{2083} : 0 < x := by nlinarith");
+        assert_eq!(result[1], "have h\u{2084} : x \u{2264} 80 := by nlinarith");
         assert_eq!(result[2], "interval_cases x <;> omega");
+    }
+
+    #[test]
+    fn test_structured_prompt_continuation_indent() {
+        // Model output from prompt ending with `example := by\n  `:
+        // First line at indent 0, sibling tactics at indent 2, bodies at indent 4.
+        // The splitter must treat each indent-2 line as a new tactic, not skip it.
+        let raw = "intro x y h\u{2080} h\u{2081} h\u{2082}\n  have h\u{2083} : 0 < x := by\n    linarith\n  have h\u{2084} : x \u{2264} 80 := by\n    nlinarith\n  interval_cases x <;> omega";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], "intro x y h\u{2080} h\u{2081} h\u{2082}");
+        assert_eq!(result[1], "have h\u{2083} : 0 < x := by linarith");
+        assert_eq!(result[2], "have h\u{2084} : x \u{2264} 80 := by nlinarith");
+        assert_eq!(result[3], "interval_cases x <;> omega");
+    }
+
+    #[test]
+    fn test_structured_flat_inline_by() {
+        // All tactics at indent 0, by bodies inline — should split cleanly
+        let raw = "intro x y h\u{2080} h\u{2081} h\u{2082}\nhave h\u{2083} : 0 < x := by linarith\nhave h\u{2084} : x \u{2264} 80 := by nlinarith\ninterval_cases x <;> omega";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], "intro x y h\u{2080} h\u{2081} h\u{2082}");
+        assert_eq!(result[1], "have h\u{2083} : 0 < x := by linarith");
+        assert_eq!(result[2], "have h\u{2084} : x \u{2264} 80 := by nlinarith");
+        assert_eq!(result[3], "interval_cases x <;> omega");
+    }
+
+    #[test]
+    fn test_structured_have_wrapper_whole_proof() {
+        // Model wraps entire proof in `have : (goal) := by ...` at the root
+        let raw = "have h : P := by\n  intro x\n  exact x\nexact h";
+        let result = extract_all_tactics_structured(raw);
+        // The have block consumes indented body; exact h is a separate tactic
+        assert_eq!(result.len(), 2);
+        assert!(result[0].starts_with("have h : P := by"));
+        assert_eq!(result[1], "exact h");
+    }
+
+    #[test]
+    fn test_structured_multi_line_by_body() {
+        // by block with multiple body lines → indented, NOT collapsed
+        let raw = "  have h := by\n    rw [foo]\n    simp\n  exact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "have h := by\n  rw [foo]\n  simp");
+        assert_eq!(result[1], "exact h");
     }
 }

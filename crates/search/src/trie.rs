@@ -177,13 +177,16 @@ impl ReplayTrie {
 
     /// Drain all node indices whose stats were updated since last drain.
     ///
-    /// Used to re-insert these nodes into the frontier with updated scores
-    /// after a replay round. Only returns non-terminal, non-new nodes that
-    /// existed before `arena_before`.
-    pub fn drain_updated_indices(&mut self, arena_before: usize) -> Vec<usize> {
+    /// Drain the set of node indices whose trie stats changed since the last drain.
+    ///
+    /// Returns only indices strictly below `max_idx` — newly created nodes
+    /// (idx >= max_idx) are excluded because they'll be pushed to the frontier
+    /// separately when first discovered. Pre-existing nodes need re-scoring
+    /// because their visit/success counts changed during replay.
+    pub fn drain_updated_indices_below(&mut self, max_idx: usize) -> Vec<usize> {
         self.updated_indices
             .drain()
-            .filter(|&idx| idx < arena_before)
+            .filter(|&idx| idx < max_idx)
             .collect()
     }
 

@@ -14,6 +14,19 @@ use crate::config::SearchConfig;
 use crate::node::{extract_tactic_sequence, ScoredNode, SearchNode};
 use crate::trie::{normalize_tactic, ReplayTrie, TrieEntry};
 
+/// Truncate a string to at most `max_bytes` at a valid UTF-8 boundary.
+/// Returns a `&str` slice — no allocation.
+fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Errors that can occur during proof search.
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
@@ -270,6 +283,18 @@ impl SearchEngine {
             expanded.insert(leaf_idx);
             nodes_expanded += 1;
 
+            let leaf_state_preview = truncate_str(&arena[leaf_idx].state_pp, 120);
+            tracing::info!(
+                round,
+                leaf = leaf_idx,
+                depth = arena[leaf_idx].depth,
+                frontier_size = frontier.len(),
+                total_proofs,
+                arena_size = arena.len(),
+                state = leaf_state_preview,
+                "Expanding leaf"
+            );
+
             if frontier.len() + 1 > stats.peak_frontier_size {
                 stats.peak_frontier_size = frontier.len() + 1;
             }
@@ -348,8 +373,20 @@ impl SearchEngine {
             for proof in &raw_proofs {
                 let tactics = extract_all_tactics_structured(&proof.text);
                 if tactics.is_empty() {
+                    tracing::debug!(
+                        raw_text = proof.text.as_str(),
+                        "Empty tactics extracted from proof"
+                    );
                     continue;
                 }
+
+                tracing::debug!(
+                    n_tactics = tactics.len(),
+                    tactics = ?tactics.iter()
+                        .map(|t| truncate_str(t, 60))
+                        .collect::<Vec<_>>(),
+                    "Replaying proof"
+                );
 
                 let mut current_idx = leaf_idx;
 
@@ -364,6 +401,12 @@ impl SearchEngine {
                             TrieEntry::Success(child_idx) => {
                                 stats.trie_cache_hits += 1;
                                 trie.cache_hits += 1;
+                                tracing::trace!(
+                                    parent = current_idx,
+                                    child = child_idx,
+                                    tactic = normalized.as_str(),
+                                    "Trie cache HIT (success)"
+                                );
                                 current_idx = child_idx;
                                 // If we replayed into a terminal, this proof is done
                                 if arena[child_idx].is_terminal {
@@ -372,6 +415,11 @@ impl SearchEngine {
                                 continue;
                             }
                             TrieEntry::Failed => {
+                                tracing::trace!(
+                                    parent = current_idx,
+                                    tactic = normalized.as_str(),
+                                    "Trie cache HIT (known failure)"
+                                );
                                 break;
                             }
                         }
@@ -402,6 +450,11 @@ impl SearchEngine {
                             if visited_states.contains(&state_pp) {
                                 stats.loops_detected += 1;
                                 trie.insert_failure(current_idx, tactic);
+                                tracing::debug!(
+                                    parent = current_idx,
+                                    tactic = tactic.as_str(),
+                                    "Loop detected, marking as failure"
+                                );
                                 break;
                             }
                             visited_states.insert(state_pp.clone());
@@ -411,6 +464,16 @@ impl SearchEngine {
                             }
 
                             let child_idx = arena.len();
+                            let state_preview = truncate_str(&state_pp, 100);
+                            tracing::debug!(
+                                parent = current_idx,
+                                child = child_idx,
+                                depth = child_depth,
+                                tactic = tactic.as_str(),
+                                n_goals = goals.len(),
+                                state = state_preview,
+                                "Novel tactic SUCCESS → new node"
+                            );
                             arena.push(SearchNode {
                                 state_id: child_state_id,
                                 state_pp: state_pp.clone(),
@@ -490,10 +553,11 @@ impl SearchEngine {
                         TacticResult::Failed { message } => {
                             stats.total_tactic_failures += 1;
                             trie.insert_failure(current_idx, tactic);
-                            tracing::trace!(
+                            tracing::debug!(
+                                parent = current_idx,
                                 tactic = tactic.as_str(),
-                                error = message,
-                                "Tactic failed"
+                                error = message.as_str(),
+                                "Novel tactic FAILED"
                             );
                             break;
                         }
@@ -518,8 +582,8 @@ impl SearchEngine {
                     let states: Vec<&str> = pending.iter().map(|(_, s)| s.as_str()).collect();
                     let ebm_start = Instant::now();
                     let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
-                        tracing::warn!(error = %e, "Batch scoring failed, using 0.0");
-                        vec![0.0; states.len()]
+                        tracing::warn!(error = %e, "Batch scoring failed, using fallback");
+                        vec![-1e6; states.len()]
                     });
                     let ebm_us = ebm_start.elapsed().as_micros() as u64;
                     stats.total_ebm_time_ms += ebm_us / 1000;
@@ -542,7 +606,7 @@ impl SearchEngine {
 
             // Re-insert existing nodes whose trie stats changed during this round.
             // This ensures frontier scores reflect updated Q-values from replay.
-            let updated_existing = trie.drain_updated_indices(arena_before);
+            let updated_existing = trie.drain_updated_indices_below(arena_before);
             for idx in updated_existing {
                 if expanded.contains(&idx) || arena[idx].is_terminal {
                     continue;
@@ -563,6 +627,7 @@ impl SearchEngine {
             }
 
             // Push scored new nodes to the persistent frontier
+            let mut new_frontier_entries = Vec::new();
             for &idx in &new_nodes {
                 let node = &arena[idx];
                 if node.depth < self.config.max_depth {
@@ -576,7 +641,16 @@ impl SearchEngine {
                         node_index: idx,
                         score: OrderedFloat(score),
                     });
+                    new_frontier_entries.push((idx, node.depth, score));
                 }
+            }
+            if !new_frontier_entries.is_empty() {
+                tracing::debug!(
+                    round,
+                    new_nodes = new_frontier_entries.len(),
+                    scores = ?new_frontier_entries.iter().map(|(i, d, s)| format!("{}(d{}={:.3})", i, d, s)).collect::<Vec<_>>(),
+                    "Pushed new nodes to frontier"
+                );
             }
 
             // If a proof was found during replay, return after scoring/frontier update
@@ -663,6 +737,9 @@ async fn try_probes_at_node(
         return Ok(None);
     }
 
+    // Record a visit for probe expansion so Q-values stay consistent
+    trie.record_visit(node_idx);
+
     let state_id = arena[node_idx].state_id;
     let node_depth = arena[node_idx].depth;
 
@@ -729,6 +806,11 @@ async fn try_probes_at_node(
                         is_terminal: false,
                     });
                     trie.insert_success(node_idx, probe, child_idx);
+                } else {
+                    // Probe landed on an already-visited state — register as
+                    // failure so the trie doesn't leave this edge as "unknown"
+                    stats.loops_detected += 1;
+                    trie.insert_failure(node_idx, probe);
                 }
             }
             TacticResult::Failed { .. } => {
