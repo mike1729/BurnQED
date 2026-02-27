@@ -15,7 +15,6 @@ async-trait = { workspace = true }
 serde = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-lru = { workspace = true }
 futures = { workspace = true }
 
 [features]

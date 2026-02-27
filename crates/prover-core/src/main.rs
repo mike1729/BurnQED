@@ -57,9 +57,6 @@ enum Command {
         /// Override maximum tokens per generated tactic.
         #[arg(long)]
         max_tactic_tokens: Option<usize>,
-        /// Override number of candidate tactics per expansion.
-        #[arg(long)]
-        num_candidates: Option<usize>,
         /// Override max states per encode HTTP request (lower for nf4 VRAM).
         #[arg(long)]
         batch_encode_size: Option<usize>,
@@ -132,9 +129,6 @@ enum Command {
         /// Override maximum tokens per generated tactic.
         #[arg(long)]
         max_tactic_tokens: Option<usize>,
-        /// Override number of candidate tactics per expansion.
-        #[arg(long)]
-        num_candidates: Option<usize>,
         /// Override max states per encode HTTP request (lower for nf4 VRAM).
         #[arg(long)]
         batch_encode_size: Option<usize>,
@@ -318,7 +312,6 @@ async fn main() -> anyhow::Result<()> {
             resume_from,
             temperature,
             max_tactic_tokens,
-            num_candidates,
             batch_encode_size,
             concurrency,
             max_theorems,
@@ -333,7 +326,6 @@ async fn main() -> anyhow::Result<()> {
                     ebm_path,
                     encode_url,
                     max_tactic_tokens,
-                    num_candidates,
                     batch_encode_size,
                     concurrency,
                     max_theorems,
@@ -369,7 +361,6 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
             max_theorems,
             max_tactic_tokens,
-            num_candidates,
             batch_encode_size,
             imports,
         } => {
@@ -382,7 +373,6 @@ async fn main() -> anyhow::Result<()> {
                     ebm_path,
                     encode_url,
                     max_tactic_tokens,
-                    num_candidates,
                     batch_encode_size,
                     concurrency,
                     max_theorems,

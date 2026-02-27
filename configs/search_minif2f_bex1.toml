@@ -14,6 +14,12 @@ ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
 ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
 probe_tactics = []
+# Hybrid whole-proof search
+hybrid_num_proofs = 32
+hybrid_expand_proofs = 16
+hybrid_max_rounds = 30
+hybrid_max_tokens = 1024
+hybrid_budget = 256
 
 [lean_pool]
 num_workers = 8               # Matched to concurrency default

@@ -63,6 +63,16 @@ impl InferenceHandle {
         })
     }
 
+    /// Generate N whole-proof completions (async).
+    pub async fn generate_whole_proofs(
+        &self,
+        proof_state: &str,
+        n: usize,
+        max_tokens: usize,
+    ) -> anyhow::Result<Vec<GeneratedTactic>> {
+        self.0.generate_whole_proofs(proof_state, n, max_tokens).await
+    }
+
     /// Encode a proof state to an embedding (async).
     pub async fn encode(&self, text: &str) -> anyhow::Result<Embedding> {
         self.0.encode(text).await

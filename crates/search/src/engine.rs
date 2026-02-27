@@ -1,4 +1,4 @@
-//! Best-first search engine with priority queue, node expansion, and scoring.
+//! Hybrid whole-proof search engine with replay trie, Q-values, and UCB scoring.
 
 use std::collections::{BinaryHeap, HashSet};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -7,11 +7,12 @@ use async_trait::async_trait;
 use ordered_float::OrderedFloat;
 
 use lean_repl::{Goal, ProofState, TacticResult};
-use policy::GeneratedTactic;
+use policy::{extract_all_tactics_structured, GeneratedTactic};
 use trajectory::{SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord};
 
 use crate::config::SearchConfig;
 use crate::node::{extract_tactic_sequence, ScoredNode, SearchNode};
+use crate::trie::{normalize_tactic, ReplayTrie, TrieEntry};
 
 /// Errors that can occur during proof search.
 #[derive(Debug, thiserror::Error)]
@@ -64,35 +65,22 @@ pub trait TacticRunner: Send {
     ) -> Result<TacticResult, SearchError>;
 }
 
-/// LLM policy that generates tactic candidates for a proof state.
+/// LLM policy that generates whole-proof completions for a proof state.
 ///
 /// Async trait — generation involves HTTP calls to an inference server.
 #[async_trait]
 pub trait PolicyProvider: Send + Sync {
-    /// Generate up to `n` candidate tactics for the given proof state text.
-    async fn generate_candidates(
+    /// Generate N whole-proof completions for the given proof state.
+    ///
+    /// Returns the full raw text of each completion for trie-based replay.
+    /// Each completion may contain multiple tactics that will be split by
+    /// `extract_all_tactics_structured` during trie replay.
+    async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
+        max_tokens: usize,
     ) -> Result<Vec<GeneratedTactic>, SearchError>;
-
-    /// Generate candidates for multiple states. Default: sequential calls.
-    async fn generate_candidates_batch(
-        &self,
-        states: &[String],
-        n: usize,
-    ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
-        let mut results = Vec::with_capacity(states.len());
-        for s in states {
-            results.push(self.generate_candidates(s, n).await?);
-        }
-        Ok(results)
-    }
-
-    /// Return (hits, misses) cache counters, if this provider has a cache.
-    fn cache_stats(&self) -> Option<(u32, u32)> {
-        None
-    }
 }
 
 /// Value function that scores proof states (e.g., EBM energy).
@@ -128,7 +116,11 @@ impl SearchEngine {
         Self { config }
     }
 
-    /// Search for a proof of a single theorem.
+    /// Search for a proof of a single theorem using hybrid whole-proof replay.
+    ///
+    /// Generates N whole proofs, splits into tactic sequences, replays through
+    /// Lean building a trie (shared prefixes verified once), then adaptively
+    /// expands the most promising unsolved leaf via UCB/EBM scoring.
     ///
     /// Returns a `SearchResult` with the proof tactics (if found) and
     /// all trajectory records for EBM training.
@@ -146,10 +138,7 @@ impl SearchEngine {
         let mut runner = env.start_proof(theorem_name, statement).await?;
         let initial_state = runner.initial_state().clone();
 
-        // Build root node. goal.start returns empty goals, so we synthesize
-        // the root state from the theorem statement.
-        // If statement already contains '⊢' (e.g. from theorem_index proof states),
-        // use it as-is; otherwise prepend "⊢ " (e.g. for simple expressions like "True").
+        // Build root node
         let root_pp = if statement.contains('⊢') {
             statement.to_string()
         } else {
@@ -171,13 +160,10 @@ impl SearchEngine {
         };
 
         let mut arena: Vec<SearchNode> = vec![root];
-
-        // Visited states for loop detection
         let mut visited_states: HashSet<String> = HashSet::new();
         visited_states.insert(root_pp.clone());
+        let mut trie = ReplayTrie::new();
 
-        // If root is already terminal (shouldn't happen for real theorems,
-        // but handle gracefully)
         if root_terminal {
             let wall_time_ms = start_time.elapsed().as_millis() as u64;
             let records = build_trajectory_records(&arena, theorem_name);
@@ -195,20 +181,17 @@ impl SearchEngine {
             });
         }
 
-        // Score root with EBM if available (fall back to 0.0 on error, consistent with child scoring)
+        // Score root with EBM if available
         if let Some(scorer) = scorer {
             if self.config.should_skip_ebm(0) {
                 stats.ebm_skipped_by_depth += 1;
                 arena[0].ebm_score = -1e6;
-                tracing::debug!("Skipping EBM at root (depth 0, ebm_min_depth={})", self.config.ebm_min_depth);
             } else {
                 let ebm_start = Instant::now();
                 match scorer.score(&arena[0].state_pp) {
-                    Ok(score) => {
-                        arena[0].ebm_score = score;
-                    }
+                    Ok(score) => arena[0].ebm_score = score,
                     Err(e) => {
-                        tracing::warn!(theorem = theorem_name, error = %e, "Root EBM scoring failed, using 0.0");
+                        tracing::warn!(theorem = theorem_name, error = %e, "Root EBM scoring failed");
                         arena[0].ebm_score = 0.0;
                     }
                 }
@@ -219,281 +202,309 @@ impl SearchEngine {
             }
         }
 
-        let root_score = arena[0].combined_score(self.config.alpha, self.config.effective_beta(0), self.config.llm_temperature, self.config.ebm_temperature);
+        // Persistent frontier — persists across rounds so nodes from earlier
+        // rounds compete with newly-scored nodes from later rounds.
         let mut frontier = BinaryHeap::new();
-        frontier.push(ScoredNode {
-            node_index: 0,
-            score: OrderedFloat(root_score),
-        });
+        let mut expanded: HashSet<usize> = HashSet::new();
+        {
+            let ebm = if scorer.is_some() && !self.config.should_skip_ebm(0) {
+                Some(arena[0].ebm_score)
+            } else {
+                None
+            };
+            let root_score = trie.frontier_score(0, ebm, None);
+            frontier.push(ScoredNode {
+                node_index: 0,
+                score: OrderedFloat(root_score),
+            });
+        }
 
-        let mut nodes_expanded: u32 = 0;
+        let mut total_proofs: u32 = 0;
+        let mut round: u32 = 0;
         let mut max_depth_reached: u32 = 0;
+        let mut nodes_expanded: u32 = 0;
 
-        // Main search loop
+        // Hybrid search loop
         let exit_reason;
-        loop {
-            if frontier.is_empty() {
-                exit_reason = "frontier_exhausted";
+        'outer: loop {
+            // Check termination conditions
+            let timeout_secs = self.config.timeout_per_theorem;
+            if timeout_secs > 0 && start_time.elapsed().as_secs() >= timeout_secs {
+                exit_reason = "timeout";
+                tracing::debug!(theorem = theorem_name, "Search timed out");
+                break;
+            }
+            if total_proofs >= self.config.hybrid_budget {
+                exit_reason = "budget_exhausted";
                 break;
             }
             if nodes_expanded >= self.config.max_nodes {
                 exit_reason = "budget_exhausted";
                 break;
             }
-
-            let timeout_secs = self.config.timeout_per_theorem;
-            if timeout_secs > 0 && start_time.elapsed().as_secs() >= timeout_secs {
-                exit_reason = "timeout";
-                tracing::debug!(
-                    theorem = theorem_name,
-                    elapsed_s = start_time.elapsed().as_secs(),
-                    "Search timed out"
-                );
+            if round >= self.config.hybrid_max_rounds {
+                exit_reason = "max_rounds";
                 break;
             }
 
-            // Pop a batch of nodes from the frontier
-            let batch_size = self.config.batch_expansion_size.max(1).min(frontier.len());
-            let mut batch: Vec<ScoredNode> = Vec::with_capacity(batch_size);
-            for _ in 0..batch_size {
-                if let Some(node) = frontier.pop() {
-                    batch.push(node);
-                } else {
-                    break;
+            // Pop best node from persistent frontier (lazy deletion for stale entries)
+            let leaf_idx = loop {
+                match frontier.pop() {
+                    None => {
+                        exit_reason = "frontier_exhausted";
+                        break 'outer;
+                    }
+                    Some(sn) => {
+                        let idx = sn.node_index;
+                        // Skip already-expanded, terminal, or depth-limited nodes
+                        if expanded.contains(&idx)
+                            || arena[idx].is_terminal
+                            || arena[idx].depth >= self.config.max_depth
+                        {
+                            continue;
+                        }
+                        break idx;
+                    }
                 }
+            };
+            expanded.insert(leaf_idx);
+
+            if frontier.len() + 1 > stats.peak_frontier_size {
+                stats.peak_frontier_size = frontier.len() + 1;
             }
 
-            // Filter out nodes at max depth
-            let mut expand_batch: Vec<&ScoredNode> = Vec::new();
-            for sn in &batch {
-                let node_depth = arena[sn.node_index].depth;
-                if node_depth >= self.config.max_depth {
-                    nodes_expanded += 1;
-                    stats.nodes_pruned += 1;
-                } else {
-                    expand_batch.push(sn);
-                }
+            // Track new nodes created during this expansion (probes + replay)
+            let arena_before = arena.len();
+
+            // Try probe tactics at this leaf BEFORE generating whole proofs
+            if let Some(terminal_idx) = try_probes_at_node(
+                leaf_idx,
+                &mut arena,
+                &mut *runner,
+                &mut trie,
+                &mut visited_states,
+                &self.config,
+                &mut stats,
+                &mut max_depth_reached,
+            )
+            .await?
+            {
+                // Probe found a proof!
+                trie.record_proof_success(terminal_idx, &arena);
+
+                stats.nodes_expanded = nodes_expanded;
+                stats.hybrid_rounds = round + 1;
+                stats.trie_cache_hits = trie.cache_hits;
+                let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
+                let wall_time_ms = start_time.elapsed().as_millis() as u64;
+                let records = build_trajectory_records(&arena, theorem_name);
+
+                return Ok(SearchResult {
+                    theorem_name: theorem_name.to_string(),
+                    proved: true,
+                    proof_tactics,
+                    nodes_expanded,
+                    total_states: arena.len() as u32,
+                    max_depth_reached,
+                    wall_time_ms,
+                    all_records: records,
+                    stats,
+                    failure_reason: "proved".to_string(),
+                });
             }
 
-            if expand_batch.is_empty() {
-                continue;
-            }
+            let leaf_state = arena[leaf_idx].goals_as_text();
 
-            // Batch-generate candidates for all nodes
-            let prompts: Vec<String> = expand_batch
-                .iter()
-                .map(|sn| arena[sn.node_index].goals_as_text())
-                .collect();
+            // Generate whole proofs from this leaf
+            let n = if round == 0 {
+                self.config.hybrid_num_proofs
+            } else {
+                self.config.hybrid_expand_proofs
+            };
 
             let gen_start = Instant::now();
-            let batch_candidates = policy.generate_candidates_batch(
-                &prompts,
-                self.config.num_candidates,
-            ).await?;
-            let gen_elapsed = gen_start.elapsed();
-            let gen_us = gen_elapsed.as_micros() as u64;
+            let raw_proofs = policy
+                .generate_whole_proofs(&leaf_state, n, self.config.hybrid_max_tokens)
+                .await?;
+            let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
             stats.gen_latencies_us.push(gen_us);
+            total_proofs += n as u32;
+            stats.hybrid_proofs_generated += n as u32;
+
             tracing::debug!(
-                expansion = nodes_expanded,
-                states = expand_batch.len(),
-                gen_ms = gen_elapsed.as_millis() as u64,
-                "Generate complete"
+                round,
+                leaf = leaf_idx,
+                depth = arena[leaf_idx].depth,
+                n_proofs = raw_proofs.len(),
+                "Hybrid round: generated whole proofs"
             );
 
-            // Expand each node in the batch.
-            // Collect children needing EBM scoring for deferred batch scoring.
-            let mut pending_scores: Vec<(usize, String)> = Vec::new();
-            let lean_batch_start = Instant::now();
-
-            for (i, sn) in expand_batch.iter().enumerate() {
-                let node_idx = sn.node_index;
-                let node_state_id = arena[node_idx].state_id;
-                let node_depth = arena[node_idx].depth;
-
-                tracing::trace!(
-                    node = node_idx,
-                    state_id = node_state_id,
-                    depth = node_depth,
-                    score = %sn.score,
-                    "Expanding node"
-                );
-
-                let mut candidates = batch_candidates[i].clone();
-
-                // Track LLM candidate count before probe injection
-                let llm_count = candidates.len();
-                stats.candidates_per_expansion.push(llm_count);
-
-                // Inject fallback tactics when LLM returns nothing
-                if candidates.is_empty() && !self.config.fallback_tactics.is_empty() {
-                    tracing::debug!(
-                        node = node_idx,
-                        "LLM returned no candidates, using fallback tactics"
-                    );
-                    candidates = self
-                        .config
-                        .fallback_tactics
-                        .iter()
-                        .map(|t| GeneratedTactic {
-                            text: t.clone(),
-                            raw_text: t.clone(),
-                            log_prob: -100.0,
-                            tokens: vec![],
-                        })
-                        .collect();
+            // Replay each proof through the trie
+            for proof in &raw_proofs {
+                let tactics = extract_all_tactics_structured(&proof.text);
+                if tactics.is_empty() {
+                    continue;
                 }
 
-                // Append probe tactics (deduped against LLM candidates)
-                let num_probes = inject_probes(&mut candidates, &self.config.probe_tactics);
+                let mut current_idx = leaf_idx;
 
-                for (cand_idx, candidate) in candidates.iter().enumerate() {
-                    let is_probe = cand_idx >= candidates.len() - num_probes;
-                    if is_probe {
-                        stats.probe_attempts += 1;
+                for tactic in &tactics {
+                    trie.record_visit(current_idx);
+
+                    // Check trie cache first
+                    let normalized = normalize_tactic(tactic);
+                    let cached = trie.lookup(current_idx, &normalized).cloned();
+                    if let Some(entry) = cached {
+                        match entry {
+                            TrieEntry::Success(child_idx) => {
+                                stats.trie_cache_hits += 1;
+                                trie.cache_hits += 1;
+                                current_idx = child_idx;
+                                continue;
+                            }
+                            TrieEntry::Failed => {
+                                break;
+                            }
+                        }
                     }
+
+                    // Novel tactic → send to Lean
+                    let state_id = arena[current_idx].state_id;
+                    let node_depth = arena[current_idx].depth;
 
                     stats.total_tactic_attempts += 1;
                     let tactic_start = Instant::now();
-                    let result = runner
-                        .apply_tactic(node_state_id, None, &candidate.text)
-                        .await?;
+                    let result = runner.apply_tactic(state_id, None, tactic).await?;
                     let tactic_us = tactic_start.elapsed().as_micros() as u64;
                     stats.total_lean_time_ms += tactic_us / 1000;
+                    stats.total_llm_lean_time_ms += tactic_us / 1000;
                     stats.lean_latencies_us.push(tactic_us);
-                    if is_probe {
-                        stats.total_probe_lean_time_ms += tactic_us / 1000;
-                    } else {
-                        stats.total_llm_lean_time_ms += tactic_us / 1000;
-                    }
 
                     match result {
-                        TacticResult::Success { state_id, goals } => {
+                        TacticResult::Success { state_id: child_state_id, goals } => {
                             let child_depth = node_depth + 1;
-
                             let state_pp = goals
                                 .iter()
                                 .map(|g| g.raw.as_str())
                                 .collect::<Vec<_>>()
                                 .join("\n\n");
 
-                            // Loop detection: skip states we've already visited
+                            // Loop detection
                             if visited_states.contains(&state_pp) {
-                                let looped = SearchNode {
-                                    state_id,
+                                stats.loops_detected += 1;
+                                let looped_idx = arena.len();
+                                arena.push(SearchNode {
+                                    state_id: child_state_id,
                                     state_pp,
                                     goals,
-                                    parent: Some(node_idx),
-                                    tactic_applied: candidate.text.clone(),
+                                    parent: Some(current_idx),
+                                    tactic_applied: tactic.clone(),
                                     depth: child_depth,
-                                    llm_log_prob: candidate.log_prob,
+                                    llm_log_prob: proof.log_prob,
                                     ebm_score: 0.0,
                                     is_terminal: false,
-                                };
-                                arena.push(looped);
-                                stats.loops_detected += 1;
-                                continue;
+                                });
+                                trie.insert_success(current_idx, tactic, looped_idx);
+                                break;
                             }
                             visited_states.insert(state_pp.clone());
-
-                            if is_probe {
-                                stats.probe_successes += 1;
-                            }
 
                             if child_depth > max_depth_reached {
                                 max_depth_reached = child_depth;
                             }
 
-                            // Defer EBM scoring: push child with ebm_score=0.0
                             let child_idx = arena.len();
-                            let child = SearchNode {
-                                state_id,
+                            arena.push(SearchNode {
+                                state_id: child_state_id,
                                 state_pp: state_pp.clone(),
                                 goals,
-                                parent: Some(node_idx),
-                                tactic_applied: candidate.text.clone(),
+                                parent: Some(current_idx),
+                                tactic_applied: tactic.clone(),
                                 depth: child_depth,
-                                llm_log_prob: candidate.log_prob,
+                                llm_log_prob: proof.log_prob,
                                 ebm_score: 0.0,
                                 is_terminal: false,
-                            };
-                            arena.push(child);
+                            });
+                            trie.insert_success(current_idx, tactic, child_idx);
 
-                            if scorer.is_some() && !self.config.should_skip_ebm(child_depth) {
-                                pending_scores.push((child_idx, state_pp));
-                            } else {
-                                if scorer.is_some() && self.config.should_skip_ebm(child_depth) {
-                                    stats.ebm_skipped_by_depth += 1;
-                                    arena[child_idx].ebm_score = -1e6;
-                                }
-                                // No scorer or EBM skipped at this depth: push to frontier immediately
-                                let child_score =
-                                    arena[child_idx].combined_score(self.config.alpha, self.config.effective_beta(child_depth), self.config.llm_temperature, self.config.ebm_temperature);
-                                frontier.push(ScoredNode {
-                                    node_index: child_idx,
-                                    score: OrderedFloat(child_score),
+                            // Try probe tactics at this new node
+                            if let Some(terminal) = try_probes_at_node(
+                                child_idx,
+                                &mut arena,
+                                &mut *runner,
+                                &mut trie,
+                                &mut visited_states,
+                                &self.config,
+                                &mut stats,
+                                &mut max_depth_reached,
+                            )
+                            .await?
+                            {
+                                // Probe found a proof!
+                                trie.record_proof_success(terminal, &arena);
+
+                                stats.nodes_expanded = nodes_expanded;
+                                stats.hybrid_rounds = round + 1;
+                                stats.trie_cache_hits = trie.cache_hits;
+                                let proof_tactics = extract_tactic_sequence(&arena, terminal);
+                                let wall_time_ms = start_time.elapsed().as_millis() as u64;
+                                let records = build_trajectory_records(&arena, theorem_name);
+
+                                return Ok(SearchResult {
+                                    theorem_name: theorem_name.to_string(),
+                                    proved: true,
+                                    proof_tactics,
+                                    nodes_expanded,
+                                    total_states: arena.len() as u32,
+                                    max_depth_reached,
+                                    wall_time_ms,
+                                    all_records: records,
+                                    stats,
+                                    failure_reason: "proved".to_string(),
                                 });
                             }
+
+                            current_idx = child_idx;
                         }
-                        TacticResult::ProofComplete { state_id } => {
-                            let child_depth = node_depth + 1;
+                        TacticResult::ProofComplete { state_id: terminal_state_id } => {
+                            let child_depth = arena[current_idx].depth + 1;
                             stats.nodes_terminal += 1;
-                            let terminal = SearchNode {
-                                state_id,
-                                state_pp: String::new(),
-                                goals: vec![],
-                                parent: Some(node_idx),
-                                tactic_applied: candidate.text.clone(),
-                                depth: child_depth,
-                                llm_log_prob: candidate.log_prob,
-                                ebm_score: 0.0,
-                                is_terminal: true,
-                            };
 
                             if child_depth > max_depth_reached {
                                 max_depth_reached = child_depth;
                             }
 
                             let terminal_idx = arena.len();
-                            arena.push(terminal);
-
-                            // Sibling harvest: expand proof path ancestors for hard negatives
-                            if self.config.harvest_siblings {
-                                let harvest_start = Instant::now();
-                                harvest_siblings(
-                                    &mut arena,
-                                    terminal_idx,
-                                    &self.config,
-                                    &mut *runner,
-                                    policy,
-                                    scorer,
-                                    &mut stats,
-                                )
-                                .await?;
-                                stats.total_harvest_time_ms +=
-                                    harvest_start.elapsed().as_millis() as u64;
-                            }
-
-                            // Collect cache stats from policy provider
-                            if let Some((hits, misses)) = policy.cache_stats() {
-                                stats.cache_hits = hits;
-                                stats.cache_misses = misses;
-                            }
-
-                            let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
-                            let wall_time_ms = start_time.elapsed().as_millis() as u64;
-                            let total_states = arena.len() as u32;
-                            let records = build_trajectory_records(&arena, theorem_name);
+                            arena.push(SearchNode {
+                                state_id: terminal_state_id,
+                                state_pp: String::new(),
+                                goals: vec![],
+                                parent: Some(current_idx),
+                                tactic_applied: tactic.clone(),
+                                depth: child_depth,
+                                llm_log_prob: proof.log_prob,
+                                ebm_score: 0.0,
+                                is_terminal: true,
+                            });
+                            trie.insert_success(current_idx, tactic, terminal_idx);
+                            trie.record_proof_success(terminal_idx, &arena);
 
                             stats.nodes_expanded = nodes_expanded;
+                            stats.hybrid_rounds = round + 1;
+                            stats.trie_cache_hits = trie.cache_hits;
+                            let proof_tactics = extract_tactic_sequence(&arena, terminal_idx);
+                            let wall_time_ms = start_time.elapsed().as_millis() as u64;
+                            let records = build_trajectory_records(&arena, theorem_name);
 
                             tracing::debug!(
                                 theorem = theorem_name,
                                 steps = proof_tactics.len(),
-                                nodes = nodes_expanded,
-                                states = total_states,
+                                rounds = round + 1,
+                                total_proofs,
+                                trie_hits = trie.cache_hits,
                                 time_ms = wall_time_ms,
-                                "Proof found"
+                                "Proof found via hybrid search"
                             );
 
                             return Ok(SearchResult {
@@ -501,7 +512,7 @@ impl SearchEngine {
                                 proved: true,
                                 proof_tactics,
                                 nodes_expanded,
-                                total_states,
+                                total_states: arena.len() as u32,
                                 max_depth_reached,
                                 wall_time_ms,
                                 all_records: records,
@@ -511,81 +522,93 @@ impl SearchEngine {
                         }
                         TacticResult::Failed { message } => {
                             stats.total_tactic_failures += 1;
+                            trie.insert_failure(current_idx, tactic);
                             tracing::trace!(
-                                tactic = candidate.text,
+                                tactic = tactic.as_str(),
                                 error = message,
                                 "Tactic failed"
                             );
+                            break;
                         }
                     }
                 }
-
-                nodes_expanded += 1;
             }
 
-            let lean_elapsed = lean_batch_start.elapsed();
-            tracing::debug!(
-                expansion = nodes_expanded,
-                lean_ms = lean_elapsed.as_millis() as u64,
-                children = pending_scores.len(),
-                "Lean tactics complete"
-            );
+            // Batch-score ALL new nodes from this expansion (probes + replay),
+            // then push them to the persistent frontier immediately.
+            let new_nodes: Vec<usize> = (arena_before..arena.len())
+                .filter(|&i| !arena[i].is_terminal)
+                .collect();
 
-            // Batch-score all deferred children from this expansion batch
             if let Some(scorer) = scorer {
-                if !pending_scores.is_empty() {
-                    let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
+                let pending: Vec<(usize, String)> = new_nodes
+                    .iter()
+                    .filter(|&&i| !self.config.should_skip_ebm(arena[i].depth))
+                    .map(|&i| (i, arena[i].state_pp.clone()))
+                    .collect();
+
+                if !pending.is_empty() {
+                    let states: Vec<&str> = pending.iter().map(|(_, s)| s.as_str()).collect();
                     let ebm_start = Instant::now();
                     let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
-                        tracing::warn!(error = %e, "Batch scoring failed during expansion, using 0.0 defaults");
+                        tracing::warn!(error = %e, "Batch scoring failed, using 0.0");
                         vec![0.0; states.len()]
                     });
-                    let ebm_elapsed = ebm_start.elapsed();
-                    let ebm_us = ebm_elapsed.as_micros() as u64;
+                    let ebm_us = ebm_start.elapsed().as_micros() as u64;
                     stats.total_ebm_time_ms += ebm_us / 1000;
                     stats.ebm_latencies_us.push(ebm_us);
-                    tracing::debug!(
-                        expansion = nodes_expanded,
-                        ebm_ms = ebm_elapsed.as_millis() as u64,
-                        scored = scores.len(),
-                        "EBM scoring complete"
-                    );
                     stats.ebm_score_calls += scores.len() as u32;
 
-                    for ((idx, _), score) in pending_scores.iter().zip(scores) {
+                    for ((idx, _), score) in pending.iter().zip(scores) {
                         arena[*idx].ebm_score = score;
-                        let child_score =
-                            arena[*idx].combined_score(self.config.alpha, self.config.effective_beta(arena[*idx].depth), self.config.llm_temperature, self.config.ebm_temperature);
-                        frontier.push(ScoredNode {
-                            node_index: *idx,
-                            score: OrderedFloat(child_score),
-                        });
                     }
-                    stats.peak_frontier_size =
-                        stats.peak_frontier_size.max(frontier.len());
+                }
+
+                // Mark skipped nodes
+                for &i in &new_nodes {
+                    if self.config.should_skip_ebm(arena[i].depth) {
+                        stats.ebm_skipped_by_depth += 1;
+                        arena[i].ebm_score = -1e6;
+                    }
                 }
             }
-        }
 
-        // Collect cache stats from policy provider
-        if let Some((hits, misses)) = policy.cache_stats() {
-            stats.cache_hits = hits;
-            stats.cache_misses = misses;
-        }
+            // Push scored new nodes to the persistent frontier
+            for &idx in &new_nodes {
+                let node = &arena[idx];
+                if node.depth < self.config.max_depth {
+                    let ebm = if scorer.is_some() && !self.config.should_skip_ebm(node.depth) {
+                        Some(node.ebm_score)
+                    } else {
+                        None
+                    };
+                    let score = trie.frontier_score(idx, ebm, node.parent);
+                    frontier.push(ScoredNode {
+                        node_index: idx,
+                        score: OrderedFloat(score),
+                    });
+                }
+            }
 
-        // Search exhausted without finding a proof
-        let wall_time_ms = start_time.elapsed().as_millis() as u64;
-        let total_states = arena.len() as u32;
-        let records = build_trajectory_records(&arena, theorem_name);
+            nodes_expanded += 1;
+            round += 1;
+        }
 
         stats.nodes_expanded = nodes_expanded;
+        stats.hybrid_rounds = round;
+        stats.trie_cache_hits = trie.cache_hits;
+
+        let wall_time_ms = start_time.elapsed().as_millis() as u64;
+        let records = build_trajectory_records(&arena, theorem_name);
 
         tracing::debug!(
             theorem = theorem_name,
-            nodes = nodes_expanded,
-            states = total_states,
+            rounds = round,
+            total_proofs,
+            trie_hits = trie.cache_hits,
+            arena_size = arena.len(),
             time_ms = wall_time_ms,
-            "Search exhausted without proof"
+            "Hybrid search exhausted without proof"
         );
 
         Ok(SearchResult {
@@ -593,7 +616,7 @@ impl SearchEngine {
             proved: false,
             proof_tactics: vec![],
             nodes_expanded,
-            total_states,
+            total_states: arena.len() as u32,
             max_depth_reached,
             wall_time_ms,
             all_records: records,
@@ -603,162 +626,116 @@ impl SearchEngine {
     }
 }
 
-/// Inject probe tactics into candidates, deduped against existing LLM candidates.
-/// Returns the number of probes actually appended.
-fn inject_probes(candidates: &mut Vec<GeneratedTactic>, probes: &[String]) -> usize {
-    if probes.is_empty() {
-        return 0;
+/// Try probe tactics at a new node. Returns Some(terminal_idx) if a probe closes the proof.
+async fn try_probes_at_node(
+    node_idx: usize,
+    arena: &mut Vec<SearchNode>,
+    runner: &mut (dyn TacticRunner + Send),
+    trie: &mut ReplayTrie,
+    visited_states: &mut HashSet<String>,
+    config: &SearchConfig,
+    stats: &mut SearchStats,
+    max_depth_reached: &mut u32,
+) -> Result<Option<usize>, SearchError> {
+    if config.probe_tactics.is_empty() {
+        return Ok(None);
     }
-    let llm_texts: HashSet<String> = candidates
-        .iter()
-        .map(|c| c.text.split_whitespace().collect::<Vec<_>>().join(" "))
-        .collect();
-    let mut count = 0;
-    for probe in probes {
-        let norm = probe.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !llm_texts.contains(&norm) {
-            candidates.push(GeneratedTactic {
-                text: probe.clone(),
-                raw_text: probe.clone(),
-                log_prob: -10.0,
-                tokens: vec![],
-            });
-            count += 1;
+
+    let state_id = arena[node_idx].state_id;
+    let node_depth = arena[node_idx].depth;
+
+    for probe in &config.probe_tactics {
+        stats.probe_attempts += 1;
+        stats.total_tactic_attempts += 1;
+
+        let tactic_start = Instant::now();
+        let result = runner.apply_tactic(state_id, None, probe).await?;
+        let tactic_us = tactic_start.elapsed().as_micros() as u64;
+        stats.total_lean_time_ms += tactic_us / 1000;
+        stats.total_probe_lean_time_ms += tactic_us / 1000;
+        stats.lean_latencies_us.push(tactic_us);
+
+        match result {
+            TacticResult::ProofComplete { state_id: terminal_state_id } => {
+                let child_depth = node_depth + 1;
+                stats.nodes_terminal += 1;
+                stats.probe_successes += 1;
+
+                if child_depth > *max_depth_reached {
+                    *max_depth_reached = child_depth;
+                }
+
+                let terminal_idx = arena.len();
+                arena.push(SearchNode {
+                    state_id: terminal_state_id,
+                    state_pp: String::new(),
+                    goals: vec![],
+                    parent: Some(node_idx),
+                    tactic_applied: probe.clone(),
+                    depth: child_depth,
+                    llm_log_prob: -10.0,
+                    ebm_score: 0.0,
+                    is_terminal: true,
+                });
+                trie.insert_success(node_idx, probe, terminal_idx);
+                return Ok(Some(terminal_idx));
+            }
+            TacticResult::Success { state_id: child_state_id, goals } => {
+                stats.probe_successes += 1;
+                let child_depth = node_depth + 1;
+                let state_pp = goals
+                    .iter()
+                    .map(|g| g.raw.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+
+                if !visited_states.contains(&state_pp) {
+                    visited_states.insert(state_pp.clone());
+                    if child_depth > *max_depth_reached {
+                        *max_depth_reached = child_depth;
+                    }
+                    let child_idx = arena.len();
+                    arena.push(SearchNode {
+                        state_id: child_state_id,
+                        state_pp,
+                        goals,
+                        parent: Some(node_idx),
+                        tactic_applied: probe.clone(),
+                        depth: child_depth,
+                        llm_log_prob: -10.0,
+                        ebm_score: 0.0,
+                        is_terminal: false,
+                    });
+                    trie.insert_success(node_idx, probe, child_idx);
+                }
+            }
+            TacticResult::Failed { .. } => {
+                stats.total_tactic_failures += 1;
+                trie.insert_failure(node_idx, probe);
+            }
         }
     }
-    count
+
+    Ok(None)
 }
 
 /// After finding a proof, expand sibling states on the proof path for hard negatives.
+///
+/// TODO: Reimplement using `generate_whole_proofs` + trie replay. The old
+/// implementation used `generate_candidates_batch` which has been removed.
+/// For now, the trie-based search naturally creates sibling branches during
+/// whole-proof replay, providing similar training signal.
+#[allow(dead_code)]
 async fn harvest_siblings(
-    arena: &mut Vec<SearchNode>,
-    terminal_idx: usize,
-    config: &SearchConfig,
-    runner: &mut (dyn TacticRunner + Send),
-    policy: &dyn PolicyProvider,
-    scorer: Option<&dyn ValueScorer>,
-    stats: &mut SearchStats,
+    _arena: &mut Vec<SearchNode>,
+    _terminal_idx: usize,
+    _config: &SearchConfig,
+    _runner: &mut (dyn TacticRunner + Send),
+    _policy: &dyn PolicyProvider,
+    _scorer: Option<&dyn ValueScorer>,
+    _stats: &mut SearchStats,
 ) -> Result<(), SearchError> {
-    // Collect ancestor node indices on the proof path
-    let proof_path: HashSet<usize> = {
-        let mut path = HashSet::new();
-        let mut idx = terminal_idx;
-        while let Some(parent) = arena[idx].parent {
-            path.insert(parent);
-            idx = parent;
-        }
-        path.insert(0); // root
-        path
-    };
-
-    // Collect the tactic used from each ancestor to its proof-path child
-    let proof_tactics_used: HashSet<(usize, String)> = {
-        let mut set = HashSet::new();
-        let mut idx = terminal_idx;
-        while let Some(parent) = arena[idx].parent {
-            set.insert((parent, arena[idx].tactic_applied.clone()));
-            idx = parent;
-        }
-        set
-    };
-
-    // Collect ancestor data before mutating arena
-    let ancestors: Vec<(usize, u64, u32, String)> = proof_path
-        .iter()
-        .filter(|&&idx| arena[idx].depth < config.max_depth)
-        .map(|&idx| {
-            (
-                idx,
-                arena[idx].state_id,
-                arena[idx].depth,
-                arena[idx].goals_as_text(),
-            )
-        })
-        .collect();
-
-    // Batch-generate candidates for all ancestors in one call
-    let prompts: Vec<String> = ancestors.iter().map(|(_, _, _, g)| g.clone()).collect();
-    let batch_candidates = policy
-        .generate_candidates_batch(&prompts, config.num_candidates)
-        .await?;
-
-    // Collect sibling nodes needing EBM scoring for deferred batch scoring
-    let mut pending_scores: Vec<(usize, String)> = Vec::new();
-
-    for (i, (ancestor_idx, anc_state_id, anc_depth, _)) in ancestors.into_iter().enumerate() {
-        let mut siblings = batch_candidates[i].clone();
-        inject_probes(&mut siblings, &config.probe_tactics);
-
-        for sib in &siblings {
-            // Skip the tactic that's already on the proof path from this ancestor
-            if proof_tactics_used.contains(&(ancestor_idx, sib.text.clone())) {
-                continue;
-            }
-
-            let result = runner
-                .apply_tactic(anc_state_id, None, &sib.text)
-                .await?;
-            match result {
-                TacticResult::Success { state_id, goals } => {
-                    let spp = goals
-                        .iter()
-                        .map(|g| g.raw.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n\n");
-                    let child_idx = arena.len();
-                    arena.push(SearchNode {
-                        state_id,
-                        state_pp: spp.clone(),
-                        goals,
-                        parent: Some(ancestor_idx),
-                        tactic_applied: sib.text.clone(),
-                        depth: anc_depth + 1,
-                        llm_log_prob: sib.log_prob,
-                        ebm_score: 0.0,
-                        is_terminal: false,
-                    });
-                    stats.sibling_states_mined += 1;
-                    if scorer.is_some() && !config.should_skip_ebm(anc_depth + 1) {
-                        pending_scores.push((child_idx, spp));
-                    } else if scorer.is_some() {
-                        stats.ebm_skipped_by_depth += 1;
-                        arena[child_idx].ebm_score = -1e6;
-                    }
-                }
-                TacticResult::ProofComplete { state_id } => {
-                    // Alternative proof — record as non-terminal
-                    arena.push(SearchNode {
-                        state_id,
-                        state_pp: String::new(),
-                        goals: vec![],
-                        parent: Some(ancestor_idx),
-                        tactic_applied: sib.text.clone(),
-                        depth: anc_depth + 1,
-                        llm_log_prob: sib.log_prob,
-                        ebm_score: 0.0,
-                        is_terminal: false,
-                    });
-                    stats.sibling_states_mined += 1;
-                }
-                TacticResult::Failed { .. } => {}
-            }
-        }
-    }
-
-    // Batch-score all deferred sibling states
-    if let Some(scorer) = scorer {
-        if !pending_scores.is_empty() {
-            let states: Vec<&str> = pending_scores.iter().map(|(_, s)| s.as_str()).collect();
-            let scores = scorer.score_batch(&states).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Batch scoring failed in harvest_siblings, using 0.0");
-                vec![0.0; states.len()]
-            });
-            for ((idx, _), score) in pending_scores.iter().zip(scores) {
-                arena[*idx].ebm_score = score;
-            }
-        }
-    }
-
+    tracing::warn!("harvest_siblings is not yet implemented for hybrid search; skipping");
     Ok(())
 }
 
@@ -935,15 +912,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_empty_frontier() {
-        // Policy returns no tactics and fallbacks disabled → frontier is empty after root
+        // Policy returns no tactics → frontier exhausted after root
         let env = MockEnvironment::new();
         let policy = MockPolicy::new(); // returns empty for all states
 
-        let config = SearchConfig {
-            fallback_tactics: vec![], // disable fallbacks for this test
-            ..SearchConfig::default()
-        };
-        let engine = SearchEngine::new(config);
+        let engine = SearchEngine::new(SearchConfig::default());
         let result = engine
             .search_one(&env, &policy, None, "impossible", "∀ x, x = x")
             .await
@@ -1011,15 +984,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_policy_returns_no_candidates() {
-        // Policy returns Ok(vec![]) for all states. With fallback_tactics disabled,
-        // the search loop should skip expansion gracefully, increment nodes_expanded,
-        // and eventually exhaust the frontier (root has no children).
+        // Policy returns Ok(vec![]) for all states. The search loop should
+        // exhaust the frontier (root expanded, no children created).
         let env = MockEnvironment::new();
         let policy = MockPolicy::new(); // returns empty vec for all states
 
         let config = SearchConfig {
             max_nodes: 3,
-            fallback_tactics: vec![], // disable fallbacks for this test
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);
@@ -1171,7 +1142,6 @@ mod tests {
 
         let config = SearchConfig {
             probe_tactics: vec!["trivial".to_string()],
-            fallback_tactics: vec![],
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);
@@ -1220,64 +1190,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_harvest_siblings() {
-        // Two-step proof, harvest_siblings = true → extra sibling nodes
-        let mut env = MockEnvironment::new();
-        env.add_response(
-            0,
-            "intro n",
-            TacticResult::Success {
-                state_id: 1,
-                goals: vec![Goal::parse(0, "n : Nat\n⊢ n = n")],
-            },
-        );
-        env.add_response(1, "rfl", TacticResult::ProofComplete { state_id: 2 });
-        // Sibling from root: "simp" produces a different state
-        env.add_response(
-            0,
-            "simp",
-            TacticResult::Success {
-                state_id: 3,
-                goals: vec![Goal::parse(0, "⊢ simp_result")],
-            },
-        );
-
-        let mut policy = MockPolicy::new();
-        policy.add_response(
-            "⊢ ∀ (n : Nat), n = n",
-            vec![make_tactic("intro n", -0.3), make_tactic("simp", -0.5)],
-        );
-        policy.add_response("n : Nat\n⊢ n = n", vec![make_tactic("rfl", -0.1)]);
-
-        let config = SearchConfig {
-            harvest_siblings: true,
-            probe_tactics: vec![],
-            ..SearchConfig::default()
-        };
-        let engine = SearchEngine::new(config);
-        let result = engine
-            .search_one(&env, &policy, None, "harvest_test", "∀ (n : Nat), n = n")
-            .await
-            .unwrap();
-
-        assert!(result.proved);
-        assert_eq!(result.proof_tactics, vec!["intro n", "rfl"]);
-        // Should have mined siblings from the proof path ancestors
-        assert!(
-            result.stats.sibling_states_mined > 0,
-            "Should mine at least one sibling state"
-        );
-        // Arena should have more than just the 3 proof nodes
-        assert!(
-            result.all_records.len() > 3,
-            "Should have extra sibling nodes: got {}",
-            result.all_records.len()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_batched_expansion() {
-        // batch_expansion_size = 2 should expand two nodes at once
+    async fn test_persistent_frontier_branches() {
+        // Two branches from root, one leads to proof at depth 2.
+        // Tests that the persistent frontier correctly holds both branches.
         let mut env = MockEnvironment::new();
         env.add_response(
             0,
@@ -1306,39 +1221,16 @@ mod tests {
         policy.add_response("⊢ B", vec![]);
 
         let config = SearchConfig {
-            batch_expansion_size: 2,
             probe_tactics: vec![],
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);
         let result = engine
-            .search_one(&env, &policy, None, "batch_test", "∀ x, x = x")
+            .search_one(&env, &policy, None, "branch_test", "∀ x, x = x")
             .await
             .unwrap();
 
         assert!(result.proved);
         assert_eq!(result.proof_tactics, vec!["branch_a", "solve_a"]);
-    }
-
-    #[test]
-    fn test_inject_probes_dedup() {
-        let mut candidates = vec![make_tactic("simp", -0.5)];
-        let probes = vec!["simp".to_string(), "ring".to_string(), "omega".to_string()];
-        let count = inject_probes(&mut candidates, &probes);
-        // "simp" should be deduped, "ring" and "omega" added
-        assert_eq!(count, 2);
-        assert_eq!(candidates.len(), 3);
-        assert_eq!(candidates[0].text, "simp");
-        assert_eq!(candidates[1].text, "ring");
-        assert_eq!(candidates[2].text, "omega");
-    }
-
-    #[test]
-    fn test_inject_probes_empty() {
-        let mut candidates = vec![make_tactic("intro", -0.5)];
-        let probes: Vec<String> = vec![];
-        let count = inject_probes(&mut candidates, &probes);
-        assert_eq!(count, 0);
-        assert_eq!(candidates.len(), 1);
     }
 }

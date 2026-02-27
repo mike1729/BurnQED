@@ -26,20 +26,13 @@ pub struct NullPolicyProvider;
 
 #[async_trait]
 impl PolicyProvider for NullPolicyProvider {
-    async fn generate_candidates(
+    async fn generate_whole_proofs(
         &self,
         _proof_state: &str,
         _n: usize,
+        _max_tokens: usize,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
         Ok(vec![])
-    }
-
-    async fn generate_candidates_batch(
-        &self,
-        states: &[String],
-        _n: usize,
-    ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
-        Ok(states.iter().map(|_| vec![]).collect())
     }
 }
 
@@ -133,24 +126,14 @@ impl InferencePolicyProvider {
 
 #[async_trait]
 impl PolicyProvider for InferencePolicyProvider {
-    async fn generate_candidates(
+    async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
+        max_tokens: usize,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
         self.handle
-            .generate_candidates(proof_state, n)
-            .await
-            .map_err(SearchError::Policy)
-    }
-
-    async fn generate_candidates_batch(
-        &self,
-        states: &[String],
-        n: usize,
-    ) -> Result<Vec<Vec<GeneratedTactic>>, SearchError> {
-        self.handle
-            .generate_candidates_batch(states, n)
+            .generate_whole_proofs(proof_state, n, max_tokens)
             .await
             .map_err(SearchError::Policy)
     }

@@ -115,6 +115,15 @@ pub struct SearchStats {
     /// Number of policy cache misses.
     pub cache_misses: u32,
 
+    // --- Hybrid trie stats ---
+
+    /// Number of tactic replays served from the trie cache (no Lean call).
+    pub trie_cache_hits: u32,
+    /// Number of hybrid search rounds completed.
+    pub hybrid_rounds: u32,
+    /// Total number of whole proofs generated across all rounds.
+    pub hybrid_proofs_generated: u32,
+
     // --- Per-call latency vectors (microseconds, transient — not serialized) ---
 
     /// Per apply_tactic call latency in microseconds.

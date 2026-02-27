@@ -26,7 +26,7 @@ use lean_repl::LeanPool;
 use lean_repl::TacticResult;
 use policy::{InferenceHandle, SglangClient, SglangConfig};
 use search::{
-    CachedPolicy, InferencePolicyProvider,
+    InferencePolicyProvider,
     SearchConfig, SearchEngine,
 };
 #[cfg(feature = "burn-ebm")]
@@ -53,8 +53,6 @@ pub struct CommonSearchArgs {
     pub encode_url: Option<String>,
     /// Override maximum tokens per generated tactic.
     pub max_tactic_tokens: Option<usize>,
-    /// Override number of candidate tactics per expansion.
-    pub num_candidates: Option<usize>,
     /// Override max states per encode HTTP request (lower for nf4 VRAM).
     pub batch_encode_size: Option<usize>,
     /// Number of theorems to search in parallel (default: 1 = sequential).
@@ -172,7 +170,7 @@ type TrainingBackend = Autodiff<CudaJit>;
 /// Loaded policy model and optional EBM value function.
 struct LoadedPolicy {
     pool: Arc<LeanPool>,
-    policy: CachedPolicy<InferencePolicyProvider>,
+    policy: InferencePolicyProvider,
     value_fn: Option<Arc<dyn search::ValueScorer>>,
     /// Display string for the inference backend (model path or server URL).
     inference_label: String,
@@ -217,19 +215,14 @@ async fn load_policy_and_ebm(
     let client = SglangClient::new(config).await?;
     let inference_handle = InferenceHandle::new(client);
 
-    let raw_policy = InferencePolicyProvider::new(inference_handle.clone());
-    let exp = toml.search.batch_expansion_size;
-    // Each search thread sends /generate directly — SGLang's continuous batching
-    // handles request coalescing more efficiently than Rust-side pre-batching.
-    let policy = CachedPolicy::new(raw_policy, 10_000);
+    let policy = InferencePolicyProvider::new(inference_handle.clone());
 
     // 4. Optional EBM scorer (uses separate encode server if provided)
     #[cfg(feature = "burn-ebm")]
     let value_fn = {
-        // Encode batcher coalesce limit scales with concurrency (like generation).
+        // Encode batcher coalesce limit scales with concurrency.
         // CachingEncoder internally sub-batches HTTP calls to the server's max batch size.
-        let encode_batch_limit = (batch_encode_size.unwrap_or(toml.search.batch_encode_size))
-            .max(exp * concurrency.max(1));
+        let encode_batch_limit = batch_encode_size.unwrap_or(toml.search.batch_encode_size);
         tracing::info!(encode_batch_limit, "Encode batch size limit");
         let encode_handle = if let Some(url) = encode_url {
             tracing::info!(url, "Connecting to separate encode server for EBM");
@@ -348,14 +341,14 @@ fn load_ebm_scorer(
 struct SearchSetup {
     config: SearchConfig,
     pool: Arc<LeanPool>,
-    policy: Arc<CachedPolicy<InferencePolicyProvider>>,
+    policy: Arc<InferencePolicyProvider>,
     value_fn: Option<Arc<dyn search::ValueScorer>>,
     index: TheoremIndex,
     inference_label: String,
 }
 
-/// Consolidates: load_policy_and_ebm + EBM defaults (temperature/num_candidates)
-/// + theorem loading + truncation. Returns everything needed to start spawning.
+/// Consolidates: load_policy_and_ebm + theorem loading + truncation.
+/// Returns everything needed to start spawning.
 async fn setup_search(
     common: &CommonSearchArgs,
     temperature: Option<f64>,
@@ -365,7 +358,7 @@ async fn setup_search(
     // Default num_workers to concurrency when unset (each concurrent theorem needs a Lean worker)
     let num_workers = common.num_workers.or(Some(concurrency));
 
-    let (mut search_config, loaded) = load_policy_and_ebm(
+    let (search_config, loaded) = load_policy_and_ebm(
         &common.config,
         &common.server_url,
         common.ebm_path.as_deref(),
@@ -378,11 +371,6 @@ async fn setup_search(
         common.batch_encode_size,
     )
     .await?;
-
-    // Apply CLI override for num_candidates (otherwise use TOML value as-is)
-    if let Some(n) = common.num_candidates {
-        search_config.num_candidates = n;
-    }
 
     // Load theorem index
     let mut index = TheoremIndex::from_json(&common.theorems)?;

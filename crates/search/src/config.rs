@@ -9,50 +9,21 @@ pub struct SearchConfig {
     #[serde(default = "default_max_depth")]
     pub max_depth: u32,
 
-    /// Number of candidate tactics to generate per expansion.
-    #[serde(default = "default_num_candidates")]
-    pub num_candidates: usize,
-
-    /// Weight for LLM log-probability in combined score.
+    /// Weight for LLM log-prob in frontier scoring: `alpha * llm + beta * ebm`.
     #[serde(default = "default_alpha")]
     pub alpha: f64,
 
-    /// Weight for EBM score in combined score.
+    /// Weight for EBM score in frontier scoring. Used by `effective_beta()`.
     #[serde(default = "default_beta")]
     pub beta: f64,
-
-    /// Temperature for LLM log-prob scaling: `llm_log_prob / llm_temperature`.
-    /// Higher values flatten the LLM signal. Default 1.0 (no scaling).
-    #[serde(default = "default_temperature")]
-    pub llm_temperature: f64,
-
-    /// Temperature for EBM score scaling: `ebm_score / ebm_temperature`.
-    /// Use this to bring EBM scores to a comparable scale with LLM log-probs.
-    /// E.g., if EBM scores range [-10, 10] and log-probs range [-5, -1],
-    /// set ebm_temperature=10 to normalize. Default 1.0 (no scaling).
-    #[serde(default = "default_temperature")]
-    pub ebm_temperature: f64,
 
     /// Maximum wall-clock seconds per theorem.
     #[serde(default = "default_timeout")]
     pub timeout_per_theorem: u64,
 
-    /// Fallback tactics to try when the LLM generates no candidates.
-    #[serde(default = "default_fallback_tactics")]
-    pub fallback_tactics: Vec<String>,
-
     /// Built-in Lean tactics tried alongside LLM candidates at each expansion.
     #[serde(default = "default_probe_tactics")]
     pub probe_tactics: Vec<String>,
-
-    /// Whether to mine sibling states from the proof path after finding a proof.
-    #[serde(default)]
-    pub harvest_siblings: bool,
-
-    /// Number of nodes to expand per batch (1 = sequential, >1 = batched).
-    /// Also controls the generate batcher coalesce limit: `batch_expansion_size × concurrency`.
-    #[serde(default = "default_batch_expansion_size")]
-    pub batch_expansion_size: usize,
 
     /// Maximum number of states per encode HTTP request to the EBM embedding server.
     /// Controls the `GlobalEncodeBatcher` coalesce limit. Lower values reduce peak VRAM
@@ -71,6 +42,28 @@ pub struct SearchConfig {
     /// depths 0 and 1 get no EBM scoring at all.
     #[serde(default)]
     pub ebm_min_depth: u32,
+
+    // --- Hybrid whole-proof search config ---
+
+    /// Number of whole proofs to generate in the first (root) round.
+    #[serde(default = "default_hybrid_num_proofs")]
+    pub hybrid_num_proofs: usize,
+
+    /// Number of whole proofs to generate in subsequent (non-root) rounds.
+    #[serde(default = "default_hybrid_expand_proofs")]
+    pub hybrid_expand_proofs: usize,
+
+    /// Maximum number of expansion rounds.
+    #[serde(default = "default_hybrid_max_rounds")]
+    pub hybrid_max_rounds: u32,
+
+    /// Maximum tokens per whole proof generation.
+    #[serde(default = "default_hybrid_max_tokens")]
+    pub hybrid_max_tokens: usize,
+
+    /// Total proof generation budget (sum of N across all rounds).
+    #[serde(default = "default_hybrid_budget")]
+    pub hybrid_budget: u32,
 }
 
 fn default_max_nodes() -> u32 {
@@ -78,9 +71,6 @@ fn default_max_nodes() -> u32 {
 }
 fn default_max_depth() -> u32 {
     50
-}
-fn default_num_candidates() -> usize {
-    32
 }
 fn default_alpha() -> f64 {
     0.5
@@ -90,9 +80,6 @@ fn default_beta() -> f64 {
 }
 fn default_timeout() -> u64 {
     600
-}
-fn default_fallback_tactics() -> Vec<String> {
-    Vec::new()
 }
 fn default_probe_tactics() -> Vec<String> {
     [
@@ -104,28 +91,28 @@ fn default_probe_tactics() -> Vec<String> {
     .map(|s| s.to_string())
     .collect()
 }
-fn default_batch_expansion_size() -> usize {
-    1
-}
 fn default_batch_encode_size() -> usize {
     8
 }
-fn default_temperature() -> f64 {
-    1.0
+fn default_hybrid_num_proofs() -> usize {
+    32
+}
+fn default_hybrid_expand_proofs() -> usize {
+    16
+}
+fn default_hybrid_max_rounds() -> u32 {
+    30
+}
+fn default_hybrid_max_tokens() -> usize {
+    1024
+}
+fn default_hybrid_budget() -> u32 {
+    256
 }
 
 impl SearchConfig {
-    /// Log a warning if alpha + beta don't sum to 1.0.
+    /// Log configuration details.
     pub fn validate(&self) {
-        let sum = self.alpha + self.beta;
-        if (sum - 1.0).abs() > 1e-6 {
-            tracing::warn!(
-                alpha = self.alpha,
-                beta = self.beta,
-                sum,
-                "alpha + beta = {sum:.4}, expected 1.0; scores may not be normalized"
-            );
-        }
         if self.ebm_ramp_depth > 0 {
             tracing::info!(
                 ebm_ramp_depth = self.ebm_ramp_depth,
@@ -170,19 +157,18 @@ impl Default for SearchConfig {
         Self {
             max_nodes: default_max_nodes(),
             max_depth: default_max_depth(),
-            num_candidates: default_num_candidates(),
             alpha: default_alpha(),
             beta: default_beta(),
-            llm_temperature: default_temperature(),
-            ebm_temperature: default_temperature(),
             timeout_per_theorem: default_timeout(),
-            fallback_tactics: default_fallback_tactics(),
             probe_tactics: default_probe_tactics(),
-            harvest_siblings: false,
-            batch_expansion_size: default_batch_expansion_size(),
             batch_encode_size: default_batch_encode_size(),
             ebm_ramp_depth: 0,
             ebm_min_depth: 0,
+            hybrid_num_proofs: default_hybrid_num_proofs(),
+            hybrid_expand_proofs: default_hybrid_expand_proofs(),
+            hybrid_max_rounds: default_hybrid_max_rounds(),
+            hybrid_max_tokens: default_hybrid_max_tokens(),
+            hybrid_budget: default_hybrid_budget(),
         }
     }
 }
@@ -196,29 +182,28 @@ mod tests {
         let cfg = SearchConfig::default();
         assert_eq!(cfg.max_nodes, 600);
         assert_eq!(cfg.max_depth, 50);
-        assert_eq!(cfg.num_candidates, 32);
         assert!((cfg.alpha - 0.5).abs() < 1e-9);
         assert!((cfg.beta - 0.5).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 600);
-        assert!(cfg.fallback_tactics.is_empty());
         assert_eq!(cfg.probe_tactics.len(), 17);
-        assert!(!cfg.harvest_siblings);
-        assert_eq!(cfg.batch_expansion_size, 1);
         assert_eq!(cfg.batch_encode_size, 8);
+        assert_eq!(cfg.hybrid_num_proofs, 32);
+        assert_eq!(cfg.hybrid_expand_proofs, 16);
+        assert_eq!(cfg.hybrid_max_rounds, 30);
+        assert_eq!(cfg.hybrid_max_tokens, 1024);
+        assert_eq!(cfg.hybrid_budget, 256);
     }
 
     #[test]
     fn test_partial_toml_override() {
         let toml_str = r#"
             max_nodes = 100
-            alpha = 0.7
+            beta = 0.7
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.max_nodes, 100);
-        assert!((cfg.alpha - 0.7).abs() < 1e-9);
-        // Defaults for unspecified fields
+        assert!((cfg.beta - 0.7).abs() < 1e-9);
         assert_eq!(cfg.max_depth, 50);
-        assert!((cfg.beta - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -226,29 +211,20 @@ mod tests {
         let toml_str = r#"
             max_nodes = 200
             max_depth = 30
-            num_candidates = 64
-            alpha = 0.3
             beta = 0.7
             timeout_per_theorem = 300
+            hybrid_num_proofs = 64
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.max_nodes, 200);
         assert_eq!(cfg.max_depth, 30);
-        assert_eq!(cfg.num_candidates, 64);
-        assert!((cfg.alpha - 0.3).abs() < 1e-9);
         assert!((cfg.beta - 0.7).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 300);
-    }
-
-    #[test]
-    fn test_alpha_beta_sum() {
-        let cfg = SearchConfig::default();
-        assert!((cfg.alpha + cfg.beta - 1.0).abs() < 1e-9);
+        assert_eq!(cfg.hybrid_num_proofs, 64);
     }
 
     #[test]
     fn test_validate_default_ok() {
-        // Default config should not warn (alpha + beta == 1.0)
         let cfg = SearchConfig::default();
         cfg.validate(); // Should not panic
     }
@@ -263,32 +239,17 @@ mod tests {
     }
 
     #[test]
-    fn test_harvest_siblings_enabled() {
+    fn test_toml_ignores_removed_fields() {
+        // Old TOML files with removed fields should still parse (silently ignored)
         let toml_str = r#"
+            alpha = 0.5
+            num_candidates = 64
+            batch_expansion_size = 8
+            fallback_tactics = []
             harvest_siblings = true
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
-        assert!(cfg.harvest_siblings);
-    }
-
-    #[test]
-    fn test_batch_expansion_size() {
-        let toml_str = r#"
-            batch_expansion_size = 8
-        "#;
-        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.batch_expansion_size, 8);
-    }
-
-    #[test]
-    fn test_validate_non_normalized() {
-        // Non-normalized weights should not panic (just logs a warning)
-        let cfg = SearchConfig {
-            alpha: 0.3,
-            beta: 0.3,
-            ..Default::default()
-        };
-        cfg.validate(); // Should log warning but not panic
+        assert!((cfg.beta - 0.5).abs() < 1e-9); // defaults applied
     }
 
     #[test]
@@ -358,7 +319,6 @@ mod tests {
     fn test_toml_backward_compat() {
         // TOML without new fields should still parse (defaults to 0)
         let toml_str = r#"
-            alpha = 0.5
             beta = 0.5
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
@@ -369,7 +329,6 @@ mod tests {
     #[test]
     fn test_toml_with_ramp_fields() {
         let toml_str = r#"
-            alpha = 0.5
             beta = 0.5
             ebm_ramp_depth = 4
             ebm_min_depth = 2

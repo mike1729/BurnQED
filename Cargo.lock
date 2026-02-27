@@ -4812,7 +4812,6 @@ dependencies = [
  "ebm",
  "futures",
  "lean-repl",
- "lru",
  "ordered-float 4.6.0",
  "policy",
  "serde",

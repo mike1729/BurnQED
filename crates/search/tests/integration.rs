@@ -970,7 +970,7 @@ async fn bench_theorem_parallelism() {
 
 /// MockPolicy wrapper that simulates LLM inference latency.
 ///
-/// Each `generate_candidates` call acquires a shared mutex (simulating the real
+/// Each `generate_whole_proofs` call acquires a shared mutex (simulating the real
 /// serialized LLM inference) and sleeps for `delay_ms` using async sleep.
 /// This models the real scenario where LLM inference is serial and slow.
 struct SlowMockPolicy {
@@ -981,14 +981,15 @@ struct SlowMockPolicy {
 
 #[async_trait::async_trait]
 impl search::engine::PolicyProvider for SlowMockPolicy {
-    async fn generate_candidates(
+    async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
+        max_tokens: usize,
     ) -> Result<Vec<policy::GeneratedTactic>, search::engine::SearchError> {
         let _lock = self.llm_mutex.lock().await;
         tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
-        self.inner.generate_candidates(proof_state, n).await
+        self.inner.generate_whole_proofs(proof_state, n, max_tokens).await
     }
 }
 
