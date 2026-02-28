@@ -158,7 +158,7 @@ Reference: `docs/v2_execution_plan.md` for full details, code snippets, and gotc
 - [ ] **M.3** Manual triage of remaining failures, drop or fix — target ≥95% compilation (≥28,270 of 29,759)
 - [ ] **M.4** Port miniF2F-v2s/v2c statements to 4.27, verify all 488 compile — eval benchmark ready
 - [ ] **M.5** LeanDojo trace on compiled Goedel 4.27 proofs — tactic pairs parquet (~10-15h CPU)
-- [ ] **M.6** Compilation & integrity sweep — sorry/admit/sorryAx contamination, malformed states, clean pool count
+- [x] **M.6** Integrity sweep — 28,016/28,016 passing proofs clean (0 sorry/admit/cheat/sorryAx in tactic blocks, 64 trivial single-tactic proofs). Report: `data/traced/integrity_report.json`
 - [ ] **M.7** Token geometry — state/tactic/full token length distributions, truncation analysis, recommended max_length
 - [ ] **M.8** Proof structure & tactic vocabulary — depth distribution, contrastive pool sizing, tactic concentration
 - [ ] **M.9** Download + filter LEAN-GitHub (`internlm/Lean-Github`, 218K tactics) — quality filter, format convert

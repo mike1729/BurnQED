@@ -115,73 +115,21 @@ The traced Goedel pairs are now in `data/traced/goedel_427_pairs.jsonl`. Before 
 
 Script: `python/migration/explore_traced.py`
 
-#### Task M.6: Compilation & integrity sweep (~1h)
+#### Task M.6: Compilation & integrity sweep (~1h) — DONE
 
-Before looking at tokens or depths, verify that the migration actually produced valid Lean 4.27 code. The `lake build` pass (Day M.2) checks compilation, but tracing can introduce additional failure modes — elaboration errors that compile but produce garbage states, or proofs that silently smuggle in sorry-like axioms.
+**Executed pre-tracing** on raw `.lean` source files (not traced JSONL) via `python/data/goedel_migration/integrity_sweep.py`. Parses each passing proof's `.lean` file, strips comments (`/- -/` block and `--` line), extracts tactic lines from `by` blocks, and checks for banned keywords (`sorry`/`admit`/`cheat`/`sorryAx`) as whole-word matches.
 
-```python
-"""explore_traced.py — Part 1: Compilation & integrity sweep."""
+**Results (2026-02-28):**
+- 28,016 passing proofs (ok/warn) scanned
+- **0 contaminated** — zero banned keywords found in any tactic block
+- 0 suspicious axiom mentions (Decidable.decide)
+- 64 trivial single-tactic proofs (rfl/decide/trivial) — kept in clean pool, informational only
+- All 8 files containing "sorry" in the raw grep had it only in `/- -/` docstring comments (natural language problem descriptions)
+- **Clean pool: 28,016 / 28,016 (100.0%)**
 
-import json
-from collections import Counter
+Report: `data/traced/integrity_report.json`
 
-pairs = [json.loads(l) for l in open("data/traced/goedel_427_pairs.jsonl")]
-theorems = {}
-for p in pairs:
-    theorems.setdefault(p["theorem"], []).append(p)
-
-# 1. Sorry/admit/cheat/sorryAx contamination
-# The tracer should have filtered these, but verify independently
-BANNED = ["sorry", "admit", "cheat", "sorryAx"]
-contaminated_theorems = set()
-contaminated_pairs = 0
-for p in pairs:
-    if any(bad in p["tactic"] for bad in BANNED):
-        contaminated_theorems.add(p["theorem"])
-        contaminated_pairs += 1
-    # Also check if sorry appears in the STATE (indicates upstream sorry)
-    if "sorry" in p["state"] or "sorryAx" in p["state"]:
-        contaminated_theorems.add(p["theorem"])
-        contaminated_pairs += 1
-
-print(f"Contaminated theorems: {len(contaminated_theorems)} "
-      f"({len(contaminated_theorems)/len(theorems)*100:.2f}%)")
-print(f"Contaminated pairs: {contaminated_pairs}")
-assert contaminated_pairs == 0, "ABORT: sorry/admit found — re-run filter"
-
-# 2. Noncomputable / axiom usage
-# Classical logic (propext, funext, choice) is fine for competition math.
-# But check for unexpected axioms that could indicate proof cheating.
-SUSPICIOUS_AXIOMS = ["sorryAx", "Decidable.decide"]  # not sorry but suspicious
-axiom_mentions = Counter()
-for p in pairs:
-    for ax in SUSPICIOUS_AXIOMS:
-        if ax in p["tactic"] or ax in p["state"]:
-            axiom_mentions[ax] += 1
-if axiom_mentions:
-    print(f"Suspicious axiom usage: {dict(axiom_mentions)}")
-    # Not necessarily abort — but flag for review
-
-# 3. Empty / malformed states
-malformed = 0
-for p in pairs:
-    if not p["state"].strip():
-        malformed += 1
-    elif "⊢" not in p["state"]:
-        malformed += 1  # Missing turnstile — not a valid goal state
-    elif p["state"].startswith("no goals"):
-        malformed += 1  # Shouldn't appear in state_before
-print(f"Malformed states: {malformed} ({malformed/len(pairs)*100:.2f}%)")
-
-# 4. Definitive count
-clean_theorems = len(theorems) - len(contaminated_theorems)
-clean_pairs = len(pairs) - contaminated_pairs - malformed
-print(f"\n=== CLEAN POOL ===")
-print(f"Theorems: {clean_theorems} / {len(theorems)}")
-print(f"Tactic pairs: {clean_pairs} / {len(pairs)}")
-```
-
-**Actionable output:** A definitive "Clean Pool" count of 100% verified, compiling, 4.27-compliant theorems. Everything else is dropped before merge. If clean pool < 90% of traced output, go back to Day M.2 for another fix pass.
+**Note:** The original plan called for running this on traced JSONL pairs. Since tracing (M.5) hasn't run yet, this was adapted to scan raw `.lean` files directly. After tracing completes, a secondary sweep on the traced pairs should verify malformed states (empty states, missing turnstile, "no goals" in state_before) which can only be checked post-tracing.
 
 #### Task M.7: Token geometry — VRAM & masking survival (~1h)
 
