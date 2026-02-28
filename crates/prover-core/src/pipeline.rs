@@ -90,8 +90,8 @@ pub struct SummaryArgs {
 #[derive(Debug)]
 pub struct EvalArgs {
     pub common: CommonSearchArgs,
-    /// Maximum number of search nodes per theorem.
-    pub max_nodes: u32,
+    /// Maximum number of search rounds per theorem.
+    pub max_rounds: u32,
     /// Number of attempts per theorem (best-of-N).
     pub pass_n: u32,
     /// Path to write JSON evaluation results.
@@ -1178,8 +1178,8 @@ pub struct ProbeArgs {
     pub max_theorems: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
-    /// Override max_nodes for probe search (default: 100).
-    pub max_nodes: Option<u32>,
+    /// Override max rounds for probe search (default: 100).
+    pub max_rounds: Option<u32>,
     /// Optional path to write hard theorems as TheoremIndex JSON.
     pub hard_theorems: Option<PathBuf>,
 }
@@ -1237,13 +1237,13 @@ pub async fn run_probe(args: ProbeArgs) -> anyhow::Result<()> {
     let toml = load_search_toml(&args.config)?;
     let mut search_config = toml.search;
 
-    // Override max_nodes for probe search (default: 100)
-    if let Some(max) = args.max_nodes {
-        search_config.max_nodes = max;
+    // Override hybrid_max_rounds for probe search (default: 100)
+    if let Some(max) = args.max_rounds {
+        search_config.hybrid_max_rounds = max;
     } else {
-        search_config.max_nodes = 100;
+        search_config.hybrid_max_rounds = 100;
     }
-    tracing::info!(max_nodes = search_config.max_nodes, "Probe search config");
+    tracing::info!(max_rounds = search_config.hybrid_max_rounds, "Probe search config");
 
     // 2. Build Lean pool (no SGLang needed)
     let lean_config = build_lean_pool_config(
@@ -1697,7 +1697,7 @@ struct EvalOutcome {
 /// writing JSON results.
 pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let concurrency = args.common.concurrency.max(1);
-    let max_nodes = args.max_nodes;
+    let max_rounds = args.max_rounds;
 
     // EBM-active overrides: temperature for diversity (no CLI override for eval)
     let temperature = if args.common.ebm_path.is_some() {
@@ -1716,12 +1716,12 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let policy = setup.policy;
     let value_fn = setup.value_fn;
     let mut search_config = setup.config;
-    search_config.max_nodes = max_nodes;
+    search_config.hybrid_max_rounds = max_rounds;
     let engine = SearchEngine::new(search_config);
     let index = setup.index;
     let concurrency_sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
-    tracing::info!(max_nodes, "Evaluating");
+    tracing::info!(max_rounds, "Evaluating");
 
     let pb = make_progress_bar(total, 30);
     let eval_start = Instant::now();
@@ -1877,14 +1877,14 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
 
     // Print summary
     println!();
-    println!("┌───────────┬───────────┬──────────┬───────────┬───────────┐");
-    println!("│ Max Nodes │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
-    println!("├───────────┼───────────┼──────────┼───────────┼───────────┤");
+    println!("┌────────────┬───────────┬──────────┬───────────┬───────────┐");
+    println!("│ Max Rounds │ Solved    │ Rate     │ Avg Nodes │ Avg Time  │");
+    println!("├────────────┼───────────┼──────────┼───────────┼───────────┤");
     println!(
-        "│ {:<9} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
-        max_nodes, solved, total, rate * 100.0, avg_nodes, avg_time_secs
+        "│ {:<10} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s  │",
+        max_rounds, solved, total, rate * 100.0, avg_nodes, avg_time_secs
     );
-    println!("└───────────┴───────────┴──────────┴───────────┴───────────┘");
+    println!("└────────────┴───────────┴──────────┴───────────┴───────────┘");
 
     // Shutdown pool
     pool.shutdown().await;
@@ -1897,7 +1897,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         ebm_path: args.common.ebm_path.map(|p| p.display().to_string()),
         benchmark: args.common.theorems.display().to_string(),
         total_theorems: total,
-        max_nodes,
+        max_rounds,
         solved,
         total,
         rate,
@@ -1939,7 +1939,7 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
     }
 
     // Print header
-    println!("{:<12}│ Max Nodes │ Solved    │ Rate     │ Avg Nodes │ Avg Time", "Iteration");
+    println!("{:<12}│ Max Rounds│ Solved    │ Rate     │ Avg Nodes │ Avg Time", "Iteration");
     let sep_width = 72;
     println!("{}", "─".repeat(sep_width));
 
@@ -1950,7 +1950,7 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
             .unwrap_or_else(|| format!("{i}"));
         println!(
             "{:<12}│ {:<9} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s",
-            label, r.max_nodes, r.solved, r.total, r.rate * 100.0, r.avg_nodes, r.avg_time_secs
+            label, r.max_rounds, r.solved, r.total, r.rate * 100.0, r.avg_nodes, r.avg_time_secs
         );
     }
 

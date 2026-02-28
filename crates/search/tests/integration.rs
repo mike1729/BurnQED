@@ -163,7 +163,7 @@ async fn test_search_unproved_with_bad_tactics() {
     let policy = MockPolicy::with_default(vec![make_tactic("definitely_wrong", -1.0)]);
 
     let search_config = SearchConfig {
-        max_nodes: 5,
+        max_rounds: 5,
         ..SearchConfig::default()
     };
     let engine = SearchEngine::new(search_config);
@@ -313,7 +313,7 @@ async fn test_search_timeout_exits_early() {
 
     let search_config = SearchConfig {
         timeout_per_theorem: 3,
-        max_nodes: 1000, // high budget so timeout is the binding constraint
+        max_rounds: 1000, // high budget so timeout is the binding constraint
         ..SearchConfig::default()
     };
     let engine = SearchEngine::new(search_config);

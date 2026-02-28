@@ -61,11 +61,11 @@ if [ ! -f "$TEST_THEOREMS" ]; then
     exit 1
 fi
 
-# Light config just for validation — 10 nodes, 60s timeout
+# Light config just for validation — 10 rounds, 60s timeout
 B1_CONFIG="${BASELINES_DIR}/b1_validation.toml"
 cat > "$B1_CONFIG" << 'TOML'
 [search]
-max_nodes = 10
+hybrid_max_rounds = 10
 max_depth = 5
 num_candidates = 4
 timeout_per_theorem = 60

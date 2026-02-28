@@ -1,10 +1,6 @@
 /// Search configuration loaded from TOML.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchConfig {
-    /// Maximum number of nodes to expand before giving up.
-    #[serde(default = "default_max_nodes")]
-    pub max_nodes: u32,
-
     /// Maximum proof depth (tactics from root).
     #[serde(default = "default_max_depth")]
     pub max_depth: u32,
@@ -101,9 +97,6 @@ pub struct SearchConfig {
 
 }
 
-fn default_max_nodes() -> u32 {
-    600
-}
 fn default_max_depth() -> u32 {
     25
 }
@@ -208,7 +201,6 @@ impl SearchConfig {
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
-            max_nodes: default_max_nodes(),
             max_depth: default_max_depth(),
             alpha: default_alpha(),
             beta: default_beta(),
@@ -239,7 +231,6 @@ mod tests {
     #[test]
     fn test_default_values() {
         let cfg = SearchConfig::default();
-        assert_eq!(cfg.max_nodes, 600);
         assert_eq!(cfg.max_depth, 25);
         assert!((cfg.alpha - 0.5).abs() < 1e-9);
         assert!((cfg.beta - 0.5).abs() < 1e-9);
@@ -257,11 +248,11 @@ mod tests {
     #[test]
     fn test_partial_toml_override() {
         let toml_str = r#"
-            max_nodes = 100
+            hybrid_max_rounds = 100
             beta = 0.7
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.max_nodes, 100);
+        assert_eq!(cfg.hybrid_max_rounds, 100);
         assert!((cfg.beta - 0.7).abs() < 1e-9);
         assert_eq!(cfg.max_depth, 25);
     }
@@ -269,14 +260,14 @@ mod tests {
     #[test]
     fn test_full_toml() {
         let toml_str = r#"
-            max_nodes = 200
+            hybrid_max_rounds = 200
             max_depth = 30
             beta = 0.7
             timeout_per_theorem = 300
             hybrid_num_proofs = 64
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.max_nodes, 200);
+        assert_eq!(cfg.hybrid_max_rounds, 200);
         assert_eq!(cfg.max_depth, 30);
         assert!((cfg.beta - 0.7).abs() < 1e-9);
         assert_eq!(cfg.timeout_per_theorem, 300);

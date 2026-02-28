@@ -285,10 +285,6 @@ impl SearchEngine {
                 exit_reason = "budget_exhausted";
                 break;
             }
-            if nodes_expanded >= self.config.max_nodes {
-                exit_reason = "budget_exhausted";
-                break;
-            }
             if round >= self.config.hybrid_max_rounds {
                 exit_reason = "max_rounds";
                 break;
@@ -991,13 +987,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_respects_node_budget() {
-        // No working tactics → search should stop after max_nodes expansions
+    async fn test_search_respects_round_budget() {
+        // No working tactics → search should stop after hybrid_max_rounds
         let env = MockEnvironment::new();
         let policy = MockPolicy::with_default(vec![make_tactic("bad", -1.0)]);
 
         let config = SearchConfig {
-            max_nodes: 3,
+            hybrid_max_rounds: 3,
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);
@@ -1158,7 +1154,7 @@ mod tests {
         let policy = MockPolicy::new(); // returns empty vec for all states
 
         let config = SearchConfig {
-            max_nodes: 3,
+            hybrid_max_rounds: 3,
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);
@@ -1241,7 +1237,7 @@ mod tests {
         );
 
         let config = SearchConfig {
-            max_nodes: 10,
+            hybrid_max_rounds: 10,
             ..SearchConfig::default()
         };
         let engine = SearchEngine::new(config);
@@ -1340,7 +1336,7 @@ mod tests {
         policy.add_response("⊢ ∀ x, x = x", vec![make_tactic("loop", -0.5)]);
 
         let config = SearchConfig {
-            max_nodes: 5,
+            hybrid_max_rounds: 5,
             probe_tactics: vec![],
             ..SearchConfig::default()
         };

@@ -1,6 +1,6 @@
 [search]
-max_nodes = 20
 max_depth = 10
+hybrid_max_rounds = 20
 num_candidates = 8
 alpha = 0.5
 beta = 0.5

@@ -108,9 +108,9 @@ enum Command {
         /// Path to the theorem index JSON file.
         #[arg(long)]
         theorems: PathBuf,
-        /// Maximum number of search nodes per theorem.
+        /// Maximum number of search rounds per theorem.
         #[arg(long, default_value_t = 600)]
-        max_nodes: u32,
+        max_rounds: u32,
         /// Number of attempts per theorem (best-of-N).
         #[arg(long, default_value_t = 1)]
         pass_n: u32,
@@ -205,9 +205,9 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
-        /// Override max_nodes for probe search (default: 100).
+        /// Override max rounds for probe search (default: 100).
         #[arg(long)]
-        max_nodes: Option<u32>,
+        max_rounds: Option<u32>,
         /// Write hard theorems as TheoremIndex JSON for use with --theorems in search.
         #[arg(long)]
         hard_theorems: Option<PathBuf>,
@@ -354,7 +354,7 @@ async fn main() -> anyhow::Result<()> {
             ebm_path,
             encode_url,
             theorems,
-            max_nodes,
+            max_rounds,
             pass_n,
             output,
             num_workers,
@@ -378,7 +378,7 @@ async fn main() -> anyhow::Result<()> {
                     max_theorems,
                     imports,
                 },
-                max_nodes,
+                max_rounds,
                 pass_n,
                 output,
             })
@@ -424,7 +424,7 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
             max_theorems,
             imports,
-            max_nodes,
+            max_rounds,
             hard_theorems,
         } => {
             pipeline::run_probe(ProbeArgs {
@@ -435,7 +435,7 @@ async fn main() -> anyhow::Result<()> {
                 concurrency,
                 max_theorems,
                 imports,
-                max_nodes,
+                max_rounds,
                 hard_theorems,
             })
             .await

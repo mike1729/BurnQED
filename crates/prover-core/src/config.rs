@@ -93,7 +93,7 @@ mod tests {
     fn test_deserialize_full_search_toml() {
         let toml_str = r#"
 [search]
-max_nodes = 200
+hybrid_max_rounds = 200
 max_depth = 30
 num_candidates = 64
 alpha = 0.3
@@ -112,7 +112,7 @@ max_lifetime_secs = 900
 tactic_timeout_secs = 15
 "#;
         let config: SearchToml = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.search.max_nodes, 200);
+        assert_eq!(config.search.hybrid_max_rounds, 200);
         assert_eq!(config.search.max_depth, 30);
         assert!((config.search.alpha - 0.3).abs() < 1e-9);
         assert_eq!(config.lean_pool.num_workers, Some(8));
@@ -126,10 +126,10 @@ tactic_timeout_secs = 15
         // lean_pool section completely missing — should use defaults
         let toml_str = r#"
 [search]
-max_nodes = 100
+hybrid_max_rounds = 100
 "#;
         let config: SearchToml = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.search.max_nodes, 100);
+        assert_eq!(config.search.hybrid_max_rounds, 100);
         assert!(config.lean_pool.num_workers.is_none());
         assert!(config.lean_pool.max_requests_per_worker.is_none());
     }
