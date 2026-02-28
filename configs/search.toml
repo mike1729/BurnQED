@@ -19,7 +19,7 @@ probe_tactics = []
 hybrid_num_proofs = 16
 hybrid_expand_proofs = 8
 hybrid_max_rounds = 60
-hybrid_max_tokens = 1024
+hybrid_max_tokens = 512
 hybrid_budget = 512
 
 [lean_pool]
