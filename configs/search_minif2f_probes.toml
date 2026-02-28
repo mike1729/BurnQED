@@ -13,7 +13,7 @@ batch_encode_size = 4         # Max states per encode HTTP request (matched to s
 ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
 ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
-probe_tactics = []
+probe_tactics = ["ring", "omega", "norm_num", "trivial", "rfl", "tauto", "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left", "right", "ext"]
 # Hybrid whole-proof search
 hybrid_num_proofs = 16
 hybrid_expand_proofs = 8

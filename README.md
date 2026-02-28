@@ -245,21 +245,26 @@ cargo run --release -p prover-core -- compare \
 
 ```toml
 [search]
-max_nodes = 100               # Node budget per theorem
-max_depth = 50                # Max proof depth
-num_candidates = 8            # Tactics generated per node
+max_nodes = 600               # Node budget per theorem
+max_depth = 25                # Max proof depth
+num_candidates = 16           # Tactics generated per node (T≥1.0 yields 6-8 unique)
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
-timeout_per_theorem = 120     # seconds
-harvest_siblings = true       # Mine sibling states after proof found
-batch_generate_size = 32      # Nodes expanded per generation batch
-batch_encode_size = 8         # Max states per EBM encode batch
+timeout_per_theorem = 600     # seconds
+batch_expansion_size = 1      # Nodes popped per batch
+batch_encode_size = 4         # Max states per EBM encode batch
+# Hybrid whole-proof search
+hybrid_num_proofs = 16
+hybrid_expand_proofs = 8
+hybrid_max_rounds = 60
+hybrid_max_tokens = 1024
+hybrid_budget = 512
 
 [lean_pool]
 num_workers = 8
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # Worker recycling
-tactic_timeout_secs = 30
+tactic_timeout_secs = 60
 ```
 
 ## Testing

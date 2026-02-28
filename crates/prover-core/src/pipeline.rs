@@ -2405,6 +2405,8 @@ async fn process_theorem(
             ebm_score: 0.0,
             is_proof_complete: false,
             timestamp_ms: 0,
+            q_value: 0.0,
+            visits: 0,
         });
         outcome.positives += 1;
     }
@@ -2514,6 +2516,8 @@ async fn process_theorem(
                         ebm_score: 0.0,
                         is_proof_complete: true,
                         timestamp_ms: 0,
+                        q_value: 0.0,
+                        visits: 0,
                     });
                     outcome.positives += 1;
                     outcome.alternative_proofs += 1;
@@ -2537,6 +2541,8 @@ async fn process_theorem(
                         ebm_score: 0.0,
                         is_proof_complete: true,
                         timestamp_ms: 0,
+                        q_value: 0.0,
+                        visits: 0,
                     });
                     outcome.positives += 1;
                     outcome.alternative_proofs += 1;
@@ -2567,6 +2573,8 @@ async fn process_theorem(
                         ebm_score: 0.0,
                         is_proof_complete: false,
                         timestamp_ms: 0,
+                        q_value: 0.0,
+                        visits: 0,
                     });
                     outcome.negatives += 1;
 
@@ -2635,6 +2643,8 @@ async fn process_theorem(
                                         ebm_score: 0.0,
                                         is_proof_complete: false,
                                         timestamp_ms: 0,
+                                        q_value: 0.0,
+                                        visits: 0,
                                     });
                                     chain_state_id = next_id;
                                 }
@@ -2760,6 +2770,8 @@ async fn process_theorem(
                             ebm_score: 0.0,
                             is_proof_complete: true,
                             timestamp_ms: 0,
+                            q_value: 0.0,
+                            visits: 0,
                         });
                         outcome.positives += 1;
                         outcome.alternative_proofs += 1;
@@ -2783,6 +2795,8 @@ async fn process_theorem(
                             ebm_score: 0.0,
                             is_proof_complete: true,
                             timestamp_ms: 0,
+                            q_value: 0.0,
+                            visits: 0,
                         });
                         outcome.positives += 1;
                         outcome.alternative_proofs += 1;
@@ -2824,6 +2838,8 @@ async fn process_theorem(
                             ebm_score: 0.0,
                             is_proof_complete: false,
                             timestamp_ms: 0,
+                            q_value: 0.0,
+                            visits: 0,
                         });
                         if is_zombie {
                             outcome.positives += 1;

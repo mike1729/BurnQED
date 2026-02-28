@@ -9,7 +9,6 @@
 #   ./scripts/run_minif2f_eval.sh                          # all available versions
 #   VERSIONS="v2s_test v2c_test" ./scripts/run_minif2f_eval.sh   # specific versions
 #   ITER=1 ./scripts/run_minif2f_eval.sh                   # use iter_1 model + EBM
-#   BUDGET=300 ./scripts/run_minif2f_eval.sh               # override node budget
 #   TAG=ablation ./scripts/run_minif2f_eval.sh             # custom output subdirectory
 #   DRY_RUN=1 ./scripts/run_minif2f_eval.sh                # print commands without running
 #
@@ -17,14 +16,12 @@
 #   VERSIONS        Space-separated list from: test valid v2s_test v2s_valid v2c_test v2c_valid
 #                   Default: all versions whose benchmark JSON exists
 #   ITER            Iteration number (default: 0). Determines model + optional EBM.
-#   BUDGET          Node budget per theorem (default: 600)
 #   TAG             Output subdirectory tag (default: "minif2f_eval")
 #   SGLANG_URL      SGLang inference server (default: http://localhost:30000)
 #   ENCODE_URL      Encode server for EBM (default: http://localhost:30001)
 #   CONCURRENCY     Parallel theorem searches (default: 5)
 #   NUM_WORKERS     Lean REPL pool size (default: 8)
 #   MAX_THEOREMS    Cap theorems per version (default: unlimited)
-#   NUM_CANDIDATES  Tactic candidates per node (default: 16)
 #   CONFIG          Search config TOML (default: configs/search_minif2f.toml)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
 #   DRY_RUN         Set to 1 to print commands without executing (default: 0)
@@ -40,14 +37,12 @@ source "${REPO_ROOT}/scripts/_lib.sh"
 # ── Configuration ─────────────────────────────────────────────────────────
 
 ITER="${ITER:-0}"
-BUDGET="${BUDGET:-600}"
 TAG="${TAG:-minif2f_eval}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
-CONCURRENCY="${CONCURRENCY:-5}"
+CONCURRENCY="${CONCURRENCY:-4}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
-NUM_CANDIDATES="${NUM_CANDIDATES:-16}"
 CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_minif2f.toml}"
 NO_EBM="${NO_EBM:-0}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -133,7 +128,6 @@ echo "================================================================"
 echo "  miniF2F Evaluation — iter_${ITER}"
 echo "================================================================"
 echo "  Versions:     ${VERSIONS}"
-echo "  Budget:       ${BUDGET} nodes"
 echo "  Pass@N:       ${PASS_N}"
 echo "  Config:       ${CONFIG}"
 echo "  Model:        ${LLM_DIR}"
@@ -143,7 +137,6 @@ else
     echo "  EBM:          (none)"
 fi
 echo "  SGLang:       ${SGLANG_URL}"
-echo "  Candidates:   ${NUM_CANDIDATES}"
 echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Max theorems: ${MAX_THEOREMS:-all}"
@@ -193,11 +186,9 @@ for VERSION in $VERSIONS; do
         $EBM_FLAG \
         $ENCODE_FLAG \
         --theorems $JSON_FILE \
-        --budgets $BUDGET \
         --output $OUTPUT_FILE \
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
-        --num-candidates $NUM_CANDIDATES \
         $PASS_FLAG \
         $MAX_FLAG \
         --imports Mathlib,$IMPORT_MODULE"
@@ -228,7 +219,7 @@ fi
 # ── Summary ───────────────────────────────────────────────────────────────
 
 echo "================================================================"
-echo "  Results — iter_${ITER}, budget=${BUDGET}"
+echo "  Results — iter_${ITER}"
 echo "================================================================"
 echo ""
 

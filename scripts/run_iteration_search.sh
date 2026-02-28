@@ -35,7 +35,7 @@ CONCURRENCY="${CONCURRENCY:-8}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
 START_STEP="${START_STEP:-2}"
-SEARCH_CONFIG="${SEARCH_CONFIG:-${REPO_ROOT}/configs/search_minif2f_bex1.toml}"
+SEARCH_CONFIG="${SEARCH_CONFIG:-${REPO_ROOT}/configs/search_minif2f.toml}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 

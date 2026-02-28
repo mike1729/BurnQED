@@ -20,6 +20,11 @@ EMBED_DIR="${DATA_ROOT}/embeddings"
 EVAL_DIR="${DATA_ROOT}/evals"
 LOG_DIR="${DATA_ROOT}/logs"
 
+# Ensure cargo (Rust toolchain) is on PATH.
+if [ -d "$HOME/.cargo/bin" ] && [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]]; then
+    export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
 # Ensure elan (Lean toolchain manager) is on PATH.
 if [ -d "$HOME/.elan/bin" ] && [[ ":$PATH:" != *":$HOME/.elan/bin:"* ]]; then
     export PATH="$HOME/.elan/bin:$PATH"
