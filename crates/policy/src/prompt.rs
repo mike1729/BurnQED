@@ -323,6 +323,50 @@ fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
             continue;
         }
 
+        // Join `<;>` combinator chains into a single compound tactic.
+        // Lines ending with `<;>` continue onto the next line. Standalone
+        // `<;>` lines (the model sometimes puts `<;>` on its own line)
+        // are joined as a prefix to the next continuation.
+        //
+        // Example input (each at same indent):
+        //   rcases b with (_ | _ | _ | _) <;>
+        //   simp_all [pow_one] <;>
+        //   norm_num at * <;>
+        //   linarith
+        //
+        // Becomes one tactic:
+        //   rcases b with (_ | _ | _ | _) <;> simp_all [pow_one] <;> norm_num at * <;> linarith
+        if ends_with_semicolon_combinator(first_line) {
+            let mut chain = first_line.to_string();
+            i += 1;
+            while i < lines.len() {
+                let next_trimmed = lines[i].trim();
+                if next_trimmed.is_empty() {
+                    break;
+                }
+                // Standalone `<;>` line — absorb and continue
+                if next_trimmed == "<;>" {
+                    chain.push_str(" <;>");
+                    i += 1;
+                    continue;
+                }
+                // Continuation at same or deeper indent
+                let next_indent = indent_of(lines[i]);
+                if next_indent >= line_indent {
+                    chain.push(' ');
+                    chain.push_str(next_trimmed);
+                    i += 1;
+                    if !ends_with_semicolon_combinator(next_trimmed) {
+                        break; // Chain ended
+                    }
+                } else {
+                    break;
+                }
+            }
+            tactics.push(chain);
+            continue;
+        }
+
         // Simple single-line tactic
         tactics.push(first_line.to_string());
         i += 1;
@@ -342,9 +386,10 @@ fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
 
 /// Tactics that should be silently dropped from extracted proof sequences.
 ///
-/// Dangling `<;>` combinators and focus dots (`·`) arise when the model
-/// generates multi-tactic combinator chains that get split into individual
-/// lines. These always fail in Pantograph as standalone tactics.
+/// Focus dots (`·`) arise when the model generates focused sub-blocks.
+/// Standalone `<;>` lines that weren't absorbed by chain joining are also
+/// dropped. Note: `<;>` at the END of a real tactic is handled by the
+/// chain-joining logic, so only truly dangling `<;>` lines reach here.
 fn should_skip_tactic(tactic: &str) -> bool {
     let trimmed = tactic.trim();
     trimmed.is_empty()
@@ -352,6 +397,15 @@ fn should_skip_tactic(tactic: &str) -> bool {
         || trimmed.starts_with("<;> ")
         || trimmed == "·"
         || trimmed == "."
+}
+
+/// Check whether a tactic line ends with the `<;>` combinator.
+///
+/// This indicates the tactic continues on the next line and should be
+/// joined into a single compound tactic during extraction.
+fn ends_with_semicolon_combinator(line: &str) -> bool {
+    let t = line.trim();
+    t.ends_with("<;>") && t != "<;>"
 }
 
 /// Check whether a tactic line ends with a block opener keyword.
@@ -987,5 +1041,71 @@ mod tests {
         let raw = "·\nintro h\n·\nexact h";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result, vec!["intro h", "exact h"]);
+    }
+
+    // ------ <;> chain joining tests ------
+
+    #[test]
+    fn test_structured_semicolon_chain_basic() {
+        // Multi-line <;> chain should be joined into a single tactic
+        let raw = "  rcases b with (_ | _ | _ | _) <;>\n  simp_all [pow_one] <;>\n  norm_num at * <;>\n  linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec![
+            "rcases b with (_ | _ | _ | _) <;> simp_all [pow_one] <;> norm_num at * <;> linarith"
+        ]);
+    }
+
+    #[test]
+    fn test_structured_semicolon_chain_with_preceding_tactics() {
+        // Tactics before the chain should stay separate
+        let raw = "intro b F h₀ h₁\n  simp only [h₀, h₁] at *\n  norm_num at h₁\n  rcases b with (_ | _ | _ | _) <;>\n  simp_all [pow_one, pow_two, pow_three] <;>\n  norm_num at * <;>\n  linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp only [h₀, h₁] at *");
+        assert_eq!(result[2], "norm_num at h₁");
+        assert_eq!(result[3], "rcases b with (_ | _ | _ | _) <;> simp_all [pow_one, pow_two, pow_three] <;> norm_num at * <;> linarith");
+    }
+
+    #[test]
+    fn test_structured_semicolon_chain_with_standalone_separator() {
+        // Standalone <;> line between parts of the chain
+        let raw = "  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], "norm_num at h₁");
+        // <;> on its own line is filtered; rcases chain is joined
+        assert_eq!(result[1], "rcases b with (_ | _ | _ | _) <;> linarith");
+    }
+
+    #[test]
+    fn test_structured_semicolon_chain_single_line_preserved() {
+        // Already on one line — no change needed
+        let raw = "interval_cases x <;> omega";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["interval_cases x <;> omega"]);
+    }
+
+    #[test]
+    fn test_structured_semicolon_chain_real_proof() {
+        // Real DeepSeek output for mathd_algebra_59
+        let raw = "intro b F h₀ h₁\n  simp only [h₀, h₁] at *\n  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  simp_all [pow_one, pow_two, pow_three] <;>\n  norm_num at * <;>\n  linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp only [h₀, h₁] at *");
+        assert_eq!(result[2], "norm_num at h₁");
+        // <;> standalone was filtered, rcases chain joined
+        assert_eq!(result[3], "rcases b with (_ | _ | _ | _) <;> simp_all [pow_one, pow_two, pow_three] <;> norm_num at * <;> linarith");
+    }
+
+    #[test]
+    fn test_structured_semicolon_chain_with_try() {
+        // Chain with (try ...) subexpressions containing <;>
+        let raw = "  rcases n with (_ | _ | _) <;>\n  (try norm_num) <;>\n  (try linarith) <;>\n  nlinarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec![
+            "rcases n with (_ | _ | _) <;> (try norm_num) <;> (try linarith) <;> nlinarith"
+        ]);
     }
 }

@@ -109,6 +109,18 @@ pub trait TacticRunner: Send {
         goal_id: Option<u64>,
         tactic: &str,
     ) -> Result<TacticResult, SearchError>;
+
+    /// Recycle the underlying proof process to free accumulated state.
+    ///
+    /// Pantograph accumulates proof states across all `goal.start` and
+    /// `goal.tactic` calls for the lifetime of the process. After a theorem
+    /// search (which may issue thousands of tactic applications), recycling
+    /// kills the old process and spawns a fresh one, freeing all memory.
+    ///
+    /// Default implementation is a no-op (for mock environments).
+    async fn recycle(&mut self) -> Result<(), SearchError> {
+        Ok(())
+    }
 }
 
 /// LLM policy that generates whole-proof completions for a proof state.
@@ -184,6 +196,42 @@ impl SearchEngine {
         let mut runner = env.start_proof(theorem_name, statement).await?;
         let initial_state = runner.initial_state().clone();
 
+        // Run the actual search, then recycle the Lean worker regardless of outcome.
+        // Pantograph accumulates proof states across all tactic calls; recycling
+        // kills the process and spawns a fresh one, freeing all accumulated memory.
+        let result = self
+            .search_one_inner(
+                &mut *runner,
+                policy,
+                scorer,
+                theorem_name,
+                statement,
+                &initial_state,
+                start_time,
+                &mut stats,
+            )
+            .await;
+
+        if let Err(e) = runner.recycle().await {
+            tracing::warn!(error = %e, theorem = theorem_name, "Failed to recycle Lean worker after search");
+        }
+
+        result
+    }
+
+    /// Inner search loop — separated so [`search_one`] can guarantee worker recycling.
+    async fn search_one_inner(
+        &self,
+        runner: &mut (dyn TacticRunner + Send),
+        policy: &dyn PolicyProvider,
+        scorer: Option<&dyn ValueScorer>,
+        theorem_name: &str,
+        statement: &str,
+        initial_state: &ProofState,
+        start_time: Instant,
+        stats: &mut SearchStats,
+    ) -> Result<SearchResult, SearchError> {
+
         // Build root node
         let root_pp = if statement.contains('⊢') {
             statement.to_string()
@@ -222,7 +270,7 @@ impl SearchEngine {
                 max_depth_reached: 0,
                 wall_time_ms,
                 all_records: records,
-                stats,
+                stats: std::mem::take(stats),
                 failure_reason: "proved".to_string(),
             });
         }
@@ -321,6 +369,7 @@ impl SearchEngine {
                 frontier_size = frontier.len(),
                 total_proofs,
                 arena_size = arena.len(),
+                trie_size = trie.cache_size(),
                 state = leaf_state_preview,
                 "Expanding leaf"
             );
@@ -340,7 +389,7 @@ impl SearchEngine {
                 &mut trie,
                 &mut visited_states,
                 &self.config,
-                &mut stats,
+                stats,
                 &mut max_depth_reached,
             )
             .await?
@@ -364,7 +413,7 @@ impl SearchEngine {
                     max_depth_reached,
                     wall_time_ms,
                     all_records: records,
-                    stats,
+                    stats: std::mem::take(stats),
                     failure_reason: "proved".to_string(),
                 });
             }
@@ -545,7 +594,7 @@ impl SearchEngine {
                                 &mut trie,
                                 &mut visited_states,
                                 &self.config,
-                                &mut stats,
+                                stats,
                                 &mut max_depth_reached,
                             )
                             .await?
@@ -708,6 +757,12 @@ impl SearchEngine {
 
             // If a proof was found during replay, return after scoring/frontier update
             if let Some(terminal_idx) = first_proof_terminal {
+                tracing::info!(
+                    theorem = theorem_name,
+                    round,
+                    terminal_idx,
+                    "PROOF FOUND — returning from search"
+                );
                 stats.nodes_expanded = nodes_expanded;
                 stats.hybrid_rounds = round + 1;
                 stats.trie_cache_hits = trie.cache_hits;
@@ -735,14 +790,27 @@ impl SearchEngine {
                     max_depth_reached,
                     wall_time_ms,
                     all_records: records,
-                    stats,
+                    stats: std::mem::take(stats),
                     failure_reason: "proved".to_string(),
                 });
             }
 
+            tracing::info!(
+                round,
+                frontier_size = frontier.len(),
+                total_proofs,
+                "Round complete, advancing to next"
+            );
             round += 1;
         }
 
+        tracing::info!(
+            exit_reason,
+            round,
+            total_proofs,
+            arena_size = arena.len(),
+            "Search loop ended"
+        );
         stats.nodes_expanded = nodes_expanded;
         stats.hybrid_rounds = round;
         stats.trie_cache_hits = trie.cache_hits;
@@ -771,7 +839,7 @@ impl SearchEngine {
             max_depth_reached,
             wall_time_ms,
             all_records: records,
-            stats,
+            stats: std::mem::take(stats),
             failure_reason: exit_reason.to_string(),
         })
     }
@@ -899,6 +967,11 @@ async fn harvest_siblings(
 }
 
 /// Convert the search arena into trajectory records for Parquet output.
+///
+/// Uses arena indices as state_id/parent_state_id (not Pantograph state IDs)
+/// to guarantee uniqueness — Pantograph state_ids can collide when terminal
+/// nodes get state_id=0 (same as root), which caused infinite loops in
+/// parent chain tracing.
 fn build_trajectory_records(arena: &[SearchNode], theorem_name: &str, trie: &ReplayTrie) -> Vec<TrajectoryRecord> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -909,12 +982,12 @@ fn build_trajectory_records(arena: &[SearchNode], theorem_name: &str, trie: &Rep
         .iter()
         .enumerate()
         .map(|(idx, node)| {
-            let parent_state_id = node.parent.map(|p_idx| arena[p_idx].state_id);
+            let parent_state_id = node.parent.map(|p_idx| p_idx as u64);
             let q_value = trie.q_value(idx);
             let visits = trie.get_stats(idx).map_or(0, |s| s.visits);
             TrajectoryRecord {
                 theorem_name: theorem_name.to_string(),
-                state_id: node.state_id,
+                state_id: idx as u64,
                 state_pp: node.state_pp.clone(),
                 tactic_applied: node.tactic_applied.clone(),
                 parent_state_id,

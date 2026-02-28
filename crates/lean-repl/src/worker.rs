@@ -317,7 +317,20 @@ impl LeanWorker {
                             goals: parsed_goals,
                         })
                     }
-                    (None, _) => Ok(TacticResult::Failed {
+                    // Pantograph sometimes returns nextStateId=null with empty/null
+                    // goals and no parseError when a tactic completes the proof
+                    // (e.g. <;> combinator chains). Detect this as proof completion.
+                    (None, Some(goals)) if goals.is_empty() => {
+                        tracing::debug!("Proof complete with null stateId (goals=[])");
+                        Ok(TacticResult::ProofComplete { state_id: 0 })
+                    }
+                    (None, None) => {
+                        // No parseError was already checked above. null goals + null
+                        // stateId without an error means proof complete.
+                        tracing::debug!("Proof complete with null stateId (goals=null)");
+                        Ok(TacticResult::ProofComplete { state_id: 0 })
+                    }
+                    (None, Some(_)) => Ok(TacticResult::Failed {
                         message: "Tactic failed (no next state)".into(),
                     }),
                     (Some(next_id), None) => {

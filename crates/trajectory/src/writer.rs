@@ -158,12 +158,24 @@ impl TrajectoryWriter {
                 // Trace backward from terminal to root using parent_state_id
                 let mut proof_path_ids = Vec::new();
                 let mut current_id = Some(terminal.state_id);
+                let mut visited_ids = HashSet::new();
 
                 // Build a map from state_id -> record for fast lookup
                 let id_to_record: std::collections::HashMap<u64, &TrajectoryRecord> =
                     records.iter().map(|r| (r.state_id, r)).collect();
 
                 while let Some(id) = current_id {
+                    // Cycle detection: state_ids may collide (e.g., terminal
+                    // and root both having state_id=0), which would cause an
+                    // infinite loop without this guard.
+                    if !visited_ids.insert(id) {
+                        tracing::warn!(
+                            state_id = id,
+                            path_len = proof_path_ids.len(),
+                            "Cycle detected in parent chain, breaking"
+                        );
+                        break;
+                    }
                     proof_path_ids.push(id);
                     if let Some(record) = id_to_record.get(&id) {
                         current_id = record.parent_state_id;

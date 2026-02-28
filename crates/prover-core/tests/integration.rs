@@ -97,7 +97,7 @@ async fn test_mock_pipeline_unproved_theorem() {
     let policy = MockPolicy::with_default(vec![make_tactic("bad_tactic", -5.0)]);
 
     let config = SearchConfig {
-        max_rounds: 5,
+        hybrid_max_rounds: 5,
         ..SearchConfig::default()
     };
     let engine = SearchEngine::new(config);
@@ -231,7 +231,7 @@ async fn test_lean_pipeline_multiple_theorems() {
     policy.add_contains_response("⊢ False", vec![make_tactic("exact h", -0.1)]);
 
     let engine = SearchEngine::new(SearchConfig {
-        max_rounds: 20,
+        hybrid_max_rounds: 20,
         max_depth: 10,
         timeout_per_theorem: 30,
         ..SearchConfig::default()
@@ -728,7 +728,7 @@ async fn test_eval_mock_budgets() {
         ebm_path: Option<String>,
         benchmark: String,
         total_theorems: u32,
-        max_rounds: u32,
+        hybrid_max_rounds: u32,
         solved: u32,
         total: u32,
         rate: f64,
@@ -756,7 +756,7 @@ async fn test_eval_mock_budgets() {
     );
 
     let config = SearchConfig {
-        max_rounds: 5,
+        hybrid_max_rounds: 5,
         probe_tactics: vec![], // disable probes so "trivial" doesn't solve nat_refl
         ..SearchConfig::default()
     };
@@ -798,7 +798,7 @@ async fn test_eval_mock_budgets() {
         ebm_path: None,
         benchmark: "test".to_string(),
         total_theorems: total,
-        max_rounds: 5,
+        hybrid_max_rounds: 5,
         solved,
         total,
         rate,
@@ -812,7 +812,7 @@ async fn test_eval_mock_budgets() {
     let json = serde_json::to_string_pretty(&iter_result).unwrap();
     let loaded: IterationResult = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(loaded.max_rounds, 5);
+    assert_eq!(loaded.hybrid_max_rounds, 5);
     assert_eq!(loaded.total, 2);
     assert_eq!(loaded.solved, 1); // only True is provable
     assert!(loaded.per_theorem.iter().any(|t| t.name == "true_trivial" && t.proved));
@@ -835,7 +835,7 @@ fn test_compare_two_results() {
         ebm_path: Option<String>,
         benchmark: String,
         total_theorems: u32,
-        max_rounds: u32,
+        hybrid_max_rounds: u32,
         solved: u32,
         total: u32,
         rate: f64,
@@ -854,7 +854,7 @@ fn test_compare_two_results() {
 
     let tmp = tempfile::TempDir::new().unwrap();
 
-    let make_result = |iteration: u32, max_rounds: u32, rate: f64| -> IterationResult {
+    let make_result = |iteration: u32, hybrid_max_rounds: u32, rate: f64| -> IterationResult {
         IterationResult {
             iteration: Some(iteration),
             timestamp: format!("2026-01-0{}T00:00:00Z", iteration + 1),
@@ -862,7 +862,7 @@ fn test_compare_two_results() {
             ebm_path: None,
             benchmark: "data/test.json".to_string(),
             total_theorems: 10,
-            max_rounds,
+            hybrid_max_rounds,
             solved: (rate * 10.0) as u32,
             total: 10,
             rate,
@@ -1010,7 +1010,7 @@ async fn test_mock_pipeline_parallel_search() {
     policy.add_response("⊢ hard_b", vec![make_tactic("bad", -5.0)]);
 
     let engine = SearchEngine::new(SearchConfig {
-        max_rounds: 10,
+        hybrid_max_rounds: 10,
         probe_tactics: vec![], // disable probes so "trivial" doesn't solve hard_a/hard_b
         ..SearchConfig::default()
     });
@@ -1202,7 +1202,7 @@ async fn test_parallel_eval_mock_budgets() {
 
     for &budget in &budgets {
         let config = SearchConfig {
-            max_rounds: budget,
+            hybrid_max_rounds: budget,
             probe_tactics: vec![], // disable probes so "trivial" doesn't solve hard_thm
             ..SearchConfig::default()
         };

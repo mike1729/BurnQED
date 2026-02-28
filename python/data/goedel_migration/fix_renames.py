@@ -80,7 +80,33 @@ def main():
     with open(args.results) as f:
         results = json.load(f)
 
-    failed = results["error_files"] + results["timeout_files"]
+    # Support both formats:
+    # - compile.py save_summary format: {"error_files": [...], "timeout_files": [...], ...}
+    # - compile_proofs.py raw state format: {"completed": {"seq": {"status": ..., "module": ...}}, ...}
+    if "error_files" in results:
+        failed = results["error_files"] + results["timeout_files"]
+    elif "completed" in results:
+        failed = []
+        for seq, info in results["completed"].items():
+            if info["status"] in ("error", "timeout"):
+                failed.append(f"GoedelMigration/Proof_{int(seq):05d}.lean")
+        # Reconstruct summary keys for round 2 reporting
+        counts = {"ok": 0, "warn": 0, "error": 0, "timeout": 0}
+        for info in results["completed"].values():
+            counts[info["status"]] = counts.get(info["status"], 0) + 1
+        results = {
+            "total": len(results["completed"]),
+            "clean": counts["ok"],
+            "warnings": counts["warn"],
+            "errors": counts["error"],
+            "timeouts": counts["timeout"],
+            "error_files": [f for f in failed if "timeout" not in f],
+            "timeout_files": [],
+        }
+    else:
+        print(f"ERROR: Unrecognized results format. Keys: {list(results.keys())}")
+        sys.exit(1)
+
     print(f"Applying fixes to {len(failed)} files...")
 
     fixed_count = sum(1 for f in failed if apply_fixes(f))

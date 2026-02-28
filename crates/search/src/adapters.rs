@@ -101,6 +101,10 @@ impl TacticRunner for ProofHandleOwned {
             .await
             .map_err(SearchError::Lean)
     }
+
+    async fn recycle(&mut self) -> Result<(), SearchError> {
+        self.worker().recycle().await.map_err(SearchError::Lean)
+    }
 }
 
 // ---------------------------------------------------------------------------
