@@ -5,7 +5,7 @@ alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
-timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ observed)
+timeout_per_theorem = 1800    # seconds (3x baseline for retry on failed theorems)
 temperature = 0.8             # Sampling temperature for tactic generation
 top_p = 0.95                  # Nucleus sampling parameter
 max_tactic_tokens = 48        # Maximum tokens per generated tactic
@@ -17,7 +17,7 @@ probe_tactics = []
 # Hybrid whole-proof search
 hybrid_num_proofs = 16
 hybrid_expand_proofs = 8
-hybrid_max_rounds = 60
+hybrid_max_rounds = 600
 hybrid_max_tokens = 1024
 hybrid_budget = 512
 
@@ -25,4 +25,4 @@ hybrid_budget = 512
 num_workers = 8               # Matched to concurrency default
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
-tactic_timeout_secs = 60
+tactic_timeout_secs = 180
