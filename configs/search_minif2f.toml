@@ -1,14 +1,14 @@
 [search]
 max_nodes = 600
 max_depth = 25
-num_candidates = 16           # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
 timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ observed)
-harvest_siblings = false # Mine sibling states from proof path after finding proof
-batch_expansion_size = 1      # Pop 1 node — minimize SGLang batch size to reduce gen latency
+temperature = 0.8             # Sampling temperature for tactic generation
+top_p = 0.95                  # Nucleus sampling parameter
+max_tactic_tokens = 48        # Maximum tokens per generated tactic
 batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
 ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
 ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1

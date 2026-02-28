@@ -1,26 +1,29 @@
 [search]
-max_nodes = 300
-max_depth = 50
-num_candidates = 8            # T≥1.0 yields 6-8 unique tactics
+max_nodes = 600
+max_depth = 25
+num_candidates = 16           # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
-timeout_per_theorem = 60      # seconds (halved: most proofs that succeed do so in <30s)
-# No ebm_skip_easy. Always score with EBM when available.
-harvest_siblings = true       # Mine sibling states from proof path after finding proof
-batch_expansion_size = 8      # Pop 8 nodes from frontier per batch (saturates GPU)
-batch_encode_size = 16        # Max states per encode HTTP request (matches encode server --max-batch-size)
-# Full probes for Mathlib (simp/simp_all are useful closers). For miniF2F use search_minif2f.toml.
-
-[search.iteration_0]
-# Run search twice: once normal, once with high temperature for diverse negatives
-normal_temperature = 0.8
-noise_temperature = 1.2
-noise_fraction = 0.3          # 30% of theorems get the high-T run
+timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ observed)
+temperature = 0.8             # Sampling temperature for tactic generation
+top_p = 0.95                  # Nucleus sampling parameter
+max_tactic_tokens = 48        # Maximum tokens per generated tactic
+batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
+ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
+ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
+# Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
+probe_tactics = []
+# Hybrid whole-proof search
+hybrid_num_proofs = 16
+hybrid_expand_proofs = 8
+hybrid_max_rounds = 60
+hybrid_max_tokens = 1024
+hybrid_budget = 512
 
 [lean_pool]
 num_workers = 8               # Matched to concurrency default
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
-tactic_timeout_secs = 30
+tactic_timeout_secs = 60

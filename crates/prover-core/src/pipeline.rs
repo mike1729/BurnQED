@@ -207,9 +207,9 @@ async fn load_policy_and_ebm(
     tracing::info!(url = server_url, "Connecting to SGLang inference server");
     let config = SglangConfig {
         server_url: server_url.to_string(),
-        temperature: temperature.unwrap_or(0.6),
-        top_p: 0.95,
-        max_tactic_tokens: max_tactic_tokens.unwrap_or(48),
+        temperature: temperature.unwrap_or(toml.search.temperature),
+        top_p: toml.search.top_p,
+        max_tactic_tokens: max_tactic_tokens.unwrap_or(toml.search.max_tactic_tokens),
         hidden_size: 4096,
     };
     let client = SglangClient::new(config).await?;

@@ -82,6 +82,23 @@ pub struct SearchConfig {
     /// Score adjustment: `-penalty * max(0, n_goals - 1)`. Default: 0.3.
     #[serde(default = "default_goal_count_penalty")]
     pub goal_count_penalty: f64,
+
+    // --- LLM generation parameters ---
+
+    /// Sampling temperature for tactic generation. Default: 0.6.
+    /// CLI `--temperature` overrides this.
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+
+    /// Top-p (nucleus) sampling parameter. Default: 0.95.
+    #[serde(default = "default_top_p")]
+    pub top_p: f64,
+
+    /// Maximum tokens per generated tactic. Default: 48.
+    /// CLI `--max-tactic-tokens` overrides this.
+    #[serde(default = "default_max_tactic_tokens")]
+    pub max_tactic_tokens: usize,
+
 }
 
 fn default_max_nodes() -> u32 {
@@ -135,6 +152,15 @@ fn default_max_goal_unchanged() -> u32 {
 }
 fn default_goal_count_penalty() -> f64 {
     0.3
+}
+fn default_temperature() -> f64 {
+    0.8
+}
+fn default_top_p() -> f64 {
+    0.95
+}
+fn default_max_tactic_tokens() -> usize {
+    48
 }
 
 impl SearchConfig {
@@ -199,6 +225,9 @@ impl Default for SearchConfig {
             exploration_c: default_exploration_c(),
             max_goal_unchanged_steps: default_max_goal_unchanged(),
             goal_count_penalty: default_goal_count_penalty(),
+            temperature: default_temperature(),
+            top_p: default_top_p(),
+            max_tactic_tokens: default_max_tactic_tokens(),
         }
     }
 }
@@ -281,6 +310,27 @@ mod tests {
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert!((cfg.beta - 0.5).abs() < 1e-9); // defaults applied
+    }
+
+    #[test]
+    fn test_generation_params() {
+        let toml_str = r#"
+            temperature = 0.9
+            top_p = 0.9
+            max_tactic_tokens = 64
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert!((cfg.temperature - 0.9).abs() < 1e-9);
+        assert!((cfg.top_p - 0.9).abs() < 1e-9);
+        assert_eq!(cfg.max_tactic_tokens, 64);
+    }
+
+    #[test]
+    fn test_generation_defaults() {
+        let cfg = SearchConfig::default();
+        assert!((cfg.temperature - 0.8).abs() < 1e-9);
+        assert!((cfg.top_p - 0.95).abs() < 1e-9);
+        assert_eq!(cfg.max_tactic_tokens, 48);
     }
 
     #[test]

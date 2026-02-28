@@ -113,8 +113,6 @@ else
         --theorems $SEARCH_THEOREMS \
         --output $TRAJ_OUTPUT \
         --concurrency $CONCURRENCY \
-        --num-candidates 16 \
-        --temperature 1.3 \
         $RESUME_FLAG \
         $MAX_FLAG \
         --imports Mathlib
@@ -138,7 +136,6 @@ else
             --temperature 1.2 \
             --theorems $SEARCH_THEOREMS \
             --output $NOISY_OUTPUT \
-            --num-workers $NUM_WORKERS \
             --concurrency $CONCURRENCY \
             $MAX_FLAG \
             --imports Mathlib
