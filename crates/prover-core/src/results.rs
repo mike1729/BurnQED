@@ -17,8 +17,9 @@ pub struct IterationResult {
     pub benchmark: String,
     /// Total number of theorems in the benchmark.
     pub total_theorems: u32,
-    /// Maximum search nodes per theorem.
-    pub max_rounds: u32,
+    /// Maximum search rounds per theorem (None when produced from trajectory parquet).
+    #[serde(default)]
+    pub max_rounds: Option<u32>,
     /// Number of theorems proved.
     pub solved: u32,
     /// Total theorems attempted.
@@ -96,7 +97,7 @@ mod tests {
             ebm_path: Some("checkpoints/ebm".to_string()),
             benchmark: "data/test.json".to_string(),
             total_theorems: 10,
-            max_rounds: 100,
+            max_rounds: Some(100),
             solved: 5,
             total: 10,
             rate: 0.5,
@@ -116,7 +117,7 @@ mod tests {
         let loaded: IterationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(loaded.iteration, Some(1));
         assert_eq!(loaded.total_theorems, 10);
-        assert_eq!(loaded.max_rounds, 100);
+        assert_eq!(loaded.max_rounds, Some(100));
         assert_eq!(loaded.per_theorem[0].name, "thm1");
     }
 

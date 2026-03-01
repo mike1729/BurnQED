@@ -1,5 +1,9 @@
 #!/bin/bash
-# Evaluate on miniF2F benchmarks across multiple versions.
+# Evaluate on miniF2F benchmarks across multiple versions using `search`.
+#
+# Uses the `search` subcommand to produce full trajectory parquets, then
+# post-processes them into IterationResult-compatible JSON for the summary
+# section and `compare` subcommand.
 #
 # Each version has a precompiled olean library that must be passed via --imports
 # so Pantograph can resolve the theorem declarations. Build them first with
@@ -19,13 +23,12 @@
 #   TAG             Output subdirectory tag (default: "minif2f_eval")
 #   SGLANG_URL      SGLang inference server (default: http://localhost:30000)
 #   ENCODE_URL      Encode server for EBM (default: http://localhost:30001)
-#   CONCURRENCY     Parallel theorem searches (default: 5)
+#   CONCURRENCY     Parallel theorem searches (default: 4)
 #   NUM_WORKERS     Lean REPL pool size (default: 8)
 #   MAX_THEOREMS    Cap theorems per version (default: unlimited)
 #   CONFIG          Search config TOML (default: configs/search_minif2f.toml)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
 #   DRY_RUN         Set to 1 to print commands without executing (default: 0)
-#   PASS_N          Best-of-N attempts per theorem (default: 1)
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
@@ -46,7 +49,6 @@ MAX_THEOREMS="${MAX_THEOREMS:-}"
 CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_minif2f.toml}"
 NO_EBM="${NO_EBM:-0}"
 DRY_RUN="${DRY_RUN:-0}"
-PASS_N="${PASS_N:-1}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
@@ -111,10 +113,12 @@ fi
 
 EBM_FLAG=""
 ENCODE_FLAG=""
+TEMP_FLAG=""
 EBM_DIR="${EBM_CKPT_DIR}/iter_${ITER}"
 if [ "$NO_EBM" -eq 0 ] && [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final/model.mpk" ]; then
     EBM_FLAG="--ebm-path ${EBM_DIR}"
     ENCODE_FLAG="--encode-url ${ENCODE_URL}"
+    TEMP_FLAG="--temperature 1.4"
 fi
 
 # ── Output directory ──────────────────────────────────────────────────────
@@ -128,7 +132,6 @@ echo "================================================================"
 echo "  miniF2F Evaluation — iter_${ITER}"
 echo "================================================================"
 echo "  Versions:     ${VERSIONS}"
-echo "  Pass@N:       ${PASS_N}"
 echo "  Config:       ${CONFIG}"
 echo "  Model:        ${LLM_DIR}"
 if [ -n "$EBM_FLAG" ]; then
@@ -153,7 +156,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
     ensure_server "$SGLANG_URL" "$LLM_DIR"
 fi
 
-# ── Run eval for each version ─────────────────────────────────────────────
+# ── Run search for each version ──────────────────────────────────────────
 
 declare -A RESULT_FILES
 FAILED_VERSIONS=""
@@ -161,35 +164,32 @@ FAILED_VERSIONS=""
 for VERSION in $VERSIONS; do
     JSON_FILE="${BENCH_DIR}/${BENCH_JSON[$VERSION]}"
     IMPORT_MODULE="${BENCH_IMPORT[$VERSION]}"
+    TRAJECTORY_FILE="${OUT_DIR}/${VERSION}.parquet"
     OUTPUT_FILE="${OUT_DIR}/${VERSION}.json"
     LOG_FILE="${LOG_DIR}/minif2f_eval_iter${ITER}_${VERSION}.log"
     RESULT_FILES[$VERSION]="$OUTPUT_FILE"
 
     echo "── ${VERSION} ──────────────────────────────────────────────────"
-    echo "  Theorems: ${JSON_FILE}"
-    echo "  Import:   Mathlib,${IMPORT_MODULE}"
-    echo "  Output:   ${OUTPUT_FILE}"
+    echo "  Theorems:    ${JSON_FILE}"
+    echo "  Import:      Mathlib,${IMPORT_MODULE}"
+    echo "  Trajectory:  ${TRAJECTORY_FILE}"
+    echo "  Summary:     ${OUTPUT_FILE}"
 
     MAX_FLAG=""
     if [ -n "$MAX_THEOREMS" ]; then
         MAX_FLAG="--max-theorems $MAX_THEOREMS"
     fi
 
-    PASS_FLAG=""
-    if [ "$PASS_N" -gt 1 ]; then
-        PASS_FLAG="--pass-n $PASS_N"
-    fi
-
-    CMD="$PROVER eval \
+    CMD="$PROVER search \
         --config $CONFIG \
         --server-url $SGLANG_URL \
         $EBM_FLAG \
         $ENCODE_FLAG \
+        $TEMP_FLAG \
         --theorems $JSON_FILE \
-        --output $OUTPUT_FILE \
+        --output $TRAJECTORY_FILE \
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
-        $PASS_FLAG \
         $MAX_FLAG \
         --imports Mathlib,$IMPORT_MODULE"
 
@@ -203,11 +203,116 @@ for VERSION in $VERSIONS; do
 
     # shellcheck disable=SC2086
     if run_logged "$LOG_FILE" $CMD; then
-        echo "  ✓ ${VERSION} complete"
+        echo "  ✓ ${VERSION} search complete"
     else
         echo "  ✗ ${VERSION} FAILED (see ${LOG_FILE})"
         FAILED_VERSIONS="${FAILED_VERSIONS:+$FAILED_VERSIONS }$VERSION"
+        echo ""
+        continue
     fi
+
+    # Post-process: parquet → IterationResult JSON for backward compat
+    echo "  Converting trajectory to summary JSON..."
+    python3 -c "
+import json, sys
+import pyarrow.parquet as pq
+from datetime import datetime, timezone
+from collections import defaultdict
+from statistics import median
+
+table = pq.read_table('$TRAJECTORY_FILE')
+df_names = table.column('theorem_name').to_pylist()
+df_complete = table.column('is_proof_complete').to_pylist()
+df_timestamp = table.column('timestamp_ms').to_pylist()
+df_depth = table.column('depth_from_root').to_pylist()
+
+# Group by theorem
+theorems = defaultdict(lambda: {'proved': False, 'nodes': 0, 'ts_min': float('inf'), 'ts_max': 0, 'max_depth': 0, 'proof_depth': None})
+for name, complete, ts, depth in zip(df_names, df_complete, df_timestamp, df_depth):
+    t = theorems[name]
+    t['nodes'] += 1
+    if depth > t['max_depth']:
+        t['max_depth'] = depth
+    if complete:
+        t['proved'] = True
+        if t['proof_depth'] is None or depth < t['proof_depth']:
+            t['proof_depth'] = depth
+    if ts < t['ts_min']:
+        t['ts_min'] = ts
+    if ts > t['ts_max']:
+        t['ts_max'] = ts
+
+per_theorem = []
+times = []
+proof_depths = []
+for name in sorted(theorems):
+    t = theorems[name]
+    time_secs = (t['ts_max'] - t['ts_min']) / 1000.0
+    times.append(time_secs)
+    reason = '' if t['proved'] else 'budget_exhausted'
+    per_theorem.append({
+        'name': name,
+        'proved': t['proved'],
+        'nodes_used': t['nodes'],
+        'time_secs': round(time_secs, 2),
+        'failure_reason': reason,
+        'max_depth': t['max_depth'],
+        'proof_depth': t['proof_depth'],
+    })
+    if t['proof_depth'] is not None:
+        proof_depths.append(t['proof_depth'])
+
+solved = sum(1 for t in per_theorem if t['proved'])
+total = len(per_theorem)
+rate = solved / total if total > 0 else 0.0
+avg_nodes = sum(t['nodes_used'] for t in per_theorem) / total if total > 0 else 0.0
+avg_time = sum(times) / total if total > 0 else 0.0
+med_time = median(times) if times else 0.0
+
+# Depth distribution of proved theorems
+depth_dist = defaultdict(int)
+for d in proof_depths:
+    depth_dist[d] += 1
+depth_distribution = {int(k): v for k, v in sorted(depth_dist.items())}
+
+result = {
+    'iteration': $ITER if $ITER > 0 else None,
+    'timestamp': datetime.now(timezone.utc).isoformat(),
+    'llm_path': '$LLM_DIR',
+    'ebm_path': '${EBM_DIR}' if '$EBM_FLAG' else None,
+    'benchmark': '$JSON_FILE',
+    'total_theorems': total,
+    'solved': solved,
+    'total': total,
+    'rate': round(rate, 4),
+    'avg_nodes': round(avg_nodes, 1),
+    'avg_time_secs': round(avg_time, 1),
+    'median_time_secs': round(med_time, 1),
+    'depth_distribution': depth_distribution,
+    'per_theorem': per_theorem,
+}
+
+with open('$OUTPUT_FILE', 'w') as f:
+    json.dump(result, f, indent=2)
+
+# Print partial results immediately
+print()
+print(f'  $VERSION results:')
+print(f'    Solved:     {solved}/{total} ({rate*100:.1f}%)')
+print(f'    Avg nodes:  {avg_nodes:.1f}')
+print(f'    Avg time:   {avg_time:.1f}s   Median: {med_time:.1f}s')
+
+if depth_distribution:
+    print(f'    Depth distribution (proved):')
+    print(f'      {\"Depth\":>5s} │ {\"Count\":>5s} │ Bar')
+    print(f'      {\"─\"*5:s}─┼─{\"─\"*5:s}─┼─{\"─\"*20:s}')
+    max_count = max(depth_distribution.values())
+    for d, c in sorted(depth_distribution.items()):
+        bar = '█' * int(20 * c / max_count) if max_count > 0 else ''
+        print(f'      {d:5d} │ {c:5d} │ {bar}')
+
+print(f'    Written to: $OUTPUT_FILE')
+"
     echo ""
 done
 

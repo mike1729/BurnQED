@@ -362,7 +362,7 @@ impl SearchEngine {
             nodes_expanded += 1;
 
             let leaf_state_preview = truncate_str(&arena[leaf_idx].state_pp, 120);
-            tracing::info!(
+            tracing::debug!(
                 round,
                 leaf = leaf_idx,
                 depth = arena[leaf_idx].depth,
@@ -757,7 +757,7 @@ impl SearchEngine {
 
             // If a proof was found during replay, return after scoring/frontier update
             if let Some(terminal_idx) = first_proof_terminal {
-                tracing::info!(
+                tracing::debug!(
                     theorem = theorem_name,
                     round,
                     terminal_idx,

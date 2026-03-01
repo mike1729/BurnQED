@@ -1897,7 +1897,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         ebm_path: args.common.ebm_path.map(|p| p.display().to_string()),
         benchmark: args.common.theorems.display().to_string(),
         total_theorems: total,
-        max_rounds,
+        max_rounds: Some(max_rounds),
         solved,
         total,
         rate,
@@ -1950,7 +1950,7 @@ pub fn run_compare(args: CompareArgs) -> anyhow::Result<()> {
             .unwrap_or_else(|| format!("{i}"));
         println!(
             "{:<12}│ {:<9} │ {:>4}/{:<4} │ {:>5.1}%   │ {:>9.1} │ {:>7.1}s",
-            label, r.max_rounds, r.solved, r.total, r.rate * 100.0, r.avg_nodes, r.avg_time_secs
+            label, r.max_rounds.map(|m| m.to_string()).unwrap_or_else(|| "-".into()), r.solved, r.total, r.rate * 100.0, r.avg_nodes, r.avg_time_secs
         );
     }
 
