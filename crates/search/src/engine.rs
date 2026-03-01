@@ -60,6 +60,32 @@ fn count_goal_unchanged_ancestors(arena: &[SearchNode], idx: usize) -> u32 {
     count
 }
 
+/// Check whether a tactic string contains `sorry` or `admit` as a keyword.
+///
+/// Uses word-boundary detection so that identifiers like `sorry_lemma` or
+/// `admits_value` don't trigger false positives.
+fn contains_sorry(tactic: &str) -> bool {
+    for keyword in &["sorry", "admit"] {
+        let kw_bytes = keyword.as_bytes();
+        let t_bytes = tactic.as_bytes();
+        let kw_len = kw_bytes.len();
+        if t_bytes.len() < kw_len {
+            continue;
+        }
+        for i in 0..=t_bytes.len() - kw_len {
+            if &t_bytes[i..i + kw_len] == kw_bytes {
+                let before_ok = i == 0 || !t_bytes[i - 1].is_ascii_alphanumeric() && t_bytes[i - 1] != b'_';
+                let after_ok = i + kw_len == t_bytes.len()
+                    || !t_bytes[i + kw_len].is_ascii_alphanumeric() && t_bytes[i + kw_len] != b'_';
+                if before_ok && after_ok {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Errors that can occur during proof search.
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
@@ -455,6 +481,16 @@ impl SearchEngine {
                     tracing::debug!(
                         raw_text = proof.text.as_str(),
                         "Empty tactics extracted from proof"
+                    );
+                    continue;
+                }
+
+                // Reject proofs containing sorry/admit — these produce
+                // trivially "complete" proofs that aren't real.
+                if tactics.iter().any(|t| contains_sorry(t)) {
+                    tracing::debug!(
+                        n_tactics = tactics.len(),
+                        "Discarding proof containing sorry/admit"
                     );
                     continue;
                 }
@@ -1559,5 +1595,30 @@ mod tests {
         assert_eq!(count_goal_unchanged_ancestors(&arena, 2), 2);
         // child3: own Q != parent P → 0
         assert_eq!(count_goal_unchanged_ancestors(&arena, 3), 0);
+    }
+
+    #[test]
+    fn test_contains_sorry_keyword() {
+        assert!(contains_sorry("sorry"));
+        assert!(contains_sorry("exact sorry"));
+        assert!(contains_sorry("have h := sorry"));
+        assert!(contains_sorry("admit"));
+        assert!(contains_sorry("exact admit"));
+    }
+
+    #[test]
+    fn test_contains_sorry_not_substring() {
+        assert!(!contains_sorry("simp"));
+        assert!(!contains_sorry("sorry_lemma"));
+        assert!(!contains_sorry("admits_value"));
+        assert!(!contains_sorry("not_sorry_at_all"));
+        assert!(!contains_sorry("norm_num"));
+    }
+
+    #[test]
+    fn test_contains_sorry_in_multiline() {
+        assert!(contains_sorry("intro h\nsorry"));
+        assert!(contains_sorry("have h := by\n  sorry"));
+        assert!(contains_sorry("simp <;> admit"));
     }
 }

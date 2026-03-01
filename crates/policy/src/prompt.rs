@@ -377,6 +377,20 @@ fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
         return Vec::new();
     }
 
+    // Strip leading bullet characters (· U+00B7, ∙ U+2219) from tactics.
+    // Bullets are Lean 4 structured-proof focus syntax. When replayed as
+    // individual `goal.tactic` calls, they cause Pantograph to return empty
+    // goals for only the focused subgoal, producing false ProofComplete.
+    for tactic in &mut tactics {
+        let t = tactic.trim_start();
+        if t.starts_with('·') || t.starts_with('∙') {
+            let stripped = t.trim_start_matches('·').trim_start_matches('∙').trim_start();
+            if !stripped.is_empty() {
+                *tactic = stripped.to_string();
+            }
+        }
+    }
+
     // Filter out tactics that can never work as standalone Lean tactics.
     // These arise from model output artifacts (dangling combinators, focus dots).
     tactics.retain(|t| !should_skip_tactic(t));
@@ -1107,5 +1121,286 @@ mod tests {
         assert_eq!(result, vec![
             "rcases n with (_ | _ | _) <;> (try norm_num) <;> (try linarith) <;> nlinarith"
         ]);
+    }
+
+    // ------ bullet stripping tests ------
+
+    #[test]
+    fn test_strip_bullet_cdot() {
+        let raw = "· intro h\n· exact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["intro h", "exact h"]);
+    }
+
+    #[test]
+    fn test_strip_bullet_operator() {
+        let raw = "∙ simp\n∙ ring";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["simp", "ring"]);
+    }
+
+    #[test]
+    fn test_strip_bullet_mixed_with_plain() {
+        let raw = "intro x\n· simp\nexact h";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["intro x", "simp", "exact h"]);
+    }
+
+    // ------ real proof parsing tests (from 3thm_diversity_test.json) ------
+
+    // mathd_algebra_59: F(a,b,c,d) = a^b + c^d, solve F(4,b,2,3) = 12
+
+    #[test]
+    fn test_real_algebra59_have_by_with_rcases_chain() {
+        // T=0.8 [1]: have-by block with rcases <;> chain inside.
+        // Decomposition: typed have with multi-line body → bare "have" + body tactics.
+        let raw = "intro b F h₀ h₁\n  simp only [h₀] at h₁\n  norm_num at h₁\n  have h₂ : b = 1 := by\n    -- Use the fact that 4^b + 2^3 = 12 to solve for b\n    rcases b with (_ | _ | _ | _ | _ | _ | _ | _ | _ | b) <;>\n    norm_num at h₁ <;>\n    simp_all [pow_succ, pow_zero, pow_one, Nat.pow_succ] <;>\n    ring_nf at h₁ <;>\n    nlinarith\n  exact h₂";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp only [h₀] at h₁");
+        assert_eq!(result[2], "norm_num at h₁");
+        // Decomposed: bare have (no := by) + body rcases chain
+        assert_eq!(result[3], "have h₂ : b = 1");
+        assert!(result[4].starts_with("rcases b with"));
+        assert!(result[4].contains("<;>"));
+        assert!(result[4].contains("nlinarith"));
+        assert_eq!(result[5], "exact h₂");
+        assert_eq!(result.len(), 6);
+    }
+
+    #[test]
+    fn test_real_algebra59_nested_have_by() {
+        // T=0.8 [2]: two sequential have-by blocks, second has <;> chain.
+        // First have-by has single-line body → kept as one tactic.
+        // Second have-by has multi-line body → decomposed into bare have + body tactics.
+        // Inner <;> chains are filtered (start with <;>).
+        let raw = "intro b F h₀ h₁\n  simp [h₀] at h₁\n  norm_num at h₁\n  have : (4 : ℝ) ^ b = 4 := by\n    nlinarith [sq_nonneg (b - 1)]\n  have : b = 1 := by\n    apply_fun (fun x => Real.logb 4 x) at this\n    norm_num at this\n    <;> simp_all [Real.logb_eq_zero]\n    <;> norm_num\n    <;> linarith\n  assumption";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp [h₀] at h₁");
+        assert_eq!(result[2], "norm_num at h₁");
+        // First have-by: single-line body → kept as one tactic
+        assert_eq!(result[3], "have : (4 : ℝ) ^ b = 4 := by nlinarith [sq_nonneg (b - 1)]");
+        // Second have-by: decomposed (bare have + individual body tactics)
+        assert_eq!(result[4], "have : b = 1");
+        assert_eq!(result[5], "apply_fun (fun x => Real.logb 4 x) at this");
+        assert_eq!(result[6], "norm_num at this");
+        // <;> lines are filtered by should_skip_tactic
+        assert_eq!(result[7], "assumption");
+        assert_eq!(result.len(), 8);
+    }
+
+    #[test]
+    fn test_real_algebra59_dangling_semicolon_rcases() {
+        // T=0.8 [3]: dangling <;> followed by rcases <;> chain
+        let raw = "intro b F h₀ h₁\n  simp_all only [h₀, Function.funext_iff, eq_self_iff_true, forall_const]\n  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  simp_all [Nat.pow_succ, Nat.pow_zero, Nat.pow_one] <;>\n  norm_num <;>\n  ring_nf at h₁ ⊢ <;>\n  nlinarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp_all only [h₀, Function.funext_iff, eq_self_iff_true, forall_const]");
+        assert_eq!(result[2], "norm_num at h₁");
+        // <;> standalone filtered, rcases chain joined
+        assert!(result[3].starts_with("rcases b with"));
+        assert!(result[3].contains("<;>"));
+        assert!(result[3].contains("nlinarith"));
+    }
+
+    #[test]
+    fn test_real_algebra59_inline_simp_chain() {
+        // T=0.8 [5]: short proof with all <;> chains
+        let raw = "intro b F h₀ h₁\n  simp only [h₀, h₁] at *\n  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  simp_all [pow_one, pow_two, pow_three] <;>\n  norm_num at * <;>\n  linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp only [h₀, h₁] at *");
+        assert_eq!(result[2], "norm_num at h₁");
+        // rcases chain
+        let chain = &result[3];
+        assert!(chain.starts_with("rcases b with"));
+        assert!(chain.ends_with("linarith"));
+    }
+
+    #[test]
+    fn test_real_algebra59_all_goals() {
+        // T=1.8 [0]: all_goals block
+        let raw = "intro b F h₀ h₁\n  rw [h₀] at h₁\n  norm_num at h₁\n  rcases b with (_ | _ | _ | _) <;> simp_all [pow_one, pow_two, pow_three]\n  all_goals\n    ring_nf at h₁\n    have h₂ := h₁\n    nlinarith\n  <;> exfalso\n  <;> linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "rw [h₀] at h₁");
+        assert_eq!(result[2], "norm_num at h₁");
+        assert!(result[3].starts_with("rcases b with"));
+    }
+
+    #[test]
+    fn test_real_algebra59_cases_match_syntax() {
+        // T=1.4 [2]: cases with | syntax
+        let raw = "intro b F h₀ h₁\n  simp only [h₀] at h₁\n  norm_num at h₁\n  <;> cases b with\n  | zero => simp_all\n  | succ b' =>\n    cases b' with\n    | zero => simp_all\n    | succ b'' => simp_all [pow_succ]\n  <;> linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp only [h₀] at h₁");
+        assert_eq!(result[2], "norm_num at h₁");
+        // The cases block should be captured as a multi-line tactic
+        assert!(result.len() >= 3);
+    }
+
+    #[test]
+    fn test_real_algebra59_contrapose() {
+        // T=0.8 [13]: contrapose with cases' chain.
+        // Typed have with multi-line body → decomposed.
+        let raw = "intro b F h₀ h₁\n  simp_all only [h₀, Function.funext_iff, eq_self_iff_true, and_self]\n  ring_nf at h₁\n  norm_num at h₁\n  have h₂ : b = 1 := by\n    contrapose! h₁\n    cases' lt_or_gt_of_ne h₁ with h₁ h₁ <;>\n      simp_all [h₀, pow_one, pow_zero, add_zero, zero_add] <;>\n        norm_num <;>\n          nlinarith\n  exact h₂";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp_all only [h₀, Function.funext_iff, eq_self_iff_true, and_self]");
+        assert_eq!(result[2], "ring_nf at h₁");
+        assert_eq!(result[3], "norm_num at h₁");
+        // Decomposed: bare have + body tactics
+        assert_eq!(result[4], "have h₂ : b = 1");
+        assert_eq!(result[5], "contrapose! h₁");
+        assert!(result[6].starts_with("cases' lt_or_gt_of_ne"));
+        assert!(result[6].contains("<;>"));
+        assert_eq!(result[7], "exact h₂");
+        assert_eq!(result.len(), 8);
+    }
+
+    #[test]
+    fn test_real_algebra59_nlinarith_sq() {
+        // T=0.8 [20]: short proof with leading <;> lines.
+        // Lines starting with <;> are filtered by should_skip_tactic.
+        let raw = "intro b F h₀ h₁\n  simp_all only [h₀, h₁, pow_one, add_left_inj]\n  <;> norm_num at h₁ ⊢\n  <;> nlinarith [pow_two_nonneg (b - 1), pow_two_nonneg (b + 1)]";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp_all only [h₀, h₁, pow_one, add_left_inj]");
+        // <;> lines filtered — only 2 tactics survive
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_real_algebra59_comments_stripped() {
+        // T=0.8 [29]: proof with comments between tactics.
+        // Inline have-by → kept as one tactic. Multi-line have-by → decomposed.
+        // Comments are stripped everywhere.
+        let raw = "intro b F h₀ h₁\n  simp_all only [h₀, add_comm]\n  -- We need to show that b = 1 given the equation 4^b + 2^3 = 12\n  have : (4 : ℝ) ^ b + 2 ^ 3 = 12 := by linarith\n  -- We know that 2^3 = 8, so the equation simplifies to 4^b + 8 = 12\n  have : (4 : ℝ) ^ b = 4 := by linarith\n  -- Solving for b, we get 4^b = 4, which implies b = 1\n  have : b = 1 := by\n    -- Since 4^1 = 4, we have b = 1\n    apply_fun fun x => logb 4 x at this\n    -- Simplify the logarithm to find b\n    simp at this\n    linarith\n  linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "simp_all only [h₀, add_comm]");
+        // Comments stripped. Inline have-by kept as one tactic.
+        assert_eq!(result[2], "have : (4 : ℝ) ^ b + 2 ^ 3 = 12 := by linarith");
+        assert_eq!(result[3], "have : (4 : ℝ) ^ b = 4 := by linarith");
+        // Multi-line have-by decomposed: bare have + body tactics
+        assert_eq!(result[4], "have : b = 1");
+        assert_eq!(result[5], "apply_fun fun x => logb 4 x at this");
+        assert_eq!(result[6], "simp at this");
+        assert_eq!(result[7], "linarith");
+        // Final linarith after the have block
+        assert_eq!(result[8], "linarith");
+        assert_eq!(result.len(), 9);
+    }
+
+    // mathd_algebra_327: iff proof with constructor + bullets
+
+    #[test]
+    fn test_real_algebra327_constructor_bullets() {
+        // T=0.8 [1]: constructor with two bullet branches
+        let raw = "intro a\n  constructor\n  · intro h\n    have h₁ : |9 + 2 * a| < 5 := by\n      linarith [h]\n    have h₂ : -5 < 9 + 2 * a ∧ 9 + 2 * a < 5 := abs_lt.mp h₁\n    have h₃ : -7 < a ∧ a < -2 := by\n      constructor <;> nlinarith\n    exact ⟨h₃.1, h₃.2⟩\n  · intro h\n    have h₁ : -7 < a ∧ a < -2 := h\n    have h₂ : |9 + 2 * a| < 5 := by\n      rw [abs_lt]\n      constructor <;> nlinarith\n    have h₃ : 1 / 5 * |9 + 2 * a| < 1 := by\n      nlinarith\n    exact h₃";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro a");
+        assert_eq!(result[1], "constructor");
+        // Bullets stripped: · intro h → intro h
+        assert_eq!(result[2], "intro h");
+        // Have-by blocks from forward direction
+        assert!(result[3].starts_with("have h₁ : |9 + 2 * a| < 5 := by"));
+        // At some point the second bullet starts (· intro h → intro h)
+        assert!(result.iter().filter(|t| *t == "intro h").count() >= 2,
+            "Should have two 'intro h' from both bullet branches: {:?}", result);
+    }
+
+    #[test]
+    fn test_real_algebra327_rintro_branch() {
+        // T=0.8 [8]: rintro ⟨h₁, h₂⟩ in second branch
+        let raw = "intro a\n  constructor\n  · intro h\n    have h₁ : |9 + 2 * a| < 5 := by\n      nlinarith\n    have h₂ : -5 < 9 + 2 * a := by\n      nlinarith [abs_lt.mp h₁]\n    have h₃ : 9 + 2 * a < 5 := by\n      nlinarith [abs_lt.mp h₁]\n    have h₄ : -7 < a := by\n      nlinarith\n    have h₅ : a < -2 := by\n      nlinarith\n    exact ⟨h₄, h₅⟩\n  · rintro ⟨h₁, h₂⟩\n    have h₃ : |9 + 2 * a| < 5 := by\n      rw [abs_lt]\n      constructor\n      · nlinarith\n      · nlinarith\n    nlinarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro a");
+        assert_eq!(result[1], "constructor");
+        // First bullet stripped
+        assert_eq!(result[2], "intro h");
+        // Second bullet stripped: · rintro → rintro
+        assert!(result.iter().any(|t| t.starts_with("rintro")),
+            "Should have rintro from second bullet: {:?}", result);
+    }
+
+    #[test]
+    fn test_real_algebra327_nested_constructor_bullets() {
+        // T=0.8 [5]: nested bullets inside constructor branches
+        let raw = "intro a\n  constructor\n  · intro h\n    have h₁ : |9 + 2 * a| < 5 := by linarith\n    have h₂ : -5 < 9 + 2 * a ∧ 9 + 2 * a < 5 := abs_lt.mp h₁\n    have h₃ : -7 < a := by linarith\n    have h₄ : a < -2 := by linarith\n    exact ⟨h₃, h₄⟩\n  · intro h\n    have h₁ : -7 < a ∧ a < -2 := h\n    have h₂ : |9 + 2 * a| < 5 := by\n      rw [abs_lt]\n      constructor <;> linarith\n    have h₃ : 1 / 5 * |9 + 2 * a| < 1 := by\n      nlinarith\n    exact h₃";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro a");
+        assert_eq!(result[1], "constructor");
+        // Both branches produce stripped intro tactics
+        let intros: Vec<_> = result.iter().filter(|t| *t == "intro h").collect();
+        assert_eq!(intros.len(), 2, "Two branches, two 'intro h': {:?}", result);
+        // exact appears in both branches
+        let exacts: Vec<_> = result.iter().filter(|t| t.starts_with("exact")).collect();
+        assert_eq!(exacts.len(), 2, "Two branches, two exact: {:?}", result);
+    }
+
+    #[test]
+    fn test_real_algebra327_cases_le_total() {
+        // T=1.4 [18]: cases' le_total with <;> chains (no bullets)
+        let raw = "intro a\n  norm_num\n  constructor\n  · intro h\n    cases' le_total 0 (9 + 2 * a) with h₁ h₁ <;>\n      simp_all [abs_of_nonneg, abs_of_nonpos, Set.mem_Ioo] <;>\n        (try constructor) <;>\n        (try nlinarith) <;>\n        (try linarith)\n  · intro h\n    cases' le_total 0 (9 + 2 * a) with h₁ h₁ <;>\n      simp_all [abs_of_nonneg, abs_of_nonpos, Set.mem_Ioo] <;>\n        nlinarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro a");
+        assert_eq!(result[1], "norm_num");
+        assert_eq!(result[2], "constructor");
+        // Both bullet branches have cases' chains
+        let cases: Vec<_> = result.iter().filter(|t| t.starts_with("cases'")).collect();
+        assert!(cases.len() >= 2, "Two bullet branches with cases': {:?}", result);
+    }
+
+    #[test]
+    fn test_real_algebra327_next_syntax() {
+        // T=1.4 [31]: `next =>` block syntax instead of bullets
+        let raw = "intro a\n  constructor\n  next =>\n    intro h\n    have h₁ : |9 + 2 * a| < 5 := by\n      norm_num at h ⊢\n      linarith\n    have h₂ : -5 < 9 + 2 * a := by\n      cases' abs_cases (9 + 2 * a) with h₃ h₃ <;> linarith\n    have h₃ : 9 + 2 * a < 5 := by\n      cases' abs_cases (9 + 2 * a) with h₄ h₄ <;> linarith\n    constructor <;> linarith\n  next =>\n    rintro ⟨h₁, h₂⟩\n    have h₃ : |9 + 2 * a| < 5 := by\n      rw [abs_lt]\n      constructor <;> nlinarith\n    norm_num at h₃ ⊢\n    linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro a");
+        assert_eq!(result[1], "constructor");
+        // `next =>` blocks should be parsed
+        assert!(result.len() >= 4, "Should parse next blocks: {:?}", result);
+    }
+
+    // amc12a_2003_p24: logb set membership proof
+
+    #[test]
+    fn test_real_amc12a_refine_rintro() {
+        // T=1.8 [5]: refine' with inline norm_num args, then rintro destructuring
+        let raw = "refine' ⟨⟨2, 2, by norm_num, by norm_num, by norm_num [Real.logb_eq_zero]⟩, _⟩\n  rintro y ⟨a, b, hb, hab, rfl⟩\n  have h₁ : 0 < a := by linarith\n  have h₂ : 0 < b := by linarith\n  have h₃ : 0 < Real.log b := Real.log_pos (by linarith)\n  have h₄ : 0 < Real.log a := Real.log_pos (by linarith)\n  field_simp [Real.logb, h₁.ne', h₂.ne', Real.log_mul, Real.log_div, Real.log_pow] at *\n  rw [div_le_iff (by positivity), ← mul_comm]\n  ring_nf\n  nlinarith [sq_nonneg (Real.log a - Real.log b)]";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "refine' ⟨⟨2, 2, by norm_num, by norm_num, by norm_num [Real.logb_eq_zero]⟩, _⟩");
+        assert_eq!(result[1], "rintro y ⟨a, b, hb, hab, rfl⟩");
+        assert!(result[2].starts_with("have h₁ : 0 < a := by"));
+        // field_simp with multiple args
+        assert!(result.iter().any(|t| t.starts_with("field_simp")));
+        assert_eq!(*result.last().unwrap(), "nlinarith [sq_nonneg (Real.log a - Real.log b)]");
+    }
+
+    #[test]
+    fn test_real_amc12a_constructor_use() {
+        // T=1.4 [0]: constructor then use with <;> chains
+        let raw = "constructor\n  · use 1, 2\n    norm_num [Real.logb, Real.log_div]\n    <;>\n    norm_num\n  · rintro y ⟨a, b, hb, hab, rfl⟩\n    have h₁ : Real.logb a (a / b) + Real.logb b (b / a) = 0 := by\n      have h₁ : Real.logb a (a / b) = Real.log a / Real.log a - Real.log b / Real.log a := by\n        rw [Real.logb";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "constructor");
+        // First bullet: use tactic
+        assert_eq!(result[1], "use 1, 2");
+    }
+
+    #[test]
+    fn test_real_amc12a_have_step_pattern() {
+        // T=0.8 [0]: "have step1 : ... := by" with set-builder {y : ℝ | ...}.
+        // The `{` in the type triggers block detection, causing decomposition
+        // into bare have + body tactics.
+        let raw = "have step1 : 0 ∈ {y : ℝ | ∃ a b : ℝ, 1 < b ∧ b ≤ a ∧ y = Real.logb a (a / b) + Real.logb b (b / a)} := by\n    use 2, 2\n    norm_num [Real.logb, Real.log_pow]";
+        let result = extract_all_tactics_structured(raw);
+        // Decomposed: bare have (type with set-builder) + body tactics
+        assert_eq!(result.len(), 3, "Decomposed have + 2 body tactics: {:?}", result);
+        assert!(result[0].starts_with("have step1"));
+        assert_eq!(result[1], "use 2, 2");
+        assert_eq!(result[2], "norm_num [Real.logb, Real.log_pow]");
     }
 }
