@@ -4,7 +4,7 @@ alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
-timeout_per_theorem = 500     # seconds
+timeout_per_theorem = 1800    # seconds
 temperature = 1.4             # Sampling temperature for tactic generation
 top_p = 0.95                  # Nucleus sampling parameter
 max_tactic_tokens = 48        # Maximum tokens per generated tactic
@@ -14,9 +14,9 @@ ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
 probe_tactics = []
 # Hybrid whole-proof search
-hybrid_num_proofs = 32
+hybrid_num_proofs = 16
 hybrid_min_proofs = 4
-hybrid_max_rounds = 120
+hybrid_max_rounds = 30
 hybrid_max_tokens = 1024
 hybrid_min_tokens = 256
 hybrid_tokens_decay_depth = 8
