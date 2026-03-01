@@ -265,7 +265,6 @@ impl SearchEngine {
             format!("⊢ {statement}")
         };
         let root_goals = vec![Goal::parse(0, &root_pp)];
-        let root_terminal = root_goals.is_empty();
 
         let root = SearchNode {
             state_id: initial_state.state_id,
@@ -276,30 +275,13 @@ impl SearchEngine {
             depth: 0,
             llm_log_prob: 0.0,
             ebm_score: 0.0,
-            is_terminal: root_terminal,
+            is_terminal: false,
         };
 
         let mut arena: Vec<SearchNode> = vec![root];
         let mut visited_states: HashSet<String> = HashSet::new();
         visited_states.insert(root_pp.clone());
         let mut trie = ReplayTrie::new();
-
-        if root_terminal {
-            let wall_time_ms = start_time.elapsed().as_millis() as u64;
-            let records = build_trajectory_records(&arena, theorem_name, &trie);
-            return Ok(SearchResult {
-                theorem_name: theorem_name.to_string(),
-                proved: true,
-                proof_tactics: vec![],
-                nodes_expanded: 0,
-                total_states: 1,
-                max_depth_reached: 0,
-                wall_time_ms,
-                all_records: records,
-                stats: std::mem::take(stats),
-                failure_reason: "proved".to_string(),
-            });
-        }
 
         // Score root with EBM if available
         if let Some(scorer) = scorer {

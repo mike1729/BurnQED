@@ -302,6 +302,13 @@ impl LeanWorker {
                     });
                 }
 
+                // Reject tactics whose proof term contains sorry
+                if result.has_sorry {
+                    return Ok(TacticResult::Failed {
+                        message: "Proof contains sorry".into(),
+                    });
+                }
+
                 match (result.next_state_id, result.goals) {
                     (Some(next_id), Some(goals)) if goals.is_empty() => {
                         Ok(TacticResult::ProofComplete { state_id: next_id })
@@ -317,12 +324,13 @@ impl LeanWorker {
                             goals: parsed_goals,
                         })
                     }
-                    // Pantograph sometimes returns nextStateId=null with empty/null
+                    // Pantograph sometimes returns nextStateId=null with empty
                     // goals and no parseError when a tactic completes the proof
                     // (e.g. <;> combinator chains). Detect this as proof completion.
+                    // Use u64::MAX as sentinel to avoid collision with root state_id=0.
                     (None, Some(goals)) if goals.is_empty() => {
-                        tracing::debug!("Proof complete with null stateId (goals=[])");
-                        Ok(TacticResult::ProofComplete { state_id: 0 })
+                        tracing::info!("Proof complete with null stateId (goals=[]), using sentinel");
+                        Ok(TacticResult::ProofComplete { state_id: u64::MAX })
                     }
                     (None, None) => {
                         // No parseError, no goals, no stateId — Pantograph returned

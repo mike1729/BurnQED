@@ -150,6 +150,9 @@ pub struct GoalTacticResult {
     pub goals: Option<Vec<PantographGoal>>,
     /// Parse error message (tactic parsing failed).
     pub parse_error: Option<String>,
+    /// Whether the proof term contains `sorry` (Pantograph always sends this).
+    #[serde(default)]
+    pub has_sorry: bool,
 }
 
 /// Error response from Pantograph.
@@ -365,6 +368,48 @@ mod tests {
                 assert!(e.desc.contains("Exactly one"));
             }
             _ => panic!("Expected Error, got {:?}", resp),
+        }
+    }
+
+    #[test]
+    fn deserialize_has_sorry_true() {
+        let json = r#"{"goals":[],"hasSorry":true,"hasUnsafe":false,"messages":[],"nextStateId":3}"#;
+        let resp = PantographResponse::parse_goal_tactic(json).unwrap();
+
+        match resp {
+            PantographResponse::TacticResult(r) => {
+                assert!(r.has_sorry);
+                assert_eq!(r.next_state_id, Some(3));
+                assert!(r.goals.unwrap().is_empty());
+            }
+            _ => panic!("Expected TacticResult, got {:?}", resp),
+        }
+    }
+
+    #[test]
+    fn deserialize_has_sorry_false() {
+        let json = r#"{"goals":[],"hasSorry":false,"hasUnsafe":false,"messages":[],"nextStateId":2}"#;
+        let resp = PantographResponse::parse_goal_tactic(json).unwrap();
+
+        match resp {
+            PantographResponse::TacticResult(r) => {
+                assert!(!r.has_sorry);
+            }
+            _ => panic!("Expected TacticResult, got {:?}", resp),
+        }
+    }
+
+    #[test]
+    fn deserialize_has_sorry_absent_defaults_false() {
+        // Older Pantograph or execution-failure responses may omit hasSorry
+        let json = r#"{"goals":[{"name":"_uniq.1","target":{"pp":"True"},"vars":[]}],"nextStateId":1}"#;
+        let resp = PantographResponse::parse_goal_tactic(json).unwrap();
+
+        match resp {
+            PantographResponse::TacticResult(r) => {
+                assert!(!r.has_sorry);
+            }
+            _ => panic!("Expected TacticResult, got {:?}", resp),
         }
     }
 
