@@ -41,13 +41,16 @@ pub struct SearchConfig {
 
     // --- Hybrid whole-proof search config ---
 
-    /// Number of whole proofs to generate in the first (root) round.
+    /// Number of whole proofs to generate (at depth 0).
+    /// `effective_hybrid_num_proofs()` decays linearly from this value
+    /// to `hybrid_min_proofs` over `hybrid_tokens_decay_depth` levels.
     #[serde(default = "default_hybrid_num_proofs")]
     pub hybrid_num_proofs: usize,
 
-    /// Number of whole proofs to generate in subsequent (non-root) rounds.
-    #[serde(default = "default_hybrid_expand_proofs")]
-    pub hybrid_expand_proofs: usize,
+    /// Minimum number of whole proofs to generate (floor for deep nodes).
+    /// Default: 4.
+    #[serde(default = "default_hybrid_min_proofs")]
+    pub hybrid_min_proofs: usize,
 
     /// Maximum number of expansion rounds.
     #[serde(default = "default_hybrid_max_rounds")]
@@ -136,8 +139,8 @@ fn default_batch_encode_size() -> usize {
 fn default_hybrid_num_proofs() -> usize {
     32
 }
-fn default_hybrid_expand_proofs() -> usize {
-    16
+fn default_hybrid_min_proofs() -> usize {
+    4
 }
 fn default_hybrid_max_rounds() -> u32 {
     30
@@ -229,6 +232,22 @@ impl SearchConfig {
         let tokens = self.hybrid_max_tokens - (range as f64 * fraction) as usize;
         tokens.max(self.hybrid_min_tokens)
     }
+
+    /// Compute effective number of whole proofs to generate at a given depth.
+    ///
+    /// Decays linearly from `hybrid_num_proofs` (depth 0) to `hybrid_min_proofs`
+    /// (at `hybrid_tokens_decay_depth`), then stays at the floor.
+    /// If `hybrid_tokens_decay_depth` is 0, decay is disabled and returns
+    /// `hybrid_num_proofs` at all depths.
+    pub fn effective_hybrid_num_proofs(&self, depth: u32) -> usize {
+        if self.hybrid_tokens_decay_depth == 0 {
+            return self.hybrid_num_proofs;
+        }
+        let fraction = (depth as f64 / self.hybrid_tokens_decay_depth as f64).min(1.0);
+        let range = self.hybrid_num_proofs.saturating_sub(self.hybrid_min_proofs);
+        let proofs = self.hybrid_num_proofs - (range as f64 * fraction) as usize;
+        proofs.max(self.hybrid_min_proofs)
+    }
 }
 
 impl Default for SearchConfig {
@@ -243,7 +262,7 @@ impl Default for SearchConfig {
             ebm_ramp_depth: 0,
             ebm_min_depth: 0,
             hybrid_num_proofs: default_hybrid_num_proofs(),
-            hybrid_expand_proofs: default_hybrid_expand_proofs(),
+            hybrid_min_proofs: default_hybrid_min_proofs(),
             hybrid_max_rounds: default_hybrid_max_rounds(),
             hybrid_max_tokens: default_hybrid_max_tokens(),
             hybrid_min_tokens: default_hybrid_min_tokens(),
@@ -273,7 +292,7 @@ mod tests {
         assert_eq!(cfg.probe_tactics.len(), 17);
         assert_eq!(cfg.batch_encode_size, 8);
         assert_eq!(cfg.hybrid_num_proofs, 32);
-        assert_eq!(cfg.hybrid_expand_proofs, 16);
+        assert_eq!(cfg.hybrid_min_proofs, 4);
         assert_eq!(cfg.hybrid_max_rounds, 30);
         assert_eq!(cfg.hybrid_max_tokens, 1024);
         assert_eq!(cfg.hybrid_budget, 256);
@@ -333,6 +352,7 @@ mod tests {
             batch_expansion_size = 8
             fallback_tactics = []
             harvest_siblings = true
+            hybrid_expand_proofs = 16
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert!((cfg.beta - 0.5).abs() < 1e-9); // defaults applied
@@ -524,5 +544,86 @@ mod tests {
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.hybrid_min_tokens, 256);
         assert_eq!(cfg.hybrid_tokens_decay_depth, 8);
+    }
+
+    #[test]
+    fn test_hybrid_proof_decay_defaults() {
+        let cfg = SearchConfig::default();
+        assert_eq!(cfg.hybrid_num_proofs, 32);
+        assert_eq!(cfg.hybrid_min_proofs, 4);
+        // depth 0 = max
+        assert_eq!(cfg.effective_hybrid_num_proofs(0), 32);
+        // depth 4 = midpoint: 32 - (28 * 0.5) = 18
+        assert_eq!(cfg.effective_hybrid_num_proofs(4), 18);
+        // depth 8 = floor
+        assert_eq!(cfg.effective_hybrid_num_proofs(8), 4);
+        // beyond decay depth = floor
+        assert_eq!(cfg.effective_hybrid_num_proofs(12), 4);
+    }
+
+    #[test]
+    fn test_hybrid_proof_decay_disabled() {
+        let cfg = SearchConfig {
+            hybrid_tokens_decay_depth: 0,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_hybrid_num_proofs(0), 32);
+        assert_eq!(cfg.effective_hybrid_num_proofs(5), 32);
+        assert_eq!(cfg.effective_hybrid_num_proofs(100), 32);
+    }
+
+    #[test]
+    fn test_hybrid_proof_decay_custom() {
+        let cfg = SearchConfig {
+            hybrid_num_proofs: 16,
+            hybrid_min_proofs: 4,
+            hybrid_tokens_decay_depth: 4,
+            ..Default::default()
+        };
+        // range = 12, decay over 4 levels
+        assert_eq!(cfg.effective_hybrid_num_proofs(0), 16);
+        assert_eq!(cfg.effective_hybrid_num_proofs(1), 13); // 16 - 3
+        assert_eq!(cfg.effective_hybrid_num_proofs(2), 10); // 16 - 6
+        assert_eq!(cfg.effective_hybrid_num_proofs(4), 4);  // floor
+        assert_eq!(cfg.effective_hybrid_num_proofs(10), 4); // clamped
+    }
+
+    #[test]
+    fn test_hybrid_proof_decay_min_equals_max() {
+        let cfg = SearchConfig {
+            hybrid_num_proofs: 8,
+            hybrid_min_proofs: 8,
+            hybrid_tokens_decay_depth: 8,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_hybrid_num_proofs(0), 8);
+        assert_eq!(cfg.effective_hybrid_num_proofs(4), 8);
+        assert_eq!(cfg.effective_hybrid_num_proofs(8), 8);
+    }
+
+    #[test]
+    fn test_hybrid_proof_decay_toml() {
+        let toml_str = r#"
+            hybrid_num_proofs = 64
+            hybrid_min_proofs = 8
+            hybrid_tokens_decay_depth = 10
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.hybrid_num_proofs, 64);
+        assert_eq!(cfg.hybrid_min_proofs, 8);
+        assert_eq!(cfg.effective_hybrid_num_proofs(0), 64);
+        assert_eq!(cfg.effective_hybrid_num_proofs(10), 8);
+    }
+
+    #[test]
+    fn test_hybrid_proof_decay_toml_backward_compat() {
+        // Old TOML with hybrid_expand_proofs should still parse (ignored)
+        let toml_str = r#"
+            hybrid_num_proofs = 32
+            hybrid_expand_proofs = 16
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.hybrid_num_proofs, 32);
+        assert_eq!(cfg.hybrid_min_proofs, 4); // default
     }
 }

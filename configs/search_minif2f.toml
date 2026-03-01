@@ -15,7 +15,7 @@ ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
 probe_tactics = []
 # Hybrid whole-proof search
 hybrid_num_proofs = 32
-hybrid_expand_proofs = 16
+hybrid_min_proofs = 4
 hybrid_max_rounds = 120
 hybrid_max_tokens = 1024
 hybrid_min_tokens = 256

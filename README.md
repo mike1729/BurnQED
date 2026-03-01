@@ -255,7 +255,7 @@ batch_expansion_size = 1      # Nodes popped per batch
 batch_encode_size = 4         # Max states per EBM encode batch
 # Hybrid whole-proof search
 hybrid_num_proofs = 16
-hybrid_expand_proofs = 8
+hybrid_min_proofs = 4
 hybrid_max_rounds = 60
 hybrid_max_tokens = 1024
 hybrid_budget = 512

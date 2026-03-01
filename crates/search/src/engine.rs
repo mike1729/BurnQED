@@ -428,12 +428,8 @@ impl SearchEngine {
 
             let leaf_state = arena[leaf_idx].goals_as_text();
 
-            // Generate whole proofs from this leaf
-            let n = if round == 0 {
-                self.config.hybrid_num_proofs
-            } else {
-                self.config.hybrid_expand_proofs
-            };
+            // Generate whole proofs from this leaf (count decays with depth)
+            let n = self.config.effective_hybrid_num_proofs(arena[leaf_idx].depth);
 
             let gen_start = Instant::now();
             let raw_proofs = policy
