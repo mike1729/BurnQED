@@ -840,7 +840,7 @@ impl SearchEngine {
             round += 1;
         }
 
-        tracing::info!(
+        tracing::debug!(
             exit_reason,
             round,
             total_proofs,

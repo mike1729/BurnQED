@@ -325,17 +325,25 @@ impl LeanWorker {
                         Ok(TacticResult::ProofComplete { state_id: 0 })
                     }
                     (None, None) => {
-                        // No parseError was already checked above. null goals + null
-                        // stateId without an error means proof complete.
-                        tracing::debug!("Proof complete with null stateId (goals=null)");
-                        Ok(TacticResult::ProofComplete { state_id: 0 })
+                        // No parseError, no goals, no stateId — Pantograph returned
+                        // a response without meaningful content (e.g. tactic failed
+                        // internally without producing a standard error). Treat as
+                        // failure, NOT proof completion.
+                        tracing::debug!("Tactic failed: no stateId, no goals, no error");
+                        Ok(TacticResult::Failed {
+                            message: "Tactic produced no result (no goals, no stateId)".into(),
+                        })
                     }
                     (None, Some(_)) => Ok(TacticResult::Failed {
                         message: "Tactic failed (no next state)".into(),
                     }),
                     (Some(next_id), None) => {
-                        // nextStateId present but no goals field — treat as success with no goals
-                        Ok(TacticResult::ProofComplete { state_id: next_id })
+                        // nextStateId present but goals field absent — ambiguous response.
+                        // Treat as failure rather than assuming proof complete.
+                        tracing::debug!(next_state_id = next_id, "Tactic returned stateId but no goals field");
+                        Ok(TacticResult::Failed {
+                            message: "Tactic returned stateId but no goals".into(),
+                        })
                     }
                 }
             }
