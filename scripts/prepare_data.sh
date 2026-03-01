@@ -207,7 +207,7 @@ for pair in "${BENCHMARKS[@]}"; do
 
     # Generate .lean file from JSON
     echo "  Generating ${module_name}.lean from ${json_file}..."
-    python "${REPO_ROOT}/python/data/minif2f/generate_lean.py" \
+    python "${REPO_ROOT}/python/data/generate_lean.py" \
         --input "${BENCH_DIR}/${json_file}" \
         --output "${PANTOGRAPH_DIR}/${module_name}.lean" \
         --module-name "${module_name}"

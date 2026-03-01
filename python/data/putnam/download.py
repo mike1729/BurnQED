@@ -50,28 +50,44 @@ def clone_repo(url: str, dest: Path) -> Path:
     return dest
 
 
-def parse_putnam_file(lean_file: Path) -> list[dict]:
-    """Parse theorem declarations from a PutnamBench .lean file.
+def parse_putnam_file(lean_file: Path) -> tuple[list[dict], list[str]]:
+    """Parse theorem and solution abbrev declarations from a PutnamBench .lean file.
 
     Each file typically contains one theorem `putnam_XXXX_XN` plus possibly
     an `abbrev putnam_XXXX_XN_solution` (answer placeholder with sorry).
-    We skip solution abbrevs and extract only the theorem statement.
+    Solution abbrevs are extracted separately since theorems may reference them.
 
-    Returns list of {"name": ..., "statement": ...} dicts.
+    Returns (theorems, solution_abbrevs) where:
+      - theorems: list of {"name": ..., "statement": ...} dicts
+      - solution_abbrevs: list of full abbrev declaration strings (with := sorry)
     """
     content = lean_file.read_text(encoding="utf-8", errors="replace")
-    theorems = []
 
-    # Strip docstrings (/-  ... -/)
+    # Strip docstrings (/- ... -/)
     content_clean = re.sub(r'/\-.*?\-/', '', content, flags=re.DOTALL)
+    # Strip line comments
+    content_clean = re.sub(r'--.*$', '', content_clean, flags=re.MULTILINE)
 
-    # Match `theorem <name>` followed by everything up to `:= by` or `:= sorry`
-    pattern = re.compile(
+    theorems = []
+    solution_abbrevs = []
+
+    # Extract solution abbrevs: `[noncomputable] abbrev name_solution : Type := sorry`
+    abbrev_pattern = re.compile(
+        r"((?:noncomputable\s+)?abbrev\s+[\w'.]+_solution\s*:.*?):=\s*sorry",
+        re.DOTALL,
+    )
+    for match in abbrev_pattern.finditer(content_clean):
+        decl = match.group(1).strip()
+        # Normalize whitespace
+        decl = re.sub(r'\s+', ' ', decl)
+        solution_abbrevs.append(f"{decl} := sorry")
+
+    # Extract theorems
+    theorem_pattern = re.compile(
         r"theorem\s+([\w'.]+)\s*(.*?)\s*:=\s*(?:by\s+)?sorry",
         re.DOTALL,
     )
-
-    for match in pattern.finditer(content_clean):
+    for match in theorem_pattern.finditer(content_clean):
         name = match.group(1)
         signature = match.group(2).strip()
 
@@ -83,17 +99,18 @@ def parse_putnam_file(lean_file: Path) -> list[dict]:
                 "statement": statement,
             })
 
-    return theorems
+    return theorems, solution_abbrevs
 
 
-def download_putnam(output_dir: Path) -> list[dict]:
-    """Download and extract PutnamBench theorems.
+def download_putnam(output_dir: Path) -> tuple[list[dict], list[str]]:
+    """Download and extract PutnamBench theorems and solution abbrevs.
 
-    Returns list of theorem dicts.
+    Returns (theorems, preamble) where preamble contains solution abbrev declarations.
     """
     all_theorems = []
+    all_abbrevs = []
     seen_names: set[str] = set()
-    skipped_solutions = 0
+    seen_abbrevs: set[str] = set()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         repo_dir = clone_repo(PUTNAM_REPO, Path(tmpdir) / "PutnamBench")
@@ -101,7 +118,6 @@ def download_putnam(output_dir: Path) -> list[dict]:
         # PutnamBench stores .lean files in lean4/src/
         src_dir = repo_dir / "lean4" / "src"
         if not src_dir.exists():
-            # Fallback: search for .lean files anywhere
             logger.warning("lean4/src/ not found, searching entire repo...")
             lean_files = sorted(repo_dir.rglob("*.lean"))
         else:
@@ -113,39 +129,38 @@ def download_putnam(output_dir: Path) -> list[dict]:
             if lean_file.name in ("lakefile.lean",):
                 continue
 
-            content = lean_file.read_text(encoding="utf-8", errors="replace")
+            theorems, abbrevs = parse_putnam_file(lean_file)
 
-            # Skip solution abbrevs — files named *_solution* or containing
-            # only `abbrev ... := sorry` (answer placeholders)
-            if "_solution" in lean_file.stem.lower():
-                skipped_solutions += 1
-                continue
+            for abbrev in abbrevs:
+                # Deduplicate by abbrev name
+                abbrev_name = re.search(r'abbrev\s+([\w\'.]+)', abbrev)
+                if abbrev_name and abbrev_name.group(1) not in seen_abbrevs:
+                    seen_abbrevs.add(abbrev_name.group(1))
+                    all_abbrevs.append(abbrev)
 
-            theorems = parse_putnam_file(lean_file)
             for thm in theorems:
                 if thm["name"] in seen_names:
-                    continue
-                # Skip solution abbrev names that snuck through
-                if "_solution" in thm["name"].lower():
-                    skipped_solutions += 1
                     continue
                 seen_names.add(thm["name"])
                 all_theorems.append(thm)
 
     logger.info(
-        "Extracted %d PutnamBench theorems (skipped %d solution abbrevs)",
+        "Extracted %d PutnamBench theorems + %d solution abbrevs",
         len(all_theorems),
-        skipped_solutions,
+        len(all_abbrevs),
     )
 
-    return all_theorems
+    return all_theorems, all_abbrevs
 
 
-def write_output(theorems: list, path: Path):
+def write_output(theorems: list, path: Path, preamble: list[str] | None = None):
     """Write theorems in TheoremIndex JSON format."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    data: dict = {"theorems": theorems}
+    if preamble:
+        data["preamble"] = preamble
     with open(path, "w") as f:
-        json.dump({"theorems": theorems}, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False)
     logger.info("Wrote %d theorems to %s", len(theorems), path)
 
 
@@ -171,11 +186,11 @@ def main():
         logger.info("PutnamBench file already exists at %s (use --force to re-download)", output_path)
         return
 
-    theorems = download_putnam(output_dir)
+    theorems, preamble = download_putnam(output_dir)
 
     if theorems:
-        write_output(theorems, output_path)
-        print(f"\nPutnamBench download complete: {len(theorems)} theorems")
+        write_output(theorems, output_path, preamble=preamble)
+        print(f"\nPutnamBench download complete: {len(theorems)} theorems, {len(preamble)} solution abbrevs")
     else:
         logger.error("No PutnamBench theorems extracted")
 

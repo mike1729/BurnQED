@@ -59,7 +59,7 @@ def generate(variant: str):
 
     cmd = [
         sys.executable,
-        "python/data/minif2f/generate_lean.py",
+        "python/data/generate_lean.py",
         "--input", str(json_path),
         "--output", str(lean_path),
         "--module-name", module,

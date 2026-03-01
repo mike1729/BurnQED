@@ -86,11 +86,33 @@ if [ ! -f "$PUTNAM_JSON" ]; then
     exit 3
 fi
 
-echo "  Generating ${MODULE_NAME}.lean from putnam.json..."
-$PYTHON "${REPO_ROOT}/python/data/minif2f/generate_lean.py" \
-    --input "$PUTNAM_JSON" \
-    --output "$LEAN_FILE" \
+# PutnamBench theorems use identifiers from many Mathlib namespaces.
+# Open the full union so all 672 problems compile in a single module.
+# Open namespaces used by PutnamBench theorems. Excluded:
+#   Complex (clashes with Real: cos, sin, exp)
+#   MvPolynomial (clashes with Polynomial: X, C, eval)
+PUTNAM_OPENS=(
+    Filter Topology Set Metric Nat Polynomial
+    MeasureTheory ProbabilityTheory EuclideanGeometry
+    Function Matrix Finset BigOperators
+    Bornology RingHom Classical Interval
+    InnerProductSpace intervalIntegral
+)
+
+SKIP_FILE="${BENCH_DIR}/putnam_skip.txt"
+GENERATE_ARGS=(
+    --input "$PUTNAM_JSON"
+    --output "$LEAN_FILE"
     --module-name "$MODULE_NAME"
+    --extra-opens "${PUTNAM_OPENS[@]}"
+)
+if [ -f "$SKIP_FILE" ]; then
+    GENERATE_ARGS+=(--skip-file "$SKIP_FILE")
+    echo "  Using skip list: $(wc -l < "$SKIP_FILE") theorems"
+fi
+
+echo "  Generating ${MODULE_NAME}.lean from putnam.json..."
+$PYTHON "${REPO_ROOT}/python/data/generate_lean.py" "${GENERATE_ARGS[@]}"
 
 # ── Step 3: Register in lakefile.lean ────────────────────────────────────────
 echo ""
@@ -107,22 +129,60 @@ else
     echo "  WARNING: lakefile.lean not found at ${PANTOGRAPH_DIR}"
 fi
 
-# ── Step 4: Build oleans ────────────────────────────────────────────────────
+# ── Step 4: Build oleans (iterative: skip theorems that fail) ────────────────
 echo ""
 echo "=== Step 4: Build oleans ==="
 
 if command -v lake &>/dev/null; then
-    echo "  Building ${MODULE_NAME}..."
-    cd "${PANTOGRAPH_DIR}"
-    if lake build "${MODULE_NAME}"; then
-        echo "  Built oleans for ${MODULE_NAME}"
-    else
-        echo "ERROR: lake build ${MODULE_NAME} failed."
-        echo "  Check build output above for errors."
+    # Iterative build: some PutnamBench theorems don't compile under our global
+    # open statements (namespace clashes, syntax issues). We do up to 3 passes:
+    # each pass captures failures, adds them to the skip list, and regenerates.
+    MAX_PASSES=3
+    for pass in $(seq 1 "$MAX_PASSES"); do
+        echo "  Build pass ${pass}/${MAX_PASSES}..."
+        cd "${PANTOGRAPH_DIR}"
+        BUILD_OUTPUT=$(lake build "${MODULE_NAME}" 2>&1) && {
+            echo "  Built oleans for ${MODULE_NAME}"
+            cd "$REPO_ROOT"
+            break
+        }
         cd "$REPO_ROOT"
-        exit 5
-    fi
-    cd "$REPO_ROOT"
+
+        # Extract theorem names with errors
+        NEW_SKIPS=$(echo "$BUILD_OUTPUT" | grep '^error: BenchPutnam.lean:' | \
+            grep -v 'Lean exited\|required\|build failed\|maximum number' | \
+            sed 's/error: BenchPutnam.lean:\([0-9]*\):.*/\1/' | sort -un | while read -r line; do
+                awk -v errline="$line" 'NR <= errline && /^theorem / { name=$2 } NR == errline { print name }' \
+                    "$LEAN_FILE"
+            done | sort -u)
+
+        if [ -z "$NEW_SKIPS" ]; then
+            echo "  No new failures to skip, but build still failed."
+            echo "ERROR: lake build ${MODULE_NAME} failed."
+            exit 5
+        fi
+
+        NEW_COUNT=$(echo "$NEW_SKIPS" | wc -l)
+        echo "  Found ${NEW_COUNT} failing theorems, adding to skip list..."
+
+        # Append to skip list and regenerate
+        touch "$SKIP_FILE"
+        echo "$NEW_SKIPS" >> "$SKIP_FILE"
+        sort -u "$SKIP_FILE" -o "$SKIP_FILE"
+
+        GENERATE_ARGS=(
+            --input "$PUTNAM_JSON"
+            --output "$LEAN_FILE"
+            --module-name "$MODULE_NAME"
+            --extra-opens "${PUTNAM_OPENS[@]}"
+            --skip-file "$SKIP_FILE"
+        )
+        $PYTHON "${REPO_ROOT}/python/data/generate_lean.py" "${GENERATE_ARGS[@]}"
+    done
+
+    COMPILED=$(grep -c '^theorem ' "$LEAN_FILE" || echo 0)
+    SKIPPED=$(wc -l < "$SKIP_FILE" 2>/dev/null || echo 0)
+    echo "  Compiled: ${COMPILED}/672 theorems (${SKIPPED} skipped)"
 else
     echo "  lake not found — skipping olean build."
     echo "  Build later with: cd vendor/Pantograph && lake build ${MODULE_NAME}"
@@ -160,9 +220,8 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# Check olean build (look for .olean or build directory)
-if [ -d "${PANTOGRAPH_DIR}/.lake/build/lib/${MODULE_NAME}" ] || \
-   [ -f "${PANTOGRAPH_DIR}/.lake/build/lib/${MODULE_NAME}.olean" ]; then
+# Check olean build
+if [ -f "${PANTOGRAPH_DIR}/.lake/build/lib/lean/${MODULE_NAME}.olean" ]; then
     echo "  PASS  ${MODULE_NAME} oleans built"
     PASS=$((PASS + 1))
 else

@@ -30,7 +30,7 @@ Outputs:
 ### Step 2: Generate Lean files
 
 ```bash
-python python/data/minif2f/generate_lean.py \
+python python/data/generate_lean.py \
     --input data/benchmarks/minif2f_v2s_test.json \
     --output vendor/Pantograph/BenchMinIF2FV2sTest.lean \
     --module-name BenchMinIF2FV2sTest

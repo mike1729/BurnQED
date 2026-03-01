@@ -7,7 +7,7 @@ Without this, complex expressions (involving ℂ, Finset, etc.) can take 60s+
 to elaborate, exceeding the tactic timeout.
 
 Usage:
-    python python/data/minif2f/generate_lean.py \
+    python python/data/generate_lean.py \
         --input data/benchmarks/minif2f_v2s_test.json \
         --output vendor/Pantograph/BenchMinIF2FV2sTest.lean \
         --module-name BenchMinIF2FV2sTest
@@ -253,21 +253,36 @@ def statement_to_theorem(name: str, statement: str) -> str:
 
 
 def generate_lean_file(
-    theorems: list[dict], module_name: str, skip_names: set[str] | None = None
+    theorems: list[dict],
+    module_name: str,
+    skip_names: set[str] | None = None,
+    extra_opens: list[str] | None = None,
+    preamble: list[str] | None = None,
 ) -> str:
     """Generate a complete Lean 4 file with sorry proofs for all theorems."""
+    open_line = "open Real"
+    if extra_opens:
+        all_opens = ["Real"] + [o for o in extra_opens if o != "Real"]
+        open_line = "open " + " ".join(all_opens)
+
     lines = [
         f"-- Auto-generated benchmark file: {module_name}",
         "-- Do not edit manually. Regenerate with:",
-        "--   python python/data/minif2f/generate_lean.py",
+        "--   python python/data/generate_lean.py",
         "",
         "import Mathlib",
         "",
         "set_option maxHeartbeats 400000",
         "",
-        "open Real",
+        open_line,
         "",
     ]
+
+    if preamble:
+        lines.append("-- Solution abbrevs (referenced by theorems)")
+        for decl in preamble:
+            lines.append(decl)
+            lines.append("")
 
     skipped = []
     for thm in theorems:
@@ -328,6 +343,12 @@ def main():
         "--skip-file",
         help="File with theorem names to skip (one per line)",
     )
+    parser.add_argument(
+        "--extra-opens",
+        nargs="*",
+        default=[],
+        help="Additional Lean namespaces to open (e.g. Filter Topology Set)",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -345,6 +366,8 @@ def main():
         print(f"ERROR: No theorems found in {input_path}", file=sys.stderr)
         sys.exit(1)
 
+    preamble = data.get("preamble", [])
+
     module_name = args.module_name or output_path.stem
 
     skip_names = set()
@@ -354,7 +377,11 @@ def main():
             skip_names = {line.strip() for line in skip_path.read_text().splitlines() if line.strip()}
             print(f"Loaded {len(skip_names)} skip names from {skip_path}")
 
-    lean_content = generate_lean_file(theorems, module_name, skip_names)
+    lean_content = generate_lean_file(
+        theorems, module_name, skip_names,
+        extra_opens=args.extra_opens or None,
+        preamble=preamble or None,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
