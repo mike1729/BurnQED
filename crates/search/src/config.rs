@@ -53,9 +53,20 @@ pub struct SearchConfig {
     #[serde(default = "default_hybrid_max_rounds")]
     pub hybrid_max_rounds: u32,
 
-    /// Maximum tokens per whole proof generation.
+    /// Maximum tokens per whole proof generation (at depth 0).
     #[serde(default = "default_hybrid_max_tokens")]
     pub hybrid_max_tokens: usize,
+
+    /// Minimum tokens per whole proof generation (floor for deep nodes).
+    /// `effective_hybrid_max_tokens()` decays linearly from `hybrid_max_tokens`
+    /// to this value over `hybrid_tokens_decay_depth` levels. Default: 256.
+    #[serde(default = "default_hybrid_min_tokens")]
+    pub hybrid_min_tokens: usize,
+
+    /// Depth at which token budget reaches the floor (`hybrid_min_tokens`).
+    /// 0 = disabled (use `hybrid_max_tokens` at all depths). Default: 8.
+    #[serde(default = "default_hybrid_tokens_decay_depth")]
+    pub hybrid_tokens_decay_depth: u32,
 
     /// Total proof generation budget (sum of N across all rounds).
     #[serde(default = "default_hybrid_budget")]
@@ -134,6 +145,12 @@ fn default_hybrid_max_rounds() -> u32 {
 fn default_hybrid_max_tokens() -> usize {
     1024
 }
+fn default_hybrid_min_tokens() -> usize {
+    256
+}
+fn default_hybrid_tokens_decay_depth() -> u32 {
+    8
+}
 fn default_hybrid_budget() -> u32 {
     256
 }
@@ -196,6 +213,22 @@ impl SearchConfig {
     pub fn should_skip_ebm(&self, depth: u32) -> bool {
         self.ebm_min_depth > 0 && depth < self.ebm_min_depth
     }
+
+    /// Compute effective max tokens for whole-proof generation at a given depth.
+    ///
+    /// Decays linearly from `hybrid_max_tokens` (depth 0) to `hybrid_min_tokens`
+    /// (at `hybrid_tokens_decay_depth`), then stays at the floor.
+    /// If `hybrid_tokens_decay_depth` is 0, decay is disabled and returns
+    /// `hybrid_max_tokens` at all depths.
+    pub fn effective_hybrid_max_tokens(&self, depth: u32) -> usize {
+        if self.hybrid_tokens_decay_depth == 0 {
+            return self.hybrid_max_tokens;
+        }
+        let fraction = (depth as f64 / self.hybrid_tokens_decay_depth as f64).min(1.0);
+        let range = self.hybrid_max_tokens.saturating_sub(self.hybrid_min_tokens);
+        let tokens = self.hybrid_max_tokens - (range as f64 * fraction) as usize;
+        tokens.max(self.hybrid_min_tokens)
+    }
 }
 
 impl Default for SearchConfig {
@@ -213,6 +246,8 @@ impl Default for SearchConfig {
             hybrid_expand_proofs: default_hybrid_expand_proofs(),
             hybrid_max_rounds: default_hybrid_max_rounds(),
             hybrid_max_tokens: default_hybrid_max_tokens(),
+            hybrid_min_tokens: default_hybrid_min_tokens(),
+            hybrid_tokens_decay_depth: default_hybrid_tokens_decay_depth(),
             hybrid_budget: default_hybrid_budget(),
             exploration_c: default_exploration_c(),
             max_goal_unchanged_steps: default_max_goal_unchanged(),
@@ -408,5 +443,86 @@ mod tests {
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.ebm_ramp_depth, 4);
         assert_eq!(cfg.ebm_min_depth, 2);
+    }
+
+    #[test]
+    fn test_hybrid_token_decay_defaults() {
+        let cfg = SearchConfig::default();
+        assert_eq!(cfg.hybrid_min_tokens, 256);
+        assert_eq!(cfg.hybrid_tokens_decay_depth, 8);
+        // depth 0 = max
+        assert_eq!(cfg.effective_hybrid_max_tokens(0), 1024);
+        // depth 4 = midpoint: 1024 - (768 * 0.5) = 640
+        assert_eq!(cfg.effective_hybrid_max_tokens(4), 640);
+        // depth 8 = floor
+        assert_eq!(cfg.effective_hybrid_max_tokens(8), 256);
+        // beyond decay depth = floor
+        assert_eq!(cfg.effective_hybrid_max_tokens(12), 256);
+    }
+
+    #[test]
+    fn test_hybrid_token_decay_disabled() {
+        let cfg = SearchConfig {
+            hybrid_tokens_decay_depth: 0,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_hybrid_max_tokens(0), 1024);
+        assert_eq!(cfg.effective_hybrid_max_tokens(5), 1024);
+        assert_eq!(cfg.effective_hybrid_max_tokens(100), 1024);
+    }
+
+    #[test]
+    fn test_hybrid_token_decay_custom() {
+        let cfg = SearchConfig {
+            hybrid_max_tokens: 512,
+            hybrid_min_tokens: 128,
+            hybrid_tokens_decay_depth: 4,
+            ..Default::default()
+        };
+        // range = 384, decay over 4 levels
+        assert_eq!(cfg.effective_hybrid_max_tokens(0), 512);
+        assert_eq!(cfg.effective_hybrid_max_tokens(1), 416); // 512 - 96
+        assert_eq!(cfg.effective_hybrid_max_tokens(2), 320); // 512 - 192
+        assert_eq!(cfg.effective_hybrid_max_tokens(4), 128); // floor
+        assert_eq!(cfg.effective_hybrid_max_tokens(10), 128); // clamped
+    }
+
+    #[test]
+    fn test_hybrid_token_decay_min_equals_max() {
+        let cfg = SearchConfig {
+            hybrid_max_tokens: 256,
+            hybrid_min_tokens: 256,
+            hybrid_tokens_decay_depth: 8,
+            ..Default::default()
+        };
+        assert_eq!(cfg.effective_hybrid_max_tokens(0), 256);
+        assert_eq!(cfg.effective_hybrid_max_tokens(4), 256);
+        assert_eq!(cfg.effective_hybrid_max_tokens(8), 256);
+    }
+
+    #[test]
+    fn test_hybrid_token_decay_toml() {
+        let toml_str = r#"
+            hybrid_max_tokens = 2048
+            hybrid_min_tokens = 512
+            hybrid_tokens_decay_depth = 10
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.hybrid_max_tokens, 2048);
+        assert_eq!(cfg.hybrid_min_tokens, 512);
+        assert_eq!(cfg.hybrid_tokens_decay_depth, 10);
+        assert_eq!(cfg.effective_hybrid_max_tokens(0), 2048);
+        assert_eq!(cfg.effective_hybrid_max_tokens(10), 512);
+    }
+
+    #[test]
+    fn test_hybrid_token_decay_toml_backward_compat() {
+        // Old TOML without new fields should parse with defaults
+        let toml_str = r#"
+            hybrid_max_tokens = 1024
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.hybrid_min_tokens, 256);
+        assert_eq!(cfg.hybrid_tokens_decay_depth, 8);
     }
 }

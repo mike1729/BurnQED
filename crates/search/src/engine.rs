@@ -437,7 +437,7 @@ impl SearchEngine {
 
             let gen_start = Instant::now();
             let raw_proofs = policy
-                .generate_whole_proofs(&leaf_state, n, self.config.hybrid_max_tokens)
+                .generate_whole_proofs(&leaf_state, n, self.config.effective_hybrid_max_tokens(arena[leaf_idx].depth))
                 .await?;
             let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
