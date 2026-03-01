@@ -795,7 +795,7 @@ impl SearchEngine {
                 });
             }
 
-            tracing::info!(
+            tracing::debug!(
                 round,
                 frontier_size = frontier.len(),
                 total_proofs,

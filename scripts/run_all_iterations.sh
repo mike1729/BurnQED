@@ -79,7 +79,7 @@ echo "================================================================"
 echo "  Phase F: Final Cross-Iteration Comparison"
 echo "================================================================"
 
-PROVER="cargo run --release -p prover-core --"
+PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 BASELINES_DIR="${EVAL_DIR}/baselines"
 
 # F1. Full cross-iteration comparison (including baseline if available)

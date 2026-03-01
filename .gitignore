@@ -28,5 +28,10 @@ vendor/Pantograph/.lake/
 # Python bytecode
 __pycache__/
 
+# Editor swap files
+*.swp
+*.swo
+*~
+
 # Windows artifact
 nul

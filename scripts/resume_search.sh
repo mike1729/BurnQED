@@ -23,7 +23,7 @@ SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 CONCURRENCY="${CONCURRENCY:-6}"
 NUM_WORKERS="${NUM_WORKERS:-6}"
 
-PROVER="cargo run --release -p prover-core --"
+PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
 echo "================================================================"
 echo "  Resume Search — Iteration ${ITER}"
