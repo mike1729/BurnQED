@@ -56,6 +56,14 @@ _QUALIFY_MAP: dict[str, str] = {
     # Metric (open Metric)
     "ball": "Metric.ball",
     "closedBall": "Metric.closedBall",
+    # Real analysis functions (open Real / open Complex — default to Real;
+    # the few Complex cases will get a type error instead of "Unknown identifier",
+    # which is no worse).  Note: bare `I` (Complex.I) is NOT included because
+    # PutnamBench also uses `I` as a variable name in several theorems.
+    "exp": "Real.exp",
+    "cos": "Real.cos",
+    "sin": "Real.sin",
+    "log": "Real.log",
 }
 
 # Build a single regex: match bare identifiers not preceded by a dot or word char.
