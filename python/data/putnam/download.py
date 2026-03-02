@@ -33,6 +33,41 @@ logger = logging.getLogger(__name__)
 
 PUTNAM_REPO = "https://github.com/trishullab/PutnamBench.git"
 
+# PutnamBench .lean files use `open Set Filter MeasureTheory Metric ...` which
+# allows bare identifiers like `Icc` instead of `Set.Icc`.  Pantograph's REPL
+# has no `open` command, so goal.start(expr) fails on unqualified names.
+# This table maps bare → fully-qualified for identifiers we've confirmed appear.
+_QUALIFY_MAP: dict[str, str] = {
+    # Set intervals (open Set)
+    "Icc": "Set.Icc",
+    "Ico": "Set.Ico",
+    "Ioo": "Set.Ioo",
+    "Ioc": "Set.Ioc",
+    "Ici": "Set.Ici",
+    "Ioi": "Set.Ioi",
+    "Iic": "Set.Iic",
+    "Iio": "Set.Iio",
+    # Filter (open Filter)
+    "Tendsto": "Filter.Tendsto",
+    "atTop": "Filter.atTop",
+    "atBot": "Filter.atBot",
+    # MeasureTheory (open MeasureTheory)
+    "volume": "MeasureTheory.volume",
+    # Metric (open Metric)
+    "ball": "Metric.ball",
+    "closedBall": "Metric.closedBall",
+}
+
+# Build a single regex: match bare identifiers not preceded by a dot or word char.
+_QUALIFY_PATTERN = re.compile(
+    r"(?<!\w)(?<!\.)(" + "|".join(re.escape(k) for k in _QUALIFY_MAP) + r")(?!\w)"
+)
+
+
+def qualify_statement(stmt: str) -> str:
+    """Replace bare Mathlib identifiers with fully-qualified names."""
+    return _QUALIFY_PATTERN.sub(lambda m: _QUALIFY_MAP[m.group(1)], stmt)
+
 
 def clone_repo(url: str, dest: Path) -> Path:
     """Shallow-clone a git repository."""
@@ -92,6 +127,7 @@ def parse_putnam_file(lean_file: Path) -> tuple[list[dict], list[str]]:
         signature = match.group(2).strip()
 
         statement = signature_to_expression(signature)
+        statement = qualify_statement(statement)
 
         if statement:
             theorems.append({
