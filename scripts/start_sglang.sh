@@ -23,7 +23,7 @@ TP="${TP:-1}"
 
 # Memory fraction: 0.90 is safe when the GPU is dedicated to inference.
 # Lower to 0.65 if coexisting with the encode server on the same GPU.
-MEM_FRACTION="${MEM_FRACTION:-0.90}"
+MEM_FRACTION="${MEM_FRACTION:-0.80}"
 
 # Max concurrent running requests (default 256). Higher values increase
 # throughput but use more KV-cache memory.

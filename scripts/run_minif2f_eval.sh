@@ -28,6 +28,7 @@
 #   MAX_THEOREMS    Cap theorems per version (default: unlimited)
 #   CONFIG          Search config TOML (default: configs/search_minif2f.toml)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
+#   RESUME          Set to 1 to auto-resume from partial trajectories (default: 1)
 #   DRY_RUN         Set to 1 to print commands without executing (default: 0)
 
 set -euo pipefail
@@ -48,6 +49,7 @@ NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
 CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_minif2f.toml}"
 NO_EBM="${NO_EBM:-0}"
+RESUME="${RESUME:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
@@ -144,6 +146,9 @@ echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Max theorems: ${MAX_THEOREMS:-all}"
 echo "  Output:       ${OUT_DIR}/"
+if [ "$RESUME" -eq 1 ]; then
+    echo "  Resume:       ON (will skip already-searched theorems)"
+fi
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "  Mode:         DRY RUN (commands printed, not executed)"
 fi
@@ -164,9 +169,9 @@ FAILED_VERSIONS=""
 for VERSION in $VERSIONS; do
     JSON_FILE="${BENCH_DIR}/${BENCH_JSON[$VERSION]}"
     IMPORT_MODULE="${BENCH_IMPORT[$VERSION]}"
-    TRAJECTORY_FILE="${OUT_DIR}/${VERSION}.parquet"
-    OUTPUT_FILE="${OUT_DIR}/${VERSION}.json"
-    LOG_FILE="${LOG_DIR}/minif2f_eval_iter${ITER}_${VERSION}.log"
+    TRAJECTORY_FILE="${OUT_DIR}/4090/${VERSION}.parquet"
+    OUTPUT_FILE="${OUT_DIR}/4090/${VERSION}.json"
+    LOG_FILE="${LOG_DIR}/4090/minif2f_eval_iter${ITER}_${VERSION}.log"
     RESULT_FILES[$VERSION]="$OUTPUT_FILE"
 
     echo "── ${VERSION} ──────────────────────────────────────────────────"
@@ -180,6 +185,20 @@ for VERSION in $VERSIONS; do
         MAX_FLAG="--max-theorems $MAX_THEOREMS"
     fi
 
+    # Auto-resume from partial trajectory if it exists.
+    # The prover only merges when --resume-from differs from --output,
+    # so we copy the old file to a .resume temp path.
+    RESUME_FLAG=""
+    RESUME_TMP="${TRAJECTORY_FILE%.parquet}.resume.parquet"
+    if [ "$RESUME" -eq 1 ] && [ -f "$TRAJECTORY_FILE" ] && [ -s "$TRAJECTORY_FILE" ]; then
+        DONE_COUNT=$(python3 -c "import pyarrow.parquet as pq; t = pq.read_table('$TRAJECTORY_FILE', columns=['theorem_name']); print(len(set(t.column('theorem_name').to_pylist())))" 2>/dev/null || echo "0")
+        if [ "$DONE_COUNT" -gt 0 ]; then
+            cp "$TRAJECTORY_FILE" "$RESUME_TMP"
+            echo "  Resuming from partial trajectory: ${DONE_COUNT} theorems already done"
+            RESUME_FLAG="--resume-from $RESUME_TMP"
+        fi
+    fi
+
     CMD="$PROVER search \
         --config $CONFIG \
         --server-url $SGLANG_URL \
@@ -190,11 +209,13 @@ for VERSION in $VERSIONS; do
         --output $TRAJECTORY_FILE \
         --num-workers $NUM_WORKERS \
         --concurrency $CONCURRENCY \
+        $RESUME_FLAG \
         $MAX_FLAG \
         --imports Mathlib,$IMPORT_MODULE"
 
     if [ "$DRY_RUN" -eq 1 ]; then
         echo "  [DRY RUN] $CMD"
+        rm -f "$RESUME_TMP"
         echo ""
         continue
     fi
@@ -207,9 +228,13 @@ for VERSION in $VERSIONS; do
     else
         echo "  ✗ ${VERSION} FAILED (see ${LOG_FILE})"
         FAILED_VERSIONS="${FAILED_VERSIONS:+$FAILED_VERSIONS }$VERSION"
+        rm -f "$RESUME_TMP"
         echo ""
         continue
     fi
+
+    # Clean up resume temp file
+    rm -f "$RESUME_TMP"
 
     # Post-process: parquet → IterationResult JSON for backward compat
     echo "  Converting trajectory to summary JSON..."

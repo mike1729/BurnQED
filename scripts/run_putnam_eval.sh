@@ -24,6 +24,7 @@
 #   MAX_THEOREMS    Cap theorems (default: unlimited)
 #   CONFIG          Search config TOML (default: configs/search_putnam.toml)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
+#   RESUME          Set to 1 to auto-resume from partial trajectories (default: 1)
 #   DRY_RUN         Set to 1 to print commands without executing (default: 0)
 
 set -euo pipefail
@@ -44,6 +45,7 @@ NUM_WORKERS="${NUM_WORKERS:-8}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
 CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_putnam.toml}"
 NO_EBM="${NO_EBM:-0}"
+RESUME="${RESUME:-1}"
 DRY_RUN="${DRY_RUN:-0}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
@@ -109,6 +111,9 @@ echo "  Concurrency:  ${CONCURRENCY}"
 echo "  Workers:      ${NUM_WORKERS}"
 echo "  Max theorems: ${MAX_THEOREMS:-all}"
 echo "  Output:       ${OUT_DIR}/"
+if [ "$RESUME" -eq 1 ]; then
+    echo "  Resume:       ON (will skip already-searched theorems)"
+fi
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "  Mode:         DRY RUN (commands printed, not executed)"
 fi
@@ -128,6 +133,20 @@ if [ -n "$MAX_THEOREMS" ]; then
     MAX_FLAG="--max-theorems $MAX_THEOREMS"
 fi
 
+# Auto-resume from partial trajectory if it exists.
+# The prover only merges when --resume-from differs from --output,
+# so we copy the old file to a .resume temp path.
+RESUME_FLAG=""
+RESUME_TMP="${TRAJECTORY_FILE%.parquet}.resume.parquet"
+if [ "$RESUME" -eq 1 ] && [ -f "$TRAJECTORY_FILE" ] && [ -s "$TRAJECTORY_FILE" ]; then
+    DONE_COUNT=$(python3 -c "import pyarrow.parquet as pq; t = pq.read_table('$TRAJECTORY_FILE', columns=['theorem_name']); print(len(set(t.column('theorem_name').to_pylist())))" 2>/dev/null || echo "0")
+    if [ "$DONE_COUNT" -gt 0 ]; then
+        cp "$TRAJECTORY_FILE" "$RESUME_TMP"
+        echo "  Resuming from partial trajectory: ${DONE_COUNT} theorems already done"
+        RESUME_FLAG="--resume-from $RESUME_TMP"
+    fi
+fi
+
 CMD="$PROVER search \
     --config $CONFIG \
     --server-url $SGLANG_URL \
@@ -138,11 +157,13 @@ CMD="$PROVER search \
     --output $TRAJECTORY_FILE \
     --num-workers $NUM_WORKERS \
     --concurrency $CONCURRENCY \
+    $RESUME_FLAG \
     $MAX_FLAG \
     --imports Mathlib,$IMPORT_MODULE"
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "[DRY RUN] $CMD"
+    rm -f "$RESUME_TMP"
     echo ""
     echo "Dry run complete. No commands were executed."
     exit 0
@@ -155,8 +176,12 @@ if run_logged "$LOG_FILE" $CMD; then
     echo "  Search complete"
 else
     echo "  FAILED (see ${LOG_FILE})"
+    rm -f "$RESUME_TMP"
     exit 1
 fi
+
+# Clean up resume temp file
+rm -f "$RESUME_TMP"
 
 # ── Post-process: parquet → JSON ─────────────────────────────────────────
 
