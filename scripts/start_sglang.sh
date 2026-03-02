@@ -31,7 +31,7 @@ MAX_RUNNING="${MAX_RUNNING:-256}"
 
 # Quantization: fp8 gives ~25% faster decode with no measurable quality loss
 # at our sampling temperatures. Set QUANTIZATION="" to disable.
-QUANTIZATION="${QUANTIZATION:-fp8}"
+QUANTIZATION="${QUANTIZATION-fp8}"
 
 # Pin to a specific GPU (e.g., CUDA_DEVICE=0). Unset = use all GPUs.
 CUDA_DEVICE="${CUDA_DEVICE:-}"
