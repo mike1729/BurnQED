@@ -986,10 +986,11 @@ impl search::engine::PolicyProvider for SlowMockPolicy {
         proof_state: &str,
         n: usize,
         max_tokens: usize,
+        temperature: f64,
     ) -> Result<Vec<policy::GeneratedTactic>, search::engine::SearchError> {
         let _lock = self.llm_mutex.lock().await;
         tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
-        self.inner.generate_whole_proofs(proof_state, n, max_tokens).await
+        self.inner.generate_whole_proofs(proof_state, n, max_tokens, temperature).await
     }
 }
 

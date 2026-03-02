@@ -532,11 +532,13 @@ impl SglangClient {
     /// - Uses the caller-specified `max_tokens` instead of `max_tactic_tokens`
     /// - Returns raw text without `extract_first_tactic` processing
     /// - No deduplication (caller handles via trie)
+    /// - Uses the caller-specified `temperature` instead of `self.config.temperature`
     pub async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
         max_tokens: usize,
+        temperature: f64,
     ) -> anyhow::Result<Vec<GeneratedTactic>> {
         let prompt = self.format_prompt(proof_state);
         let url = self.base_url.join("/generate")?;
@@ -555,7 +557,7 @@ impl SglangClient {
                     text: flat_prompts,
                     sampling_params: SamplingParams {
                         max_new_tokens: max_tokens,
-                        temperature: Some(self.config.temperature),
+                        temperature: Some(temperature),
                         top_p: Some(self.config.top_p),
                         n: None,
                         stop: Some(vec!["```".to_string()]),

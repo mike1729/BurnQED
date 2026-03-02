@@ -11,6 +11,7 @@ max_tactic_tokens = 48        # Maximum tokens per generated tactic
 batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
 ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
 ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
+max_consecutive_have = 4      # Prune have chains ≥ 4
 # Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
 probe_tactics = []
 # Hybrid whole-proof search

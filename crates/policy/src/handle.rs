@@ -64,13 +64,16 @@ impl InferenceHandle {
     }
 
     /// Generate N whole-proof completions (async).
+    ///
+    /// `temperature` overrides the client's default sampling temperature.
     pub async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
         max_tokens: usize,
+        temperature: f64,
     ) -> anyhow::Result<Vec<GeneratedTactic>> {
-        self.0.generate_whole_proofs(proof_state, n, max_tokens).await
+        self.0.generate_whole_proofs(proof_state, n, max_tokens, temperature).await
     }
 
     /// Encode a proof state to an embedding (async).

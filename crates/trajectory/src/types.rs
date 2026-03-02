@@ -100,6 +100,10 @@ pub struct SearchStats {
     pub sibling_states_mined: u32,
     /// Number of tactics blocked by goal-unchanged counter (context stuffing).
     pub context_stuffing_blocked: u32,
+    /// Number of `have` tactics pruned for increasing goal count (undischarged subgoals).
+    pub have_goal_increase_pruned: u32,
+    /// Number of tactics pruned for exceeding consecutive-have chain limit.
+    pub have_chain_pruned: u32,
 
     // --- Timing breakdown (added for profiling) ---
 

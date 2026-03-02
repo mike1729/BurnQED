@@ -40,6 +40,26 @@ fn goal_targets(goals: &[Goal]) -> String {
         .join("\n\n")
 }
 
+/// Count consecutive `have` ancestors starting from `idx`.
+///
+/// Walks up the parent chain, counting how many consecutive nodes were
+/// reached via a `have` tactic. Stops at root or when a non-`have` tactic is found.
+fn count_consecutive_have_ancestors(arena: &[SearchNode], idx: usize) -> u32 {
+    let mut count = 0;
+    let mut current = idx;
+    loop {
+        if !arena[current].tactic_applied.starts_with("have ") {
+            break;
+        }
+        count += 1;
+        match arena[current].parent {
+            Some(p) => current = p,
+            None => break,
+        }
+    }
+    count
+}
+
 /// Count consecutive goal-unchanged ancestors starting from `idx`.
 ///
 /// Walks up the parent chain, counting how many consecutive nodes have
@@ -159,11 +179,15 @@ pub trait PolicyProvider: Send + Sync {
     /// Returns the full raw text of each completion for trie-based replay.
     /// Each completion may contain multiple tactics that will be split by
     /// `extract_all_tactics_structured` during trie replay.
+    ///
+    /// `temperature` overrides the default sampling temperature for this call,
+    /// enabling depth-dependent temperature ramp.
     async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
         max_tokens: usize,
+        temperature: f64,
     ) -> Result<Vec<GeneratedTactic>, SearchError>;
 }
 
@@ -429,11 +453,13 @@ impl SearchEngine {
             let leaf_state = arena[leaf_idx].goals_as_text();
 
             // Generate whole proofs from this leaf (count decays with depth)
-            let n = self.config.effective_hybrid_num_proofs(arena[leaf_idx].depth);
+            let leaf_depth = arena[leaf_idx].depth;
+            let n = self.config.effective_hybrid_num_proofs(leaf_depth);
+            let temp = self.config.effective_temperature(leaf_depth);
 
             let gen_start = Instant::now();
             let raw_proofs = policy
-                .generate_whole_proofs(&leaf_state, n, self.config.effective_hybrid_max_tokens(arena[leaf_idx].depth))
+                .generate_whole_proofs(&leaf_state, n, self.config.effective_hybrid_max_tokens(leaf_depth), temp)
                 .await?;
             let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
@@ -598,6 +624,45 @@ impl SearchEngine {
                                         unchanged_steps = unchanged,
                                         tactic = tactic.as_str(),
                                         "Goal-unchanged limit reached, pruning branch"
+                                    );
+                                    break;
+                                }
+                            }
+
+                            // Prune have-chains with undischarged subgoals: if `have`
+                            // increased the goal count, the model created a subgoal it
+                            // can't close. These always +1 goal and grow state ~2x.
+                            if tactic.starts_with("have ")
+                                && arena[child_idx].goals.len()
+                                    > arena[current_idx].goals.len()
+                            {
+                                stats.have_goal_increase_pruned += 1;
+                                tracing::debug!(
+                                    parent = current_idx,
+                                    child = child_idx,
+                                    tactic = tactic.as_str(),
+                                    parent_goals = arena[current_idx].goals.len(),
+                                    child_goals = arena[child_idx].goals.len(),
+                                    "Have increased goal count, pruning branch"
+                                );
+                                break;
+                            }
+
+                            // Consecutive-have-chain cap: prune branches that chain
+                            // too many `have` tactics without making real progress.
+                            if self.config.max_consecutive_have > 0
+                                && tactic.starts_with("have ")
+                            {
+                                let chain =
+                                    count_consecutive_have_ancestors(&arena, child_idx);
+                                if chain >= self.config.max_consecutive_have {
+                                    stats.have_chain_pruned += 1;
+                                    tracing::debug!(
+                                        parent = current_idx,
+                                        child = child_idx,
+                                        chain_length = chain,
+                                        tactic = tactic.as_str(),
+                                        "Consecutive-have chain limit reached, pruning branch"
                                     );
                                     break;
                                 }
@@ -849,6 +914,8 @@ impl SearchEngine {
             trie_hits = trie.cache_hits,
             arena_size = arena.len(),
             context_stuffing = stats.context_stuffing_blocked,
+            have_goal_increase = stats.have_goal_increase_pruned,
+            have_chain = stats.have_chain_pruned,
             loops = stats.loops_detected,
             time_ms = wall_time_ms,
             "Hybrid search exhausted without proof"
@@ -1608,5 +1675,80 @@ mod tests {
         assert!(contains_sorry("intro h\nsorry"));
         assert!(contains_sorry("have h := by\n  sorry"));
         assert!(contains_sorry("simp <;> admit"));
+    }
+
+    #[test]
+    fn test_count_consecutive_have_ancestors_no_have() {
+        let arena = vec![SearchNode {
+            state_id: 0,
+            state_pp: "⊢ P".to_string(),
+            goals: vec![Goal::parse(0, "⊢ P")],
+            parent: None,
+            tactic_applied: "intro n".to_string(),
+            depth: 0,
+            llm_log_prob: 0.0,
+            ebm_score: 0.0,
+            is_terminal: false,
+        }];
+        assert_eq!(count_consecutive_have_ancestors(&arena, 0), 0);
+    }
+
+    #[test]
+    fn test_count_consecutive_have_ancestors_chain() {
+        let arena = vec![
+            SearchNode {
+                state_id: 0,
+                state_pp: "⊢ P".to_string(),
+                goals: vec![Goal::parse(0, "⊢ P")],
+                parent: None,
+                tactic_applied: "intro n".to_string(),
+                depth: 0,
+                llm_log_prob: 0.0,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+            SearchNode {
+                state_id: 1,
+                state_pp: "h₁ : X\n⊢ P".to_string(),
+                goals: vec![Goal::parse(0, "h₁ : X\n⊢ P")],
+                parent: Some(0),
+                tactic_applied: "have h₁ : X := by linarith".to_string(),
+                depth: 1,
+                llm_log_prob: -0.5,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+            SearchNode {
+                state_id: 2,
+                state_pp: "h₁ : X\nh₂ : Y\n⊢ P".to_string(),
+                goals: vec![Goal::parse(0, "h₁ : X\nh₂ : Y\n⊢ P")],
+                parent: Some(1),
+                tactic_applied: "have h₂ : Y := by omega".to_string(),
+                depth: 2,
+                llm_log_prob: -0.5,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+            SearchNode {
+                state_id: 3,
+                state_pp: "h₁ : X\nh₂ : Y\n⊢ Q".to_string(),
+                goals: vec![Goal::parse(0, "h₁ : X\nh₂ : Y\n⊢ Q")],
+                parent: Some(2),
+                tactic_applied: "apply f".to_string(),
+                depth: 3,
+                llm_log_prob: -0.3,
+                ebm_score: 0.0,
+                is_terminal: false,
+            },
+        ];
+
+        // Node 0: "intro n" → not have → 0
+        assert_eq!(count_consecutive_have_ancestors(&arena, 0), 0);
+        // Node 1: "have h₁ ..." → 1 have, parent is "intro" → 1
+        assert_eq!(count_consecutive_have_ancestors(&arena, 1), 1);
+        // Node 2: "have h₂ ..." → 1 + parent "have h₁" → 2
+        assert_eq!(count_consecutive_have_ancestors(&arena, 2), 2);
+        // Node 3: "apply f" → not have → 0
+        assert_eq!(count_consecutive_have_ancestors(&arena, 3), 0);
     }
 }

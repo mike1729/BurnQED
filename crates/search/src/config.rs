@@ -86,6 +86,12 @@ pub struct SearchConfig {
     #[serde(default = "default_max_goal_unchanged")]
     pub max_goal_unchanged_steps: u32,
 
+    /// Maximum consecutive `have` tactics in a single branch.
+    /// Prunes have-chains that build up unused lemmas without progress.
+    /// 0 = disabled. Default: 4.
+    #[serde(default = "default_max_consecutive_have")]
+    pub max_consecutive_have: u32,
+
     /// Penalty per extra open goal beyond the first in frontier scoring.
     /// Deprioritizes nodes with many subgoals (from `have h : T` decomposition)
     /// in favor of nodes closer to a complete proof.
@@ -99,6 +105,12 @@ pub struct SearchConfig {
     /// CLI `--temperature` overrides this.
     #[serde(default = "default_temperature")]
     pub temperature: f64,
+
+    /// Maximum sampling temperature (ceiling for deep nodes).
+    /// Temperature ramps from `temperature` (depth 0) to this value over
+    /// `hybrid_tokens_decay_depth` levels. 0.0 = disabled (flat temperature).
+    #[serde(default)]
+    pub hybrid_max_temperature: f64,
 
     /// Top-p (nucleus) sampling parameter. Default: 0.95.
     #[serde(default = "default_top_p")]
@@ -165,6 +177,9 @@ fn default_max_goal_unchanged() -> u32 {
 }
 fn default_goal_count_penalty() -> f64 {
     0.3
+}
+fn default_max_consecutive_have() -> u32 {
+    4
 }
 fn default_temperature() -> f64 {
     0.8
@@ -233,6 +248,21 @@ impl SearchConfig {
         tokens.max(self.hybrid_min_tokens)
     }
 
+    /// Compute effective sampling temperature at a given depth.
+    ///
+    /// Ramps linearly from `temperature` (depth 0) to `hybrid_max_temperature`
+    /// (at `hybrid_tokens_decay_depth`), then stays at the ceiling.
+    /// If `hybrid_max_temperature` is 0.0 or `hybrid_tokens_decay_depth` is 0,
+    /// returns `temperature` at all depths (disabled).
+    pub fn effective_temperature(&self, depth: u32) -> f64 {
+        if self.hybrid_max_temperature <= 0.0 || self.hybrid_tokens_decay_depth == 0 {
+            return self.temperature;
+        }
+        let fraction = (depth as f64 / self.hybrid_tokens_decay_depth as f64).min(1.0);
+        let range = self.hybrid_max_temperature - self.temperature;
+        (self.temperature + range * fraction).min(self.hybrid_max_temperature)
+    }
+
     /// Compute effective number of whole proofs to generate at a given depth.
     ///
     /// Decays linearly from `hybrid_num_proofs` (depth 0) to `hybrid_min_proofs`
@@ -270,8 +300,10 @@ impl Default for SearchConfig {
             hybrid_budget: default_hybrid_budget(),
             exploration_c: default_exploration_c(),
             max_goal_unchanged_steps: default_max_goal_unchanged(),
+            max_consecutive_have: default_max_consecutive_have(),
             goal_count_penalty: default_goal_count_penalty(),
             temperature: default_temperature(),
+            hybrid_max_temperature: 0.0,
             top_p: default_top_p(),
             max_tactic_tokens: default_max_tactic_tokens(),
         }
@@ -625,5 +657,90 @@ mod tests {
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.hybrid_num_proofs, 32);
         assert_eq!(cfg.hybrid_min_proofs, 4); // default
+    }
+
+    // --- effective_temperature tests ---
+
+    #[test]
+    fn test_temperature_ramp_disabled_by_default() {
+        let cfg = SearchConfig::default();
+        assert!((cfg.effective_temperature(0) - cfg.temperature).abs() < 1e-9);
+        assert!((cfg.effective_temperature(5) - cfg.temperature).abs() < 1e-9);
+        assert!((cfg.effective_temperature(100) - cfg.temperature).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_temperature_ramp_linear() {
+        let cfg = SearchConfig {
+            temperature: 1.0,
+            hybrid_max_temperature: 2.0,
+            hybrid_tokens_decay_depth: 8,
+            ..Default::default()
+        };
+        assert!((cfg.effective_temperature(0) - 1.0).abs() < 1e-9);
+        assert!((cfg.effective_temperature(4) - 1.5).abs() < 1e-9); // midpoint
+        assert!((cfg.effective_temperature(8) - 2.0).abs() < 1e-9); // ceiling
+        assert!((cfg.effective_temperature(16) - 2.0).abs() < 1e-9); // clamped
+    }
+
+    #[test]
+    fn test_temperature_ramp_disabled_by_zero_max() {
+        let cfg = SearchConfig {
+            temperature: 1.0,
+            hybrid_max_temperature: 0.0,
+            hybrid_tokens_decay_depth: 8,
+            ..Default::default()
+        };
+        assert!((cfg.effective_temperature(4) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_temperature_ramp_disabled_by_zero_decay_depth() {
+        let cfg = SearchConfig {
+            temperature: 1.0,
+            hybrid_max_temperature: 2.0,
+            hybrid_tokens_decay_depth: 0,
+            ..Default::default()
+        };
+        assert!((cfg.effective_temperature(4) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_temperature_ramp_toml() {
+        let toml_str = r#"
+            temperature = 1.4
+            hybrid_max_temperature = 1.8
+            hybrid_tokens_decay_depth = 8
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert!((cfg.effective_temperature(0) - 1.4).abs() < 1e-9);
+        assert!((cfg.effective_temperature(4) - 1.6).abs() < 1e-9);
+        assert!((cfg.effective_temperature(8) - 1.8).abs() < 1e-9);
+    }
+
+    // --- max_consecutive_have tests ---
+
+    #[test]
+    fn test_max_consecutive_have_default() {
+        let cfg = SearchConfig::default();
+        assert_eq!(cfg.max_consecutive_have, 4);
+    }
+
+    #[test]
+    fn test_max_consecutive_have_toml() {
+        let toml_str = r#"
+            max_consecutive_have = 6
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.max_consecutive_have, 6);
+    }
+
+    #[test]
+    fn test_max_consecutive_have_toml_backward_compat() {
+        let toml_str = r#"
+            temperature = 0.8
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.max_consecutive_have, 4); // default
     }
 }
