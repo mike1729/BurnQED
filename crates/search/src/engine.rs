@@ -452,8 +452,11 @@ impl SearchEngine {
             // Track first proof found during this round (continue replaying for trie coverage)
             let mut first_proof_terminal: Option<usize> = None;
 
-            // Replay each proof through the trie
+            // Replay each proof through the trie (stop early once a proof is found)
             for proof in &raw_proofs {
+                if first_proof_terminal.is_some() {
+                    break;
+                }
                 let tactics = extract_all_tactics_structured(&proof.text);
                 if tactics.is_empty() {
                     tracing::debug!(
@@ -680,11 +683,15 @@ impl SearchEngine {
 
             // Batch-score ALL new nodes from this expansion (probes + replay),
             // then push them to the persistent frontier immediately.
+            // Skip scoring/frontier work when we already have a proof — we'll
+            // return immediately after this block anyway.
             let new_nodes: Vec<usize> = (arena_before..arena.len())
                 .filter(|&i| !arena[i].is_terminal)
                 .collect();
 
-            if let Some(scorer) = scorer {
+            if first_proof_terminal.is_some() {
+                // Proof found — skip EBM scoring and frontier update, jump to return.
+            } else if let Some(scorer) = scorer {
                 let pending: Vec<(usize, String)> = new_nodes
                     .iter()
                     .filter(|&&i| !self.config.should_skip_ebm(arena[i].depth))
@@ -717,59 +724,62 @@ impl SearchEngine {
                 }
             }
 
-            // Re-insert existing nodes whose trie stats changed during this round.
-            // This ensures frontier scores reflect updated Q-values from replay.
-            let updated_existing = trie.drain_updated_indices_below(arena_before);
-            for idx in updated_existing {
-                if expanded.contains(&idx) || arena[idx].is_terminal {
-                    continue;
+            // If a proof was found, skip frontier work and return immediately.
+            // (EBM scoring was already skipped above.)
+            if first_proof_terminal.is_none() {
+                // Re-insert existing nodes whose trie stats changed during this round.
+                // This ensures frontier scores reflect updated Q-values from replay.
+                let updated_existing = trie.drain_updated_indices_below(arena_before);
+                for idx in updated_existing {
+                    if expanded.contains(&idx) || arena[idx].is_terminal {
+                        continue;
+                    }
+                    let node = &arena[idx];
+                    if node.depth < self.config.max_depth {
+                        let ebm = if scorer.is_some() && !self.config.should_skip_ebm(node.depth) {
+                            Some(node.ebm_score)
+                        } else {
+                            None
+                        };
+                        let raw_score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
+                        let goal_penalty = self.config.goal_count_penalty * (node.goals.len() as f64 - 1.0).max(0.0);
+                        frontier.push(ScoredNode {
+                            node_index: idx,
+                            score: OrderedFloat(raw_score - goal_penalty),
+                        });
+                    }
                 }
-                let node = &arena[idx];
-                if node.depth < self.config.max_depth {
-                    let ebm = if scorer.is_some() && !self.config.should_skip_ebm(node.depth) {
-                        Some(node.ebm_score)
-                    } else {
-                        None
-                    };
-                    let raw_score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
-                    let goal_penalty = self.config.goal_count_penalty * (node.goals.len() as f64 - 1.0).max(0.0);
-                    frontier.push(ScoredNode {
-                        node_index: idx,
-                        score: OrderedFloat(raw_score - goal_penalty),
-                    });
+
+                // Push scored new nodes to the persistent frontier
+                let mut new_frontier_entries = Vec::new();
+                for &idx in &new_nodes {
+                    let node = &arena[idx];
+                    if node.depth < self.config.max_depth {
+                        let ebm = if scorer.is_some() && !self.config.should_skip_ebm(node.depth) {
+                            Some(node.ebm_score)
+                        } else {
+                            None
+                        };
+                        let raw_score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
+                        let goal_penalty = self.config.goal_count_penalty * (node.goals.len() as f64 - 1.0).max(0.0);
+                        let score = raw_score - goal_penalty;
+                        frontier.push(ScoredNode {
+                            node_index: idx,
+                            score: OrderedFloat(score),
+                        });
+                        new_frontier_entries.push((idx, node.depth, score));
+                    }
+                }
+                if !new_frontier_entries.is_empty() {
+                    tracing::debug!(
+                        round,
+                        new_nodes = new_frontier_entries.len(),
+                        scores = ?new_frontier_entries.iter().map(|(i, d, s)| format!("{}(d{}={:.3})", i, d, s)).collect::<Vec<_>>(),
+                        "Pushed new nodes to frontier"
+                    );
                 }
             }
 
-            // Push scored new nodes to the persistent frontier
-            let mut new_frontier_entries = Vec::new();
-            for &idx in &new_nodes {
-                let node = &arena[idx];
-                if node.depth < self.config.max_depth {
-                    let ebm = if scorer.is_some() && !self.config.should_skip_ebm(node.depth) {
-                        Some(node.ebm_score)
-                    } else {
-                        None
-                    };
-                    let raw_score = trie.frontier_score(idx, ebm, node.llm_log_prob, node.parent, self.config.alpha, self.config.exploration_c);
-                    let goal_penalty = self.config.goal_count_penalty * (node.goals.len() as f64 - 1.0).max(0.0);
-                    let score = raw_score - goal_penalty;
-                    frontier.push(ScoredNode {
-                        node_index: idx,
-                        score: OrderedFloat(score),
-                    });
-                    new_frontier_entries.push((idx, node.depth, score));
-                }
-            }
-            if !new_frontier_entries.is_empty() {
-                tracing::debug!(
-                    round,
-                    new_nodes = new_frontier_entries.len(),
-                    scores = ?new_frontier_entries.iter().map(|(i, d, s)| format!("{}(d{}={:.3})", i, d, s)).collect::<Vec<_>>(),
-                    "Pushed new nodes to frontier"
-                );
-            }
-
-            // If a proof was found during replay, return after scoring/frontier update
             if let Some(terminal_idx) = first_proof_terminal {
                 tracing::debug!(
                     theorem = theorem_name,

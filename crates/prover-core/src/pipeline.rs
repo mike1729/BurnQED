@@ -897,7 +897,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
     let mut collect_and_save = |outcome: SearchOutcome| {
         collect_search(outcome, &mut agg, &mut writer, &pb, total);
         let is_interrupted = interrupted.load(Ordering::Relaxed);
-        const AUTOSAVE_INTERVAL: u32 = 50;
+        const AUTOSAVE_INTERVAL: u32 = 10;
         let should_flush = is_interrupted
             || (agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0);
         if should_flush {
@@ -3115,7 +3115,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                         &mut writer,
                         &pb,
                     );
-                    if processed_count % 50 == 0 {
+                    if processed_count % 10 == 0 {
                         writer.flush_partial()?;
                         tracing::info!(processed = processed_count, "Auto-saved checkpoint");
                     }
@@ -3202,7 +3202,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
                     &mut writer,
                     &pb,
                 );
-                if processed_count % 50 == 0 && processed_count > 0 {
+                if processed_count % 10 == 0 && processed_count > 0 {
                     writer.flush_partial()?;
                     tracing::info!(processed = processed_count, "Auto-saved checkpoint");
                 }

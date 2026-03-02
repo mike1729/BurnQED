@@ -61,7 +61,7 @@ enum Command {
         #[arg(long)]
         batch_encode_size: Option<usize>,
         /// Number of theorems to search in parallel.
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = 3)]
         concurrency: usize,
         /// Maximum number of theorems to search (truncates the index).
         #[arg(long)]
@@ -121,7 +121,7 @@ enum Command {
         #[arg(long)]
         num_workers: Option<usize>,
         /// Number of theorems to search in parallel.
-        #[arg(long, default_value_t = 8)]
+        #[arg(long, default_value_t = 3)]
         concurrency: usize,
         /// Maximum number of theorems to evaluate (truncates the index).
         #[arg(long)]

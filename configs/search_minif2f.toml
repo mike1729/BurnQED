@@ -23,7 +23,7 @@ hybrid_tokens_decay_depth = 8
 hybrid_budget = 512
 
 [lean_pool]
-num_workers = 8               # Matched to concurrency default
+num_workers = 4               # Matched to concurrency default
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
 tactic_timeout_secs = 540

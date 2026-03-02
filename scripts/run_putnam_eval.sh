@@ -19,8 +19,8 @@
 #   TAG             Output subdirectory tag (default: "putnam_eval")
 #   SGLANG_URL      SGLang inference server (default: http://localhost:30000)
 #   ENCODE_URL      Encode server for EBM (default: http://localhost:30001)
-#   CONCURRENCY     Parallel theorem searches (default: 4)
-#   NUM_WORKERS     Lean REPL pool size (default: 8)
+#   CONCURRENCY     Parallel theorem searches (default: 3)
+#   NUM_WORKERS     Lean REPL pool size (default: 4)
 #   MAX_THEOREMS    Cap theorems (default: unlimited)
 #   CONFIG          Search config TOML (default: configs/search_putnam.toml)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
@@ -40,8 +40,8 @@ ITER="${ITER:-0}"
 TAG="${TAG:-putnam_eval}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
-CONCURRENCY="${CONCURRENCY:-4}"
-NUM_WORKERS="${NUM_WORKERS:-8}"
+CONCURRENCY="${CONCURRENCY:-3}"
+NUM_WORKERS="${NUM_WORKERS:-4}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
 CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_putnam.toml}"
 NO_EBM="${NO_EBM:-0}"
