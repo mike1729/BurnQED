@@ -47,15 +47,20 @@ _QUALIFY_MAP: dict[str, str] = {
     "Ioi": "Set.Ioi",
     "Iic": "Set.Iic",
     "Iio": "Set.Iio",
+    # Set (open Set)
+    "univ": "Set.univ",
     # Filter (open Filter)
     "Tendsto": "Filter.Tendsto",
     "atTop": "Filter.atTop",
     "atBot": "Filter.atBot",
     # MeasureTheory (open MeasureTheory)
     "volume": "MeasureTheory.volume",
+    "IntegrableOn": "MeasureTheory.IntegrableOn",
     # Metric (open Metric)
     "ball": "Metric.ball",
     "closedBall": "Metric.closedBall",
+    # Complex (can't open Complex globally — clashes with Real)
+    "cexp": "Complex.exp",
     # Real analysis functions (open Real / open Complex — default to Real;
     # the few Complex cases will get a type error instead of "Unknown identifier",
     # which is no worse).  Note: bare `I` (Complex.I) is NOT included because
@@ -64,6 +69,11 @@ _QUALIFY_MAP: dict[str, str] = {
     "cos": "Real.cos",
     "sin": "Real.sin",
     "log": "Real.log",
+    "sqrt": "Real.sqrt",
+    # Function (open Function)
+    "Injective": "Function.Injective",
+    # Polynomial (opened in .lean but not in goal.start)
+    "coeff": "Polynomial.coeff",
 }
 
 # Build a single regex: match bare identifiers not preceded by a dot or word char.
@@ -74,7 +84,19 @@ _QUALIFY_PATTERN = re.compile(
 
 def qualify_statement(stmt: str) -> str:
     """Replace bare Mathlib identifiers with fully-qualified names."""
-    return _QUALIFY_PATTERN.sub(lambda m: _QUALIFY_MAP[m.group(1)], stmt)
+    # Topology notation: 𝓝 → nhds (bare function name, no open needed)
+    stmt = stmt.replace("𝓝", "nhds")
+
+    # Apply the main qualification map
+    stmt = _QUALIFY_PATTERN.sub(lambda m: _QUALIFY_MAP[m.group(1)], stmt)
+
+    # Context-aware Polynomial qualification: bare X and C are ambiguous
+    # globally, but unambiguous when the statement already mentions Polynomial.
+    if "Polynomial" in stmt:
+        stmt = re.sub(r"(?<!\w)(?<!\.)X(?!\w)", "Polynomial.X", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)C(?= \()", "Polynomial.C", stmt)
+
+    return stmt
 
 
 def clone_repo(url: str, dest: Path) -> Path:

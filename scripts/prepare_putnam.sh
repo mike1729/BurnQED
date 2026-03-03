@@ -97,6 +97,7 @@ PUTNAM_OPENS=(
     Function Matrix Finset BigOperators
     Bornology RingHom Classical Interval
     InnerProductSpace intervalIntegral
+    ComplexConjugate
 )
 
 SKIP_FILE="${BENCH_DIR}/putnam_skip.txt"

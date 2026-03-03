@@ -39,6 +39,12 @@ def fix_statement(statement: str) -> str:
     # Fix: `𝓝` notation requires `open Topology`; use `nhds` instead.
     statement = statement.replace("𝓝", "nhds")
 
+    # Fix: bare `cexp` → `Complex.exp` (removed from global namespace in Mathlib 4.27)
+    statement = re.sub(r"(?<!\w)cexp\b", "Complex.exp", statement)
+
+    # Fix: bare `sqrt` → `Real.sqrt` (not in bare namespace in Mathlib 4.27)
+    statement = re.sub(r"(?<!\w\.)(?<!\w)sqrt\b", "Real.sqrt", statement)
+
     # Fix: Strip inline Lean comments `-- ...` that appear in some v1 statements.
     # Comments run to end-of-line, but may be flattened onto one line.
     # Match `--` through to the next `(h` (start of next hypothesis binder).
