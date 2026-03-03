@@ -277,6 +277,12 @@ else
             continue
         fi
 
+        # Skip if olean already built
+        if [ -f "${PANTOGRAPH_DIR}/.lake/build/lib/lean/${module_name}.olean" ]; then
+            echo "  ${module_name} oleans already built — skipping"
+            continue
+        fi
+
         # Generate .lean file from JSON
         echo "  Generating ${module_name}.lean from ${json_file}..."
         python3 "${REPO_ROOT}/python/data/generate_lean.py" \
@@ -301,7 +307,26 @@ else
         lake build "${BENCH_LIBS_TO_BUILD[@]}"
         cd "$REPO_ROOT"
         echo "  SUCCESS: Built ${BENCH_LIBS_TO_BUILD[*]}"
+    else
+        echo "  All miniF2F oleans already built — nothing to do."
     fi
+fi
+
+# ── Step 7b: Build PutnamBench oleans ────────────────────────────────────
+echo ""
+echo "=== Step 7b: Build PutnamBench oleans ==="
+
+PUTNAM_OLEAN="${PANTOGRAPH_DIR}/.lake/build/lib/lean/BenchPutnam.olean"
+PUTNAM_JSON="${REPO_ROOT}/data/benchmarks/putnam.json"
+
+if [ -f "$PUTNAM_OLEAN" ]; then
+    echo "  PutnamBench oleans already built — skipping."
+elif [ -f "$PUTNAM_JSON" ]; then
+    echo "  putnam.json found but oleans missing — building..."
+    bash "${REPO_ROOT}/scripts/prepare_putnam.sh"
+else
+    echo "  No putnam.json found — running full prepare_putnam.sh..."
+    bash "${REPO_ROOT}/scripts/prepare_putnam.sh"
 fi
 
 # ── Step 8: Build prover-core (release) ───────────────────────────────────
