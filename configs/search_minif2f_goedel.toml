@@ -1,5 +1,5 @@
 [search]
-prompt_format = "goedel-v2"   # Goedel-Prover-V2 (Qwen3-8B ChatML template)
+prompt_format = "goedel-v2-wp" # Goedel-Prover-V2 whole-proof: full theorem header at depth 0
 max_depth = 25
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight

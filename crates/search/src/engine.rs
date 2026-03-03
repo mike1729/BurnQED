@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use ordered_float::OrderedFloat;
 
 use lean_repl::{Goal, ProofState, TacticResult};
-use policy::{extract_all_tactics_structured, GeneratedTactic};
+use policy::{extract_all_tactics_structured, GeneratedTactic, PromptFormat};
 use trajectory::{SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord};
 
 use crate::config::SearchConfig;
@@ -351,6 +351,11 @@ impl SearchEngine {
         let mut max_depth_reached: u32 = 0;
         let mut nodes_expanded: u32 = 0;
 
+        // Adaptive token budget: EMA of truncation rate across rounds.
+        // When high, we trade num_proofs for max_tokens to avoid wasting
+        // truncated generations while keeping total tokens ~constant.
+        let mut truncation_ema: f64 = 0.0;
+
         // Hybrid search loop
         let exit_reason;
         'outer: loop {
@@ -450,16 +455,58 @@ impl SearchEngine {
                 });
             }
 
-            let leaf_state = arena[leaf_idx].goals_as_text();
+            // For GoedelV2WholeProof at depth 0, construct a full theorem header
+            // so the model generates only the proof body (no re-emission of imports).
+            // At deeper depths, fall back to tactic state presentation.
+            let prompt_format = PromptFormat::from_str(&self.config.prompt_format).ok();
+            let leaf_state = if arena[leaf_idx].depth == 0
+                && prompt_format.map_or(false, |pf| pf.needs_theorem_header())
+            {
+                format!(
+                    "import Mathlib\nimport Aesop\nset_option maxHeartbeats 0\n\
+                     open BigOperators Real Nat Topology Rat\n\n\
+                     theorem {} : {} := by\n  sorry",
+                    theorem_name, statement
+                )
+            } else {
+                arena[leaf_idx].goals_as_text()
+            };
 
             // Generate whole proofs from this leaf (count decays with depth)
             let leaf_depth = arena[leaf_idx].depth;
-            let n = self.config.effective_hybrid_num_proofs(leaf_depth);
+            let base_n = self.config.effective_hybrid_num_proofs(leaf_depth);
+            let base_max_tokens = self.config.effective_hybrid_max_tokens(leaf_depth);
             let temp = self.config.effective_temperature(leaf_depth);
+
+            // Adaptive token budget: when truncation rate is high, give each
+            // proof more tokens at the cost of fewer parallel proofs.
+            // Keeps n * max_tokens roughly constant (VRAM-safe).
+            let (n, max_tokens) = if truncation_ema > 0.1 {
+                // Scale factor: 1.1x at 10% truncation, up to 2x at 100%
+                let scale = (1.0 + truncation_ema).min(2.0);
+                let new_max_tokens = ((base_max_tokens as f64 * scale) as usize)
+                    .min(base_max_tokens * 2); // hard cap at 2x
+                // Reduce n proportionally to keep total tokens bounded
+                let new_n = ((base_n as f64 / scale).ceil() as usize).max(2);
+                stats.adaptive_scale_ups += 1;
+                tracing::info!(
+                    round,
+                    depth = leaf_depth,
+                    truncation_ema = format!("{:.2}", truncation_ema),
+                    base_n,
+                    base_max_tokens,
+                    adapted_n = new_n,
+                    adapted_max_tokens = new_max_tokens,
+                    "Adaptive token budget: scaling up tokens, reducing parallelism"
+                );
+                (new_n, new_max_tokens)
+            } else {
+                (base_n, base_max_tokens)
+            };
 
             let gen_start = Instant::now();
             let raw_proofs = policy
-                .generate_whole_proofs(&leaf_state, n, self.config.effective_hybrid_max_tokens(leaf_depth), temp)
+                .generate_whole_proofs(&leaf_state, n, max_tokens, temp)
                 .await?;
             let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
@@ -467,11 +514,22 @@ impl SearchEngine {
             total_proofs += raw_proofs.len() as u32;
             stats.hybrid_proofs_generated += raw_proofs.len() as u32;
 
+            // Update truncation EMA from this round's results
+            let round_truncated = raw_proofs.iter().filter(|p| p.truncated).count();
+            stats.hybrid_proofs_truncated += round_truncated as u32;
+            if !raw_proofs.is_empty() {
+                let round_rate = round_truncated as f64 / raw_proofs.len() as f64;
+                truncation_ema = 0.6 * truncation_ema + 0.4 * round_rate;
+            }
+
             tracing::debug!(
                 round,
                 leaf = leaf_idx,
                 depth = arena[leaf_idx].depth,
                 n_proofs = raw_proofs.len(),
+                truncated = round_truncated,
+                truncation_ema = format!("{:.2}", truncation_ema),
+                max_tokens,
                 "Hybrid round: generated whole proofs"
             );
 
@@ -934,6 +992,8 @@ impl SearchEngine {
             have_chain = stats.have_chain_pruned,
             depth_capped = stats.depth_capped,
             loops = stats.loops_detected,
+            truncated = stats.hybrid_proofs_truncated,
+            adaptive_scale_ups = stats.adaptive_scale_ups,
             time_ms = wall_time_ms,
             "Hybrid search exhausted without proof"
         );

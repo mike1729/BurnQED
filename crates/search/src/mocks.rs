@@ -16,6 +16,7 @@ pub fn make_tactic(text: &str, log_prob: f64) -> GeneratedTactic {
         raw_text: text.to_string(),
         log_prob,
         tokens: vec![],
+        truncated: false,
     }
 }
 

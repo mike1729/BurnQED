@@ -44,7 +44,20 @@ pub struct TrajectoryWriter {
 
 impl TrajectoryWriter {
     /// Create a new writer that will write to the given path.
+    ///
+    /// Creates parent directories if they don't exist.
     pub fn new(output_path: PathBuf) -> Self {
+        if let Some(parent) = output_path.parent() {
+            if !parent.exists() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    tracing::warn!(
+                        path = %parent.display(),
+                        error = %e,
+                        "Failed to create parent directories for trajectory output"
+                    );
+                }
+            }
+        }
         Self {
             pending: Vec::new(),
             flushed_count: 0,

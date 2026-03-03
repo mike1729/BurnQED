@@ -374,7 +374,8 @@ impl SglangClient {
                 text: tactic_text,
                 raw_text: raw_text.clone(),
                 log_prob,
-                tokens: Vec::new(), // Token IDs not needed for remote inference
+                tokens: Vec::new(),
+                truncated: false,
             });
         }
 
@@ -509,6 +510,7 @@ impl SglangClient {
                     raw_text: raw_text.clone(),
                     log_prob: *log_prob,
                     tokens: Vec::new(),
+                    truncated: false,
                 });
             }
             tactics.sort_by(|a, b| {
@@ -607,7 +609,8 @@ impl SglangClient {
                             .and_then(|lps| lps.as_array())
                             .map(|lps| lps.len())
                             .unwrap_or(0);
-                        if n_tokens >= max_tokens {
+                        let is_truncated = n_tokens >= max_tokens;
+                        if is_truncated {
                             truncated_count += 1;
                         }
                         if text.trim().is_empty() {
@@ -619,6 +622,7 @@ impl SglangClient {
                             raw_text: text,
                             log_prob,
                             tokens: Vec::new(),
+                            truncated: is_truncated,
                         });
                     }
                     if truncated_count > 0 {
@@ -1463,6 +1467,7 @@ mod tests {
                     raw_text: raw_text.clone(),
                     log_prob: *log_prob,
                     tokens: Vec::new(),
+                    truncated: false,
                 });
             }
             tactics.sort_by(|a, b| b.log_prob.partial_cmp(&a.log_prob).unwrap_or(std::cmp::Ordering::Equal));

@@ -11,6 +11,9 @@ pub struct GeneratedTactic {
     pub log_prob: f64,
     /// The generated token IDs (excluding prompt tokens).
     pub tokens: Vec<u32>,
+    /// Whether this generation hit the max_tokens limit (truncated).
+    /// Used by the search engine for adaptive token budgeting.
+    pub truncated: bool,
 }
 
 /// A mean-pooled hidden-state embedding from the model.
@@ -33,9 +36,11 @@ mod tests {
             raw_text: "intro n".to_string(),
             log_prob: -0.5,
             tokens: vec![1, 2, 3],
+            truncated: false,
         };
         assert_eq!(t.text, "intro n");
         assert_eq!(t.tokens.len(), 3);
+        assert!(!t.truncated);
     }
 
     #[test]

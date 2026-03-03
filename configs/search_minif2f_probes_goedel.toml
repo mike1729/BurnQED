@@ -1,5 +1,5 @@
 [search]
-prompt_format = "goedel-v2"   # Goedel-Prover-V2 (Qwen3-8B ChatML template)
+prompt_format = "goedel-v2-wp" # Goedel-Prover-V2 whole-proof: full theorem header at depth 0
 max_depth = 25
 num_candidates = 16           # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
