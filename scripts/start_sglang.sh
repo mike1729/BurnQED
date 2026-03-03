@@ -43,9 +43,9 @@ case "$MODEL_ARG" in
         ;;
     goedel|goedel-v2|goedel-prover-v2-8b)
         MODEL_PATH="${REPO_ROOT}/data/models/base/goedel-prover-v2-8b"
-        # Qwen3-8B: no fp8 calibration available; run in native bfloat16
-        QUANTIZATION="${QUANTIZATION-}"
-        DTYPE="${DTYPE-bfloat16}"
+        # Qwen3-8B: SGLang supports dynamic fp8 (no calibration needed)
+        QUANTIZATION="${QUANTIZATION-fp8}"
+        DTYPE="${DTYPE-auto}"
         ;;
     *)
         # Treat as a literal path

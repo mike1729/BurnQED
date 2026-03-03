@@ -324,33 +324,67 @@ fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
         }
 
         // Join `<;>` combinator chains into a single compound tactic.
-        // Lines ending with `<;>` continue onto the next line. Standalone
-        // `<;>` lines (the model sometimes puts `<;>` on its own line)
-        // are joined as a prefix to the next continuation.
         //
-        // Example input (each at same indent):
+        // Two patterns occur in LLM output:
+        //
+        // Pattern A (DeepSeek-style): previous line ENDS with `<;>`
         //   rcases b with (_ | _ | _ | _) <;>
         //   simp_all [pow_one] <;>
-        //   norm_num at * <;>
         //   linarith
         //
-        // Becomes one tactic:
-        //   rcases b with (_ | _ | _ | _) <;> simp_all [pow_one] <;> norm_num at * <;> linarith
-        if ends_with_semicolon_combinator(first_line) {
+        // Pattern B (Goedel-style): next line STARTS with `<;>`
+        //   simp [h₀, ...]
+        //   <;> ring_nf at *
+        //   <;> norm_num
+        //   <;> linarith
+        //
+        // Both become one tactic. We also handle standalone `<;>` lines.
+        if ends_with_semicolon_combinator(first_line) || starts_with_semicolon_combinator_ahead(&lines, i + 1) {
             let mut chain = first_line.to_string();
+            // Ensure chain so far ends with <;> for uniform continuation handling
+            if !chain.ends_with("<;>") {
+                chain.push_str(" <;>");
+            }
             i += 1;
             while i < lines.len() {
                 let next_trimmed = lines[i].trim();
                 if next_trimmed.is_empty() {
                     break;
                 }
-                // Standalone `<;>` line — absorb and continue
+                // Standalone `<;>` line — absorb only if a real continuation follows
                 if next_trimmed == "<;>" {
-                    chain.push_str(" <;>");
-                    i += 1;
-                    continue;
+                    if starts_with_semicolon_combinator_ahead(&lines, i + 1) {
+                        // More <;> continuations ahead — skip this bare separator
+                        i += 1;
+                        continue;
+                    }
+                    // Check if a Pattern A continuation follows (non-<;> line at same indent)
+                    let has_pattern_a_next = (i + 1 < lines.len()) && {
+                        let peek = lines[i + 1].trim();
+                        !peek.is_empty() && !peek.starts_with("<;>") && indent_of(lines[i + 1]) >= line_indent
+                    };
+                    if has_pattern_a_next && chain.ends_with("<;>") {
+                        // Absorb the standalone <;> (redundant, chain already has it)
+                        i += 1;
+                        continue;
+                    }
+                    // No useful continuation — stop the chain here
+                    break;
                 }
-                // Continuation at same or deeper indent
+                // Pattern B continuation: line starts with `<;> `
+                if let Some(rest) = next_trimmed.strip_prefix("<;> ") {
+                    // chain already ends with <;>, just append the rest
+                    chain.push(' ');
+                    chain.push_str(rest);
+                    i += 1;
+                    // Check if more <;> continuations follow
+                    if starts_with_semicolon_combinator_ahead(&lines, i) {
+                        chain.push_str(" <;>");
+                        continue;
+                    }
+                    break; // Pattern B chain ended
+                }
+                // Pattern A continuation at same or deeper indent
                 let next_indent = indent_of(lines[i]);
                 if next_indent >= line_indent {
                     chain.push(' ');
@@ -363,6 +397,13 @@ fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
                     break;
                 }
             }
+            // Trim trailing ` <;>` if chain was never continued
+            let chain = if chain.ends_with(" <;>") && !chain[..chain.len()-4].contains("<;>") {
+                // Only the initial append — no continuation was found; revert
+                chain[..chain.len()-4].to_string()
+            } else {
+                chain
+            };
             tactics.push(chain);
             continue;
         }
@@ -402,15 +443,45 @@ fn extract_all_tactics_impl(raw: &str, decompose: bool) -> Vec<String> {
 ///
 /// Focus dots (`·`) arise when the model generates focused sub-blocks.
 /// Standalone `<;>` lines that weren't absorbed by chain joining are also
-/// dropped. Note: `<;>` at the END of a real tactic is handled by the
-/// chain-joining logic, so only truly dangling `<;>` lines reach here.
+/// dropped. Note: `<;> foo` lines are now handled by chain joining (both
+/// Pattern A where the previous line ends with `<;>` and Pattern B where
+/// the next line starts with `<;>`), so only bare `<;>` reaches here.
 fn should_skip_tactic(tactic: &str) -> bool {
     let trimmed = tactic.trim();
     trimmed.is_empty()
         || trimmed == "<;>"
-        || trimmed.starts_with("<;> ")
         || trimmed == "·"
         || trimmed == "."
+}
+
+/// Check whether the next non-empty line continues a `<;>` chain (Pattern B).
+///
+/// Returns true if the upcoming lines indicate `<;>` continuation:
+/// - `<;> foo` (Goedel-style: combinator at start of continuation line)
+/// - `<;>` (bare) followed by a line that itself continues the chain
+///   (either starts with `<;>` or ends with `<;>`)
+fn starts_with_semicolon_combinator_ahead(lines: &[&str], from: usize) -> bool {
+    let mut saw_bare = false;
+    for line in &lines[from..] {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed == "<;>" {
+            saw_bare = true;
+            continue;
+        }
+        if trimmed.starts_with("<;> ") {
+            return true;
+        }
+        // After bare <;>, accept if the next line is a Pattern A continuation
+        // (ends with <;>), meaning the bare <;> was a separator in a chain
+        if saw_bare && ends_with_semicolon_combinator(trimmed) {
+            return true;
+        }
+        return false;
+    }
+    false
 }
 
 /// Check whether a tactic line ends with the `<;>` combinator.
@@ -1030,12 +1101,12 @@ mod tests {
     #[test]
     fn test_should_skip_tactic() {
         assert!(should_skip_tactic("<;>"));
-        assert!(should_skip_tactic("<;> omega"));
         assert!(should_skip_tactic("·"));
         assert!(should_skip_tactic("."));
         assert!(should_skip_tactic(""));
         assert!(should_skip_tactic("  "));
-        // These should NOT be skipped
+        // These should NOT be skipped (<;> foo is now handled by chain joining)
+        assert!(!should_skip_tactic("<;> omega"));
         assert!(!should_skip_tactic("simp"));
         assert!(!should_skip_tactic("interval_cases x <;> omega"));
         assert!(!should_skip_tactic("have h := by linarith"));
@@ -1043,11 +1114,11 @@ mod tests {
 
     #[test]
     fn test_structured_filters_dangling_combinators() {
-        // Model output with dangling <;> after tactic splitting
+        // Model output with Pattern B <;> continuation + dangling <;>
         let raw = "interval_cases x\n<;> omega\n<;>\nsimp";
         let result = extract_all_tactics_structured(raw);
-        // <;> omega and <;> should be filtered out
-        assert_eq!(result, vec!["interval_cases x", "simp"]);
+        // Pattern B: interval_cases x <;> omega joined, dangling <;> absorbed, simp separate
+        assert_eq!(result, vec!["interval_cases x <;> omega", "simp"]);
     }
 
     #[test]
@@ -1083,13 +1154,12 @@ mod tests {
 
     #[test]
     fn test_structured_semicolon_chain_with_standalone_separator() {
-        // Standalone <;> line between parts of the chain
+        // Standalone <;> line between parts of the chain — now joined with previous tactic
         let raw = "  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  linarith";
         let result = extract_all_tactics_structured(raw);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0], "norm_num at h₁");
-        // <;> on its own line is filtered; rcases chain is joined
-        assert_eq!(result[1], "rcases b with (_ | _ | _ | _) <;> linarith");
+        assert_eq!(result.len(), 1);
+        // norm_num + <;> + rcases chain all joined
+        assert_eq!(result[0], "norm_num at h₁ <;> rcases b with (_ | _ | _ | _) <;> linarith");
     }
 
     #[test]
@@ -1105,12 +1175,13 @@ mod tests {
         // Real DeepSeek output for mathd_algebra_59
         let raw = "intro b F h₀ h₁\n  simp only [h₀, h₁] at *\n  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  simp_all [pow_one, pow_two, pow_three] <;>\n  norm_num at * <;>\n  linarith";
         let result = extract_all_tactics_structured(raw);
-        assert_eq!(result.len(), 4);
+        assert_eq!(result.len(), 3);
         assert_eq!(result[0], "intro b F h₀ h₁");
         assert_eq!(result[1], "simp only [h₀, h₁] at *");
-        assert_eq!(result[2], "norm_num at h₁");
-        // <;> standalone was filtered, rcases chain joined
-        assert_eq!(result[3], "rcases b with (_ | _ | _ | _) <;> simp_all [pow_one, pow_two, pow_three] <;> norm_num at * <;> linarith");
+        // norm_num + <;> + rcases chain all joined
+        assert!(result[2].starts_with("norm_num at h₁ <;>"));
+        assert!(result[2].contains("rcases b with"));
+        assert!(result[2].ends_with("linarith"));
     }
 
     #[test]
@@ -1121,6 +1192,86 @@ mod tests {
         assert_eq!(result, vec![
             "rcases n with (_ | _ | _) <;> (try norm_num) <;> (try linarith) <;> nlinarith"
         ]);
+    }
+
+    // ------ Pattern B (Goedel-style <;> continuation) tests ------
+
+    #[test]
+    fn test_pattern_b_basic() {
+        // Next line starts with <;> — join to previous tactic
+        let raw = "  simp [h₀]\n  <;> ring_nf at *\n  <;> norm_num\n  <;> linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec![
+            "simp [h₀] <;> ring_nf at * <;> norm_num <;> linarith"
+        ]);
+    }
+
+    #[test]
+    fn test_pattern_b_with_preceding_tactics() {
+        // Preceding tactics should stay separate; only the tactic before <;> gets joined
+        let raw = "intro b F h₀ h₁\n  norm_num at h₁\n  <;> ring_nf at *\n  <;> linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        assert_eq!(result[1], "norm_num at h₁ <;> ring_nf at * <;> linarith");
+    }
+
+    #[test]
+    fn test_pattern_b_mixed_with_pattern_a() {
+        // Pattern A (ends with <;>) followed by Pattern B (starts with <;>)
+        let raw = "  rcases b with (_ | _) <;>\n  simp_all <;>\n  norm_num\n  <;> linarith";
+        let result = extract_all_tactics_structured(raw);
+        // rcases chain joined via Pattern A, then norm_num <;> linarith via Pattern B
+        assert_eq!(result[0], "rcases b with (_ | _) <;> simp_all <;> norm_num");
+        assert_eq!(result[1], "<;> linarith");
+    }
+
+    #[test]
+    fn test_pattern_b_single_continuation() {
+        // Only one <;> continuation line
+        let raw = "  norm_num at h₄ ⊢\n  <;> linarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["norm_num at h₄ ⊢ <;> linarith"]);
+    }
+
+    #[test]
+    fn test_pattern_b_no_false_positive() {
+        // Normal consecutive tactics should NOT be joined
+        let raw = "  simp [h₀]\n  ring_nf at *\n  norm_num";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result, vec!["simp [h₀]", "ring_nf at *", "norm_num"]);
+    }
+
+    // ------ Real Goedel proof extraction tests (from 3thm_diversity_test_goedel.json) ------
+
+    #[test]
+    fn test_goedel_algebra59_pattern_b_chain() {
+        // Real Goedel output: simp followed by Pattern B <;> chain
+        // Note: extract_all_tactics_structured receives the raw model text AFTER
+        // code fence stripping. The theorem header is on a single line in the
+        // actual Goedel output (whole-proof mode re-emits it).
+        let raw = "theorem mathd_algebra_59 : ∀ (b : ℝ) (F : ℝ → ℝ → ℝ → ℝ → ℝ) (h₀: F = fun a b c d ↦ a ^ b + c ^ d) (h₁ : F 4 b 2 3 = 12), b = 1 := by\n  intro b F h₀ h₁\n  have h₂ : F 4 b 2 3 = (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) := by\n    simp [h₀]\n    <;> ring_nf at *\n    <;> norm_num\n  rw [h₂] at h₁\n  have h₃ : (4 : ℝ) ^ b = 4 := by linarith\n  have h₄ : b = 1 := by\n    nlinarith\n  exact h₄";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro b F h₀ h₁");
+        // have h₂ decomposed: bare have + body
+        assert_eq!(result[1], "have h₂ : F 4 b 2 3 = (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ)");
+        // Pattern B: simp <;> ring_nf <;> norm_num joined
+        assert_eq!(result[2], "simp [h₀] <;> ring_nf at * <;> norm_num");
+        assert_eq!(result[3], "rw [h₂] at h₁");
+        assert_eq!(result[4], "have h₃ : (4 : ℝ) ^ b = 4 := by linarith");
+        assert_eq!(result[5], "have h₄ : b = 1 := by nlinarith");
+        assert_eq!(result[6], "exact h₄");
+    }
+
+    #[test]
+    fn test_goedel_algebra327_with_constructor() {
+        // Real Goedel output with constructor and abs_lt
+        let raw = "theorem mathd_algebra_327 : ∀ (a : ℝ), (1 / 5 * |9 + 2 * a| < 1) ↔ a ∈ Set.Ioo (-7 : ℝ) (-2) := by\n  intro a\n  constructor\n  · intro h\n    constructor\n    · nlinarith [abs_nonneg (9 + 2 * a), abs_le.mp (by nlinarith : |9 + 2 * a| ≤ 5)]\n    · nlinarith [abs_nonneg (9 + 2 * a), abs_le.mp (by nlinarith : |9 + 2 * a| ≤ 5)]\n  · intro h\n    obtain ⟨h₁, h₂⟩ := h\n    rw [abs_lt]\n    constructor\n    · nlinarith\n    · nlinarith";
+        let result = extract_all_tactics_structured(raw);
+        assert_eq!(result[0], "intro a");
+        assert_eq!(result[1], "constructor");
+        // Bullets stripped
+        assert_eq!(result[2], "intro h");
+        assert_eq!(result[3], "constructor");
     }
 
     // ------ bullet stripping tests ------
@@ -1173,7 +1324,7 @@ mod tests {
         // T=0.8 [2]: two sequential have-by blocks, second has <;> chain.
         // First have-by has single-line body → kept as one tactic.
         // Second have-by has multi-line body → decomposed into bare have + body tactics.
-        // Inner <;> chains are filtered (start with <;>).
+        // Inner <;> chains starting with `<;>` are now joined (Pattern B).
         let raw = "intro b F h₀ h₁\n  simp [h₀] at h₁\n  norm_num at h₁\n  have : (4 : ℝ) ^ b = 4 := by\n    nlinarith [sq_nonneg (b - 1)]\n  have : b = 1 := by\n    apply_fun (fun x => Real.logb 4 x) at this\n    norm_num at this\n    <;> simp_all [Real.logb_eq_zero]\n    <;> norm_num\n    <;> linarith\n  assumption";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result[0], "intro b F h₀ h₁");
@@ -1184,8 +1335,8 @@ mod tests {
         // Second have-by: decomposed (bare have + individual body tactics)
         assert_eq!(result[4], "have : b = 1");
         assert_eq!(result[5], "apply_fun (fun x => Real.logb 4 x) at this");
-        assert_eq!(result[6], "norm_num at this");
-        // <;> lines are filtered by should_skip_tactic
+        // Pattern B: norm_num at this <;> simp_all [...] <;> norm_num <;> linarith joined
+        assert_eq!(result[6], "norm_num at this <;> simp_all [Real.logb_eq_zero] <;> norm_num <;> linarith");
         assert_eq!(result[7], "assumption");
         assert_eq!(result.len(), 8);
     }
@@ -1193,15 +1344,15 @@ mod tests {
     #[test]
     fn test_real_algebra59_dangling_semicolon_rcases() {
         // T=0.8 [3]: dangling <;> followed by rcases <;> chain
+        // With Pattern B fix: norm_num at h₁ <;> rcases ... all joined
         let raw = "intro b F h₀ h₁\n  simp_all only [h₀, Function.funext_iff, eq_self_iff_true, forall_const]\n  norm_num at h₁\n  <;>\n  rcases b with (_ | _ | _ | _) <;>\n  simp_all [Nat.pow_succ, Nat.pow_zero, Nat.pow_one] <;>\n  norm_num <;>\n  ring_nf at h₁ ⊢ <;>\n  nlinarith";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result[0], "intro b F h₀ h₁");
         assert_eq!(result[1], "simp_all only [h₀, Function.funext_iff, eq_self_iff_true, forall_const]");
-        assert_eq!(result[2], "norm_num at h₁");
-        // <;> standalone filtered, rcases chain joined
-        assert!(result[3].starts_with("rcases b with"));
-        assert!(result[3].contains("<;>"));
-        assert!(result[3].contains("nlinarith"));
+        // norm_num + dangling <;> + rcases chain all joined into one compound tactic
+        assert!(result[2].starts_with("norm_num at h₁ <;>"));
+        assert!(result[2].contains("rcases b with"));
+        assert!(result[2].contains("nlinarith"));
     }
 
     #[test]
@@ -1211,10 +1362,10 @@ mod tests {
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result[0], "intro b F h₀ h₁");
         assert_eq!(result[1], "simp only [h₀, h₁] at *");
-        assert_eq!(result[2], "norm_num at h₁");
-        // rcases chain
-        let chain = &result[3];
-        assert!(chain.starts_with("rcases b with"));
+        // norm_num + <;> + rcases chain all joined
+        let chain = &result[2];
+        assert!(chain.starts_with("norm_num at h₁ <;>"));
+        assert!(chain.contains("rcases b with"));
         assert!(chain.ends_with("linarith"));
     }
 
@@ -1231,14 +1382,13 @@ mod tests {
 
     #[test]
     fn test_real_algebra59_cases_match_syntax() {
-        // T=1.4 [2]: cases with | syntax
+        // T=1.4 [2]: cases with | syntax after Pattern B <;>
         let raw = "intro b F h₀ h₁\n  simp only [h₀] at h₁\n  norm_num at h₁\n  <;> cases b with\n  | zero => simp_all\n  | succ b' =>\n    cases b' with\n    | zero => simp_all\n    | succ b'' => simp_all [pow_succ]\n  <;> linarith";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result[0], "intro b F h₀ h₁");
         assert_eq!(result[1], "simp only [h₀] at h₁");
-        assert_eq!(result[2], "norm_num at h₁");
-        // The cases block should be captured as a multi-line tactic
-        assert!(result.len() >= 3);
+        // Pattern B: norm_num <;> cases b with is joined
+        assert!(result[2].starts_with("norm_num at h₁ <;> cases b with"));
     }
 
     #[test]
@@ -1262,13 +1412,13 @@ mod tests {
 
     #[test]
     fn test_real_algebra59_nlinarith_sq() {
-        // T=0.8 [20]: short proof with leading <;> lines.
-        // Lines starting with <;> are filtered by should_skip_tactic.
+        // T=0.8 [20]: short proof with Pattern B <;> lines.
+        // Now joined into compound tactic.
         let raw = "intro b F h₀ h₁\n  simp_all only [h₀, h₁, pow_one, add_left_inj]\n  <;> norm_num at h₁ ⊢\n  <;> nlinarith [pow_two_nonneg (b - 1), pow_two_nonneg (b + 1)]";
         let result = extract_all_tactics_structured(raw);
         assert_eq!(result[0], "intro b F h₀ h₁");
-        assert_eq!(result[1], "simp_all only [h₀, h₁, pow_one, add_left_inj]");
-        // <;> lines filtered — only 2 tactics survive
+        // Pattern B: simp_all <;> norm_num <;> nlinarith joined
+        assert_eq!(result[1], "simp_all only [h₀, h₁, pow_one, add_left_inj] <;> norm_num at h₁ ⊢ <;> nlinarith [pow_two_nonneg (b - 1), pow_two_nonneg (b + 1)]");
         assert_eq!(result.len(), 2);
     }
 
@@ -1402,5 +1552,234 @@ mod tests {
         assert!(result[0].starts_with("have step1"));
         assert_eq!(result[1], "use 2, 2");
         assert_eq!(result[2], "norm_num [Real.logb, Real.log_pow]");
+    }
+
+    // ── Goedel diversity test data ──────────────────────────────────────
+    // Real samples from Goedel-Prover-V2-8B diversity runs on algebra_59.
+    // These exercise Pattern B `<;>` chains (lines starting with `<;>`)
+    // and bare `<;>` separators unique to Goedel T≥0.6 output.
+
+    #[test]
+    fn test_goedel_algebra59_pattern_b_simple() {
+        // Clean Pattern B: `simp [h₀]` followed by `<;> norm_cast` / `<;> ring_nf` / `<;> norm_num`
+        let raw = r#"intro b F h₀ h₁
+  have h₂ : F 4 b 2 3 = (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) := by
+    simp [h₀]
+    <;> norm_cast
+    <;> ring_nf
+    <;> norm_num
+  rw [h₂] at h₁
+  have h₃ : (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) = 12 := by linarith
+  have h₄ : (2 : ℝ) ^ (3 : ℝ) = 8 := by norm_num
+  rw [h₄] at h₃
+  have h₅ : (4 : ℝ) ^ b = 4 := by linarith
+  have h₆ : b = 1 := by
+    have h₇ : (4 : ℝ) ^ b = 4 := by linarith
+    have h₈ : b = 1 := by
+      have h₉ : Real.log ((4 : ℝ) ^ b) = Real.log 4 := by rw [h₇]
+      have h₁₀ : b * Real.log 4 = Real.log 4 := by
+        rw [Real.log_rpow (by norm_num : (4 : ℝ) > 0)] at h₉
+        linarith
+      have h₁₁ : Real.log 4 ≠ 0 := by
+        have h₁₂ : Real.log 4 > 0 := Real.log_pos (by norm_num)
+        linarith
+      have h₁₂ : b = 1 := by
+        apply mul_left_cancel₀ h₁₁
+        linarith
+      exact h₁₂
+    exact h₈
+  exact h₆"#;
+        let result = extract_all_tactics_structured(raw);
+
+        // First tactic is the intro
+        assert_eq!(result[0], "intro b F h₀ h₁");
+
+        // Pattern B chain: simp + 3 continuations joined with <;>
+        assert!(
+            result.iter().any(|t| t == "simp [h₀] <;> norm_cast <;> ring_nf <;> norm_num"),
+            "Expected joined Pattern B chain, got: {:?}", result
+        );
+
+        // Intermediate tactic present
+        assert!(
+            result.iter().any(|t| t == "rw [h₂] at h₁"),
+            "Expected 'rw [h₂] at h₁' in result: {:?}", result
+        );
+
+        // Last tactic is exact h₆
+        assert_eq!(*result.last().unwrap(), "exact h₆");
+
+        // No sorry anywhere
+        assert!(
+            !result.iter().any(|t| t.contains("sorry")),
+            "No tactic should contain sorry: {:?}", result
+        );
+    }
+
+    #[test]
+    fn test_goedel_algebra59_bare_semicolon_separators() {
+        // Pattern B with bare `<;>` lines between continuations (Goedel T=1.0 style).
+        // Bare `<;>` separators are NOT joined into chains by the current logic —
+        // they are silently dropped by should_skip_tactic. Individual tactics
+        // become standalone entries.
+        let raw = r#"intro b F h₀ h₁
+  have h₂ : F 4 b 2 3 = (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) := by
+    simp only [h₀]
+    <;>
+    simp [Real.rpow_add, Real.rpow_mul, Real.rpow_nat_cast]
+    <;>
+    norm_num
+    <;>
+    ring_nf
+    <;>
+    norm_num
+    <;>
+    linarith
+  have h₃ : (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) = 12 := by
+    linarith
+  have h₄ : (4 : ℝ) ^ b = 8 := by
+    have h₅ : (2 : ℝ) ^ (3 : ℝ) = 8 := by norm_num
+    linarith
+  exact h₅"#;
+        let result = extract_all_tactics_structured(raw);
+
+        // First tactic is intro
+        assert_eq!(result[0], "intro b F h₀ h₁");
+
+        // Bare `<;>` separators mean the chain is NOT joined. The body
+        // tactics from the have block appear individually after decomposition.
+        assert!(
+            result.iter().any(|t| t == "simp only [h₀]"),
+            "Expected standalone 'simp only [h₀]': {:?}", result
+        );
+        assert!(
+            result.iter().any(|t| t == "simp [Real.rpow_add, Real.rpow_mul, Real.rpow_nat_cast]"),
+            "Expected standalone simp tactic: {:?}", result
+        );
+
+        // linarith appears as standalone tactic (from h₃ body)
+        assert!(
+            result.iter().any(|t| t == "linarith"),
+            "Expected standalone 'linarith': {:?}", result
+        );
+
+        // Last tactic
+        assert_eq!(*result.last().unwrap(), "exact h₅");
+
+        // Bare `<;>` lines are filtered out — no tactic should be just "<;>"
+        assert!(
+            !result.iter().any(|t| t.trim() == "<;>"),
+            "Bare <;> lines should be filtered out: {:?}", result
+        );
+
+        // Tactic count should be reasonable: no inflation from bare <;> lines
+        assert_eq!(result.len(), 13, "Expected 13 tactics (bare <;> filtered): {:?}", result);
+    }
+
+    #[test]
+    fn test_goedel_algebra59_long_pattern_b_chain() {
+        // From algebra_59 T=0.6 [0] — multiple Pattern B chains at different depths.
+        // The long simp chain uses `<;> foo` continuations (with content after <;>),
+        // which ARE properly joined. Shorter chains in have bodies also join.
+        let raw = r#"intro b F h₀ h₁
+  have h₂ : F 4 b 2 3 = (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) := by
+    simp [h₀, Real.rpow_def_of_pos, Real.rpow_def_of_nonneg, Real.log_mul, Real.log_rpow, Real.log_pow]
+    <;> ring_nf at *
+    <;> norm_num
+    <;> field_simp [Real.log_mul, Real.log_rpow, Real.log_pow]
+    <;> ring_nf at *
+    <;> norm_num
+    <;> linarith
+  rw [h₂] at h₁
+  have h₃ : (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) = 12 := by linarith
+  have h₄ : (4 : ℝ) ^ b = 12 - (2 : ℝ) ^ (3 : ℝ) := by linarith
+  have h₅ : (4 : ℝ) ^ b = 12 - 8 := by
+    norm_num at h₄ ⊢
+    <;> linarith
+  have h₆ : (4 : ℝ) ^ b = 4 := by
+    norm_num at h₅ ⊢
+    <;> linarith
+  exact h₇"#;
+        let result = extract_all_tactics_structured(raw);
+
+        // First tactic
+        assert_eq!(result[0], "intro b F h₀ h₁");
+
+        // Long Pattern B chain: simp with 6 <;> continuations, all joined
+        let long_chain = "simp [h₀, Real.rpow_def_of_pos, Real.rpow_def_of_nonneg, \
+            Real.log_mul, Real.log_rpow, Real.log_pow] <;> ring_nf at * <;> norm_num \
+            <;> field_simp [Real.log_mul, Real.log_rpow, Real.log_pow] <;> ring_nf at * \
+            <;> norm_num <;> linarith";
+        assert!(
+            result.iter().any(|t| t == long_chain),
+            "Expected long joined chain. Looking for:\n  {}\nGot:\n  {:?}", long_chain, result
+        );
+
+        // Shorter Pattern B chains in have bodies
+        assert!(
+            result.iter().any(|t| t == "norm_num at h₄ ⊢ <;> linarith"),
+            "Expected 'norm_num at h₄ ⊢ <;> linarith': {:?}", result
+        );
+        assert!(
+            result.iter().any(|t| t == "norm_num at h₅ ⊢ <;> linarith"),
+            "Expected 'norm_num at h₅ ⊢ <;> linarith': {:?}", result
+        );
+
+        // No bare <;> should appear as a standalone tactic
+        assert!(
+            !result.iter().any(|t| t.trim() == "<;>"),
+            "No bare <;> should be standalone: {:?}", result
+        );
+
+        // Last tactic
+        assert_eq!(*result.last().unwrap(), "exact h₇");
+
+        // Total tactic count
+        assert_eq!(result.len(), 11, "Expected 11 tactics: {:?}", result);
+    }
+
+    #[test]
+    fn test_goedel_no_sorry_in_diversity_samples() {
+        // Sanity: extraction of the clean algebra_59 sample produces zero
+        // tactics containing "sorry" and is non-trivially long.
+        let raw = r#"intro b F h₀ h₁
+  have h₂ : F 4 b 2 3 = (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) := by
+    simp [h₀]
+    <;> norm_cast
+    <;> ring_nf
+    <;> norm_num
+  rw [h₂] at h₁
+  have h₃ : (4 : ℝ) ^ b + (2 : ℝ) ^ (3 : ℝ) = 12 := by linarith
+  have h₄ : (2 : ℝ) ^ (3 : ℝ) = 8 := by norm_num
+  rw [h₄] at h₃
+  have h₅ : (4 : ℝ) ^ b = 4 := by linarith
+  have h₆ : b = 1 := by
+    have h₇ : (4 : ℝ) ^ b = 4 := by linarith
+    have h₈ : b = 1 := by
+      have h₉ : Real.log ((4 : ℝ) ^ b) = Real.log 4 := by rw [h₇]
+      have h₁₀ : b * Real.log 4 = Real.log 4 := by
+        rw [Real.log_rpow (by norm_num : (4 : ℝ) > 0)] at h₉
+        linarith
+      have h₁₁ : Real.log 4 ≠ 0 := by
+        have h₁₂ : Real.log 4 > 0 := Real.log_pos (by norm_num)
+        linarith
+      have h₁₂ : b = 1 := by
+        apply mul_left_cancel₀ h₁₁
+        linarith
+      exact h₁₂
+    exact h₈
+  exact h₆"#;
+        let result = extract_all_tactics_structured(raw);
+
+        // Non-trivial extraction
+        assert!(result.len() > 5, "Expected > 5 tactics, got {}: {:?}", result.len(), result);
+
+        // Word-boundary sorry check: no tactic should contain "sorry"
+        for (i, tactic) in result.iter().enumerate() {
+            assert!(
+                !tactic.contains("sorry"),
+                "Tactic [{}] contains sorry: {:?}", i, tactic
+            );
+        }
     }
 }
