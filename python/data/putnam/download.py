@@ -109,6 +109,16 @@ def qualify_statement(stmt: str) -> str:
         stmt = re.sub(r"(?<!\w)(?<!\.)X(?!\w)", "Polynomial.X", stmt)
         stmt = re.sub(r"(?<!\w)(?<!\.)C(?= \()", "Polynomial.C", stmt)
 
+    # Complex analysis context: when statement mentions ℂ and has bare I in
+    # multiplicative context (I *, * I), qualify I → Complex.I and switch
+    # Real.exp/sin/cos → Complex.exp/sin/cos for expressions involving Complex.I.
+    if "ℂ" in stmt and re.search(r"(?<!\w)I\s*\*|\*\s*I(?!\w)", stmt):
+        stmt = re.sub(r"(?<!\w)(?<!\.)I(?!\w)(?!\s*:)", "Complex.I", stmt)
+        # Fix exp/sin/cos applied to complex arguments
+        stmt = stmt.replace("Real.exp (Complex.I", "Complex.exp (Complex.I")
+        stmt = stmt.replace("Real.sin (Complex.I", "Complex.sin (Complex.I")
+        stmt = stmt.replace("Real.cos (Complex.I", "Complex.cos (Complex.I")
+
     return stmt
 
 

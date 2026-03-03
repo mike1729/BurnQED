@@ -90,6 +90,13 @@ def fix_statement(statement: str) -> str:
     statement = re.sub(r"(?<!\.)(?<!\w)natAbs\b", "Int.natAbs", statement)
     statement = re.sub(r"(?<!\.)(?<!\w)choose\b", "Nat.choose", statement)
 
+    # Fix: `id` is ambiguous when `open RingHom` is active (RingHom.id vs _root_.id).
+    # Qualify as `_root_.id` to resolve.
+    statement = re.sub(r"(?<!\.)(?<!\w)id(?!\w)", "_root_.id", statement)
+
+    # Fix: `lcm` is ambiguous between Nat.lcm and GCDMonoid.lcm.
+    statement = re.sub(r"(?<!\.)(?<!\w)lcm\b", "Nat.lcm", statement)
+
     # Fix: Factorial notation `n!` or `n !` is not valid in Lean 4 theorem-type
     # position. Replace with `(Nat.factorial n)`. Parentheses needed so the result
     # works as an argument, e.g. `Nat.gcd (Nat.factorial 20) 200000`.
@@ -139,8 +146,9 @@ def fix_statement(statement: str) -> str:
     # Fix: bare `rexp` → `Real.exp` (PutnamBench shorthand)
     statement = re.sub(r"(?<!\w\.)(?<!\w)rexp\b", "Real.exp", statement)
 
-    # Fix: `∆` (triangle delta) → `symmDiff` (Lean 4 name)
-    statement = statement.replace("∆", "symmDiff")
+    # Fix: `∆` (U+2206, INCREMENT) → `Δ` (U+0394, GREEK CAPITAL LETTER DELTA)
+    # Lean 4 Mathlib defines `Δ` (U+0394) as infix notation for symmDiff.
+    statement = statement.replace("\u2206", "\u0394")
 
     # Fix: bare `Simplex` → `Geometry.Simplex` (needs qualification)
     statement = re.sub(r"(?<!\w\.)(?<!\w)Simplex\b", "Geometry.Simplex", statement)
@@ -175,38 +183,38 @@ def _fix_paren_factorials(s: str) -> str:
 
 
 def _colon_to_comma_outside_braces(s: str) -> str:
-    """Replace `) : CONCLUSION` with `), CONCLUSION` only at brace depth 0.
+    """Replace `) : CONCLUSION` with `), CONCLUSION` only at top level.
 
-    Inside set builders like `{(x,y) : F × F | ...}`, the `:` is a valid type
-    annotation and must NOT be replaced.
+    Only applies when the `)` closes the last open paren (paren depth goes to 0)
+    AND we're not inside braces (brace depth 0). This avoids corrupting:
+    - Set builders like `{(x,y) : F × F | ...}` (inside braces)
+    - Type casts like `((expr) : ℝ)` (inner `)` is at paren depth > 0)
     """
     import re
     result = []
     brace_depth = 0
+    paren_depth = 0
     i = 0
     while i < len(s):
-        if s[i] == '{':
+        ch = s[i]
+        if ch == '{':
             brace_depth += 1
-            result.append(s[i])
-            i += 1
-        elif s[i] == '}':
+        elif ch == '}':
             brace_depth -= 1
-            result.append(s[i])
-            i += 1
-        elif s[i] == ')' and brace_depth == 0:
-            # Check if this `)` is followed by ` : CONCLUSION`
-            m = re.match(r'\)\s*:\s+(?=\S)', s[i:])
-            if m:
-                # Replace `) :` with `), `
-                result.append(')')
-                result.append(', ')
-                i += m.end()
-            else:
-                result.append(s[i])
-                i += 1
-        else:
-            result.append(s[i])
-            i += 1
+        elif ch == '(':
+            paren_depth += 1
+        elif ch == ')':
+            paren_depth -= 1
+            if brace_depth == 0 and paren_depth == 0:
+                # Top-level `)` — check if followed by `: CONCLUSION`
+                m = re.match(r'\)\s*:\s+(?=\S)', s[i:])
+                if m:
+                    result.append(')')
+                    result.append(', ')
+                    i += m.end()
+                    continue
+        result.append(ch)
+        i += 1
     return ''.join(result)
 
 
