@@ -39,6 +39,14 @@ def fix_statement(statement: str) -> str:
     # Fix: `𝓝` notation requires `open Topology`; use `nhds` instead.
     statement = statement.replace("𝓝", "nhds")
 
+    # Fix: nhds bracket notation `nhds[≠] x` → `nhdsWithin x {x}ᶜ` etc.
+    # These are PutnamBench shorthand for punctured/one-sided neighborhoods.
+    statement = re.sub(r'nhds\[≠\]\s*(\S+)', r'nhdsWithin \1 ({\1}ᶜ)', statement)
+    statement = re.sub(r'nhds\[>\]\s*(\S+)', r'nhdsWithin \1 (Set.Ioi \1)', statement)
+    statement = re.sub(r'nhds\[<\]\s*(\S+)', r'nhdsWithin \1 (Set.Iio \1)', statement)
+    statement = re.sub(r'nhds\[≥\]\s*(\S+)', r'nhdsWithin \1 (Set.Ici \1)', statement)
+    statement = re.sub(r'nhds\[≤\]\s*(\S+)', r'nhdsWithin \1 (Set.Iic \1)', statement)
+
     # Fix: bare `cexp` → `Complex.exp` (removed from global namespace in Mathlib 4.27)
     statement = re.sub(r"(?<!\w)cexp\b", "Complex.exp", statement)
 
@@ -70,22 +78,24 @@ def fix_statement(statement: str) -> str:
     # Pattern: `)` followed by optional whitespace and `:` at end-of-binders position
     statement = re.sub(r"\)\s*:\s*\n", "),\n", statement)
     # Also handle single-line: `...) : conclusion`
-    statement = re.sub(r"\)\s*:\s+(?=[A-Z∃∀¬↑⟨])", "), ", statement)
+    # Only apply at brace depth 0 to avoid corrupting set builders like `{(x,y) : F × F | ...}`.
+    statement = _colon_to_comma_outside_braces(statement)
 
     # Fix: Qualify bare Nat/Int names when `open Nat` is not used.
     # These are common in IMO-Steps data. Negative lookbehind avoids
     # double-qualifying already-qualified names like Nat.succ.
-    statement = re.sub(r"(?<!\w\.)(?<!\w)succ\b", "Nat.succ", statement)
-    statement = re.sub(r"(?<!\w\.)(?<!\w)natAbs\b", "Int.natAbs", statement)
-    statement = re.sub(r"(?<!\w\.)(?<!\w)choose\b", "Nat.choose", statement)
+    # Also exclude `.succ`/`.choose` (method syntax like `).choose`) with `(?<!\.)`.
+    statement = re.sub(r"(?<!\.)(?<!\w)succ\b", "Nat.succ", statement)
+    statement = re.sub(r"(?<!\.)(?<!\w)natAbs\b", "Int.natAbs", statement)
+    statement = re.sub(r"(?<!\.)(?<!\w)choose\b", "Nat.choose", statement)
 
     # Fix: Factorial notation `n!` or `n !` is not valid in Lean 4 theorem-type
     # position. Replace with `(Nat.factorial n)`. Parentheses needed so the result
     # works as an argument, e.g. `Nat.gcd (Nat.factorial 20) 200000`.
     # Handle `(expr)!` first (before simple patterns eat inner variables).
     statement = _fix_paren_factorials(statement)
-    statement = re.sub(r"\b(\d+)\s*!", r"(Nat.factorial \1)", statement)
-    statement = re.sub(r"\b([a-z_]\w*)\s*!", r"(Nat.factorial \1)", statement)
+    statement = re.sub(r"\b(\d+)\s*!(?!\[|=|₂|\w)", r"(Nat.factorial \1)", statement)
+    statement = re.sub(r"\b([a-z]\w*)\s*!(?!\[|=|₂|\w)", r"(Nat.factorial \1)", statement)
 
     # Fix: `{x, ℝ | P}` → `{x : ℝ | P}` (malformed set-builder type annotation in v2c)
     statement = re.sub(r"\{(\w+), (ℤ|ℝ|ℕ|ℂ|ℚ) \|", r"{\1 : \2 |", statement)
@@ -107,10 +117,25 @@ def fix_statement(statement: str) -> str:
     # Fix: `let c, =` typo in v2s data → `let c :=`
     statement = statement.replace("let c, =", "let c :=")
 
+    # Fix: `let (a, b, c), =` destructuring with trailing comma → `let (a, b, c) :=`
+    statement = re.sub(r'let\s*(\([^)]+\))\s*,\s*=', r'let \1 :=', statement)
+
     # Fix: `let` bindings flattened onto one line need `;` separators.
     # "let a := expr let b := expr" → "let a := expr; let b := expr"
     # Only insert `;` when preceded by a non-comma token (avoid breaking ∀ ..., let ...)
     statement = re.sub(r'(?<=[^\s,])\s+(let\s+\w+\s*:=)', r'; \1', statement)
+
+    # Also handle `letI` bindings that need `;` separators.
+    statement = re.sub(r'(?<=[^\s,;])\s+(letI\s)', r'; \1', statement)
+
+    # Fix: bare `rexp` → `Real.exp` (PutnamBench shorthand)
+    statement = re.sub(r"(?<!\w\.)(?<!\w)rexp\b", "Real.exp", statement)
+
+    # Fix: `∆` (triangle delta) → `symmDiff` (Lean 4 name)
+    statement = statement.replace("∆", "symmDiff")
+
+    # Fix: bare `Simplex` → `Geometry.Simplex` (needs qualification)
+    statement = re.sub(r"(?<!\w\.)(?<!\w)Simplex\b", "Geometry.Simplex", statement)
 
     return statement
 
@@ -119,7 +144,7 @@ def _fix_paren_factorials(s: str) -> str:
     """Replace `(expr)!` with `(Nat.factorial (expr))`, handling nested parens."""
     import re
     while True:
-        m = re.search(r'\)\s*!(?!\w)', s)
+        m = re.search(r'\)\s*!(?!\[|=|₂|\w)', s)
         if not m:
             break
         close_pos = m.start()  # position of `)`
@@ -139,6 +164,42 @@ def _fix_paren_factorials(s: str) -> str:
         else:
             break
     return s
+
+
+def _colon_to_comma_outside_braces(s: str) -> str:
+    """Replace `) : CONCLUSION` with `), CONCLUSION` only at brace depth 0.
+
+    Inside set builders like `{(x,y) : F × F | ...}`, the `:` is a valid type
+    annotation and must NOT be replaced.
+    """
+    import re
+    result = []
+    brace_depth = 0
+    i = 0
+    while i < len(s):
+        if s[i] == '{':
+            brace_depth += 1
+            result.append(s[i])
+            i += 1
+        elif s[i] == '}':
+            brace_depth -= 1
+            result.append(s[i])
+            i += 1
+        elif s[i] == ')' and brace_depth == 0:
+            # Check if this `)` is followed by ` : CONCLUSION`
+            m = re.match(r'\)\s*:\s+(?=[A-Z∃∀¬↑⟨])', s[i:])
+            if m:
+                # Replace `) :` with `), `
+                result.append(')')
+                result.append(', ')
+                i += m.end()
+            else:
+                result.append(s[i])
+                i += 1
+        else:
+            result.append(s[i])
+            i += 1
+    return ''.join(result)
 
 
 def _parenthesize_set_builders(s: str) -> str:
@@ -278,7 +339,7 @@ def generate_lean_file(
         "",
         "import Mathlib",
         "",
-        "set_option maxHeartbeats 400000",
+        "set_option maxHeartbeats 800000",
         "",
         open_line,
         "",

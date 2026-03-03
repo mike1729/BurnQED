@@ -101,6 +101,12 @@ PUTNAM_OPENS=(
 )
 
 SKIP_FILE="${BENCH_DIR}/putnam_skip.txt"
+# Clear skip list on force rebuild to pick up newly-fixed theorems
+if [ $FORCE -eq 1 ] && [ -f "$SKIP_FILE" ]; then
+    echo "  Clearing old skip list (--force)"
+    rm -f "$SKIP_FILE"
+fi
+
 GENERATE_ARGS=(
     --input "$PUTNAM_JSON"
     --output "$LEAN_FILE"
@@ -136,9 +142,9 @@ echo "=== Step 4: Build oleans ==="
 
 if command -v lake &>/dev/null; then
     # Iterative build: some PutnamBench theorems don't compile under our global
-    # open statements (namespace clashes, syntax issues). We do up to 3 passes:
+    # open statements (namespace clashes, syntax issues). We do up to 5 passes:
     # each pass captures failures, adds them to the skip list, and regenerates.
-    MAX_PASSES=3
+    MAX_PASSES=5
     for pass in $(seq 1 "$MAX_PASSES"); do
         echo "  Build pass ${pass}/${MAX_PASSES}..."
         cd "${PANTOGRAPH_DIR}"

@@ -87,12 +87,24 @@ def qualify_statement(stmt: str) -> str:
     # Topology notation: 𝓝 → nhds (bare function name, no open needed)
     stmt = stmt.replace("𝓝", "nhds")
 
+    # nhds bracket notation: nhds[≠] x → nhdsWithin x ({x}ᶜ) etc.
+    stmt = re.sub(r'nhds\[≠\]\s*(\S+)', r'nhdsWithin \1 ({\1}ᶜ)', stmt)
+    stmt = re.sub(r'nhds\[>\]\s*(\S+)', r'nhdsWithin \1 (Set.Ioi \1)', stmt)
+    stmt = re.sub(r'nhds\[<\]\s*(\S+)', r'nhdsWithin \1 (Set.Iio \1)', stmt)
+    stmt = re.sub(r'nhds\[≥\]\s*(\S+)', r'nhdsWithin \1 (Set.Ici \1)', stmt)
+    stmt = re.sub(r'nhds\[≤\]\s*(\S+)', r'nhdsWithin \1 (Set.Iic \1)', stmt)
+
     # Apply the main qualification map
     stmt = _QUALIFY_PATTERN.sub(lambda m: _QUALIFY_MAP[m.group(1)], stmt)
 
-    # Context-aware Polynomial qualification: bare X and C are ambiguous
-    # globally, but unambiguous when the statement already mentions Polynomial.
-    if "Polynomial" in stmt:
+    # Context-aware Polynomial/MvPolynomial qualification: bare X and C are
+    # ambiguous globally, but unambiguous when the statement mentions a specific type.
+    # Check MvPolynomial FIRST since "MvPolynomial" also contains "Polynomial".
+    if "MvPolynomial" in stmt:
+        stmt = re.sub(r"(?<!\w)(?<!\.)X(?=\s+\d)", "MvPolynomial.X", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)C(?= \()", "MvPolynomial.C", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)eval(?= !\[)", "MvPolynomial.eval", stmt)
+    elif "Polynomial" in stmt:
         stmt = re.sub(r"(?<!\w)(?<!\.)X(?!\w)", "Polynomial.X", stmt)
         stmt = re.sub(r"(?<!\w)(?<!\.)C(?= \()", "Polynomial.C", stmt)
 
@@ -147,6 +159,24 @@ def parse_putnam_file(lean_file: Path) -> tuple[list[dict], list[str]]:
         decl = re.sub(r'\s+', ' ', decl)
         solution_abbrevs.append(f"{decl} := sorry")
 
+    # Extract custom helper definitions: `[noncomputable] def name ...` that are NOT
+    # solution abbrevs. These define problem-specific functions (dist_to_int, tetration,
+    # etc.) that theorems reference. We include them in the preamble so theorems compile.
+    def_pattern = re.compile(
+        r"((?:noncomputable\s+)?def\s+[\w'.]+\b[^:=]*(?::(?!=)[^:=]*)?):=(.*?)(?=\n(?:theorem|noncomputable\s+def|def\s|abbrev|end\b|#)\s|\Z)",
+        re.DOTALL,
+    )
+    for match in def_pattern.finditer(content_clean):
+        full_sig = match.group(1).strip()
+        body = match.group(2).strip()
+        # Skip solution defs (already extracted as abbrevs)
+        if "_solution" in full_sig:
+            continue
+        # Normalize whitespace in signature
+        full_sig = re.sub(r'\s+', ' ', full_sig)
+        body = re.sub(r'\s+', ' ', body)
+        solution_abbrevs.append(f"{full_sig} := {body}")
+
     # Extract theorems
     theorem_pattern = re.compile(
         r"theorem\s+([\w'.]+)\s*(.*?)\s*:=\s*(?:by\s+)?sorry",
@@ -198,8 +228,8 @@ def download_putnam(output_dir: Path) -> tuple[list[dict], list[str]]:
             theorems, abbrevs = parse_putnam_file(lean_file)
 
             for abbrev in abbrevs:
-                # Deduplicate by abbrev name
-                abbrev_name = re.search(r'abbrev\s+([\w\'.]+)', abbrev)
+                # Deduplicate by declaration name (abbrev or def)
+                abbrev_name = re.search(r'(?:abbrev|def)\s+([\w\'.]+)', abbrev)
                 if abbrev_name and abbrev_name.group(1) not in seen_abbrevs:
                     seen_abbrevs.add(abbrev_name.group(1))
                     all_abbrevs.append(abbrev)
