@@ -121,6 +121,11 @@ pub struct SearchConfig {
     #[serde(default = "default_max_tactic_tokens")]
     pub max_tactic_tokens: usize,
 
+    /// Prompt format identifier: "deepseek-prover" or "goedel-v2".
+    /// CLI `--prompt-format` overrides this. Default: "deepseek-prover".
+    #[serde(default = "default_prompt_format")]
+    pub prompt_format: String,
+
 }
 
 fn default_max_depth() -> u32 {
@@ -189,6 +194,9 @@ fn default_top_p() -> f64 {
 }
 fn default_max_tactic_tokens() -> usize {
     48
+}
+fn default_prompt_format() -> String {
+    "deepseek-prover".to_string()
 }
 
 impl SearchConfig {
@@ -306,6 +314,7 @@ impl Default for SearchConfig {
             hybrid_max_temperature: 0.0,
             top_p: default_top_p(),
             max_tactic_tokens: default_max_tactic_tokens(),
+            prompt_format: default_prompt_format(),
         }
     }
 }
@@ -742,5 +751,31 @@ mod tests {
         "#;
         let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.max_consecutive_have, 4); // default
+    }
+
+    // --- prompt_format tests ---
+
+    #[test]
+    fn test_prompt_format_default() {
+        let cfg = SearchConfig::default();
+        assert_eq!(cfg.prompt_format, "deepseek-prover");
+    }
+
+    #[test]
+    fn test_prompt_format_toml() {
+        let toml_str = r#"
+            prompt_format = "goedel-v2"
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.prompt_format, "goedel-v2");
+    }
+
+    #[test]
+    fn test_prompt_format_toml_backward_compat() {
+        let toml_str = r#"
+            temperature = 0.8
+        "#;
+        let cfg: SearchConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.prompt_format, "deepseek-prover");
     }
 }

@@ -4,6 +4,82 @@
 //! the chat prompt format expected by DeepSeek-Prover-V2, as well as
 //! extracting usable tactics from model output.
 
+/// Model-specific prompt format for LLM inference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptFormat {
+    /// DeepSeek-Prover-V2: custom tokens + assistant priming with `example := by`.
+    DeepSeekProver,
+    /// Goedel-Prover-V2 (Qwen3-8B): ChatML template + no-think prefix + code fence.
+    GoedelV2,
+}
+
+impl PromptFormat {
+    /// Parse a prompt format from a string identifier.
+    ///
+    /// Accepts `"deepseek-prover"` and `"goedel-v2"` (case-insensitive).
+    pub fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s.to_lowercase().as_str() {
+            "deepseek-prover" => Ok(Self::DeepSeekProver),
+            "goedel-v2" => Ok(Self::GoedelV2),
+            other => anyhow::bail!(
+                "Unknown prompt format {:?}. Expected \"deepseek-prover\" or \"goedel-v2\"",
+                other
+            ),
+        }
+    }
+
+    /// Format a proof state into a full prompt string for the model.
+    ///
+    /// - **DeepSeekProver**: chat template with tactic state echo and `example := by` priming.
+    /// - **GoedelV2**: ChatML direct-sorry whole-proof format with `<think>\n\n</think>` to skip CoT.
+    ///   The `proof_state` should be the full theorem statement with `sorry`.
+    pub fn format_prompt(&self, proof_state: &str) -> String {
+        match self {
+            Self::DeepSeekProver => {
+                let message = format_tactic_message(proof_state);
+                format!(
+                    "<\u{ff5c}begin\u{2581}of\u{2581}sentence\u{ff5c}>\
+                     <\u{ff5c}User\u{ff5c}>{message}\
+                     <\u{ff5c}Assistant\u{ff5c}>\
+                     ```lean4\n\
+                     /- tactic state:\n\
+                     {proof_state}\n\
+                     -/\n\
+                     example := by\n  "
+                )
+            }
+            Self::GoedelV2 => {
+                format!(
+                    "<|im_start|>user\n\
+                     ```lean4\n\
+                     {proof_state}\n\
+                     ```<|im_end|>\n\
+                     <|im_start|>assistant\n\
+                     <think>\n\n\
+                     </think>\n\n\
+                     ```lean4\n"
+                )
+            }
+        }
+    }
+
+    /// Stop tokens for single-tactic generation.
+    pub fn candidate_stop_tokens(&self) -> Vec<String> {
+        match self {
+            Self::DeepSeekProver => vec!["```".to_string(), "\n\n".to_string()],
+            Self::GoedelV2 => vec!["```".to_string(), "<|im_end|>".to_string()],
+        }
+    }
+
+    /// Stop tokens for whole-proof generation.
+    pub fn whole_proof_stop_tokens(&self) -> Vec<String> {
+        match self {
+            Self::DeepSeekProver => vec!["```".to_string()],
+            Self::GoedelV2 => vec!["```".to_string(), "<|im_end|>".to_string()],
+        }
+    }
+}
+
 /// Format a proof state into a chat message for the model.
 ///
 /// Uses tactic-state comment format matching DeepSeek-Prover-V1.5/V2 training data.
@@ -1781,5 +1857,51 @@ mod tests {
                 "Tactic [{}] contains sorry: {:?}", i, tactic
             );
         }
+    }
+
+    // --- PromptFormat tests ---
+
+    #[test]
+    fn test_prompt_format_from_str() {
+        assert_eq!(PromptFormat::from_str("deepseek-prover").unwrap(), PromptFormat::DeepSeekProver);
+        assert_eq!(PromptFormat::from_str("goedel-v2").unwrap(), PromptFormat::GoedelV2);
+        assert_eq!(PromptFormat::from_str("DEEPSEEK-PROVER").unwrap(), PromptFormat::DeepSeekProver);
+        assert_eq!(PromptFormat::from_str("Goedel-V2").unwrap(), PromptFormat::GoedelV2);
+        assert!(PromptFormat::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn test_prompt_format_deepseek() {
+        let state = "n : Nat\n\u{22a2} n + 0 = n";
+        let prompt = PromptFormat::DeepSeekProver.format_prompt(state);
+        assert!(prompt.contains("<\u{ff5c}begin\u{2581}of\u{2581}sentence\u{ff5c}>"));
+        assert!(prompt.contains("<\u{ff5c}User\u{ff5c}>"));
+        assert!(prompt.contains("<\u{ff5c}Assistant\u{ff5c}>"));
+        assert!(prompt.contains("tactic state:"));
+        assert!(prompt.contains("n + 0 = n"));
+        assert!(prompt.contains("example := by"));
+    }
+
+    #[test]
+    fn test_prompt_format_goedel() {
+        let state = "theorem test : 1 + 1 = 2 := by sorry";
+        let prompt = PromptFormat::GoedelV2.format_prompt(state);
+        assert!(prompt.contains("<|im_start|>user"));
+        assert!(prompt.contains("<|im_end|>"));
+        assert!(prompt.contains("<|im_start|>assistant"));
+        assert!(prompt.contains("<think>\n\n</think>"));
+        assert!(prompt.contains(state));
+        assert!(prompt.ends_with("```lean4\n"));
+    }
+
+    #[test]
+    fn test_prompt_format_stop_tokens() {
+        let ds = PromptFormat::DeepSeekProver;
+        assert_eq!(ds.candidate_stop_tokens(), vec!["```", "\n\n"]);
+        assert_eq!(ds.whole_proof_stop_tokens(), vec!["```"]);
+
+        let gv = PromptFormat::GoedelV2;
+        assert_eq!(gv.candidate_stop_tokens(), vec!["```", "<|im_end|>"]);
+        assert_eq!(gv.whole_proof_stop_tokens(), vec!["```", "<|im_end|>"]);
     }
 }

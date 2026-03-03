@@ -1,44 +1,34 @@
 [search]
 prompt_format = "goedel-v2"   # Goedel-Prover-V2 (Qwen3-8B ChatML template)
 max_depth = 25
+num_candidates = 16           # T≥1.0 yields 6-8 unique tactics
 alpha = 0.5                   # LLM log-prob weight
 beta = 0.5                    # EBM score weight
 llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% EBM / 10% LLM)
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
-timeout_per_theorem = 1800    # seconds
-# Goedel temperature sweet spot: 0.6-1.2 (vs DeepSeek 1.4-1.8)
-# T=0.2: too cold, repeats
-# T=0.6: conservative default
-# T=1.0: best diversity sweet spot (this setting)
-# T=1.2: still good
-# T=1.4: sorry starts appearing
-# T=1.8: catastrophic (garbage)
-temperature = 1.0             # Sampling temperature for tactic generation (Goedel-specific)
-top_p = 0.95                  # Nucleus sampling parameter
-# Goedel generates longer proofs than DeepSeek (1836 avg chars vs 399 for DS algebra_59)
-# Goedel uses whole-proof generation with direct_sorry prompt format
-# Goedel has Qwen3-8B architecture
-max_tactic_tokens = 96        # Goedel generates longer individual tactics with <;> chains (vs DS 48)
+timeout_per_theorem = 600     # seconds (deep proofs need more time, depth 16+ observed)
+harvest_siblings = false      # Mine sibling states from proof path after finding proof
+batch_expansion_size = 1      # Pop 1 node — minimize SGLang batch size to reduce gen latency
 batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
 ebm_ramp_depth = 4            # EBM beta ramps 0→full over 4 depth levels
 ebm_min_depth = 2             # Skip EBM inference entirely at depths 0-1
-max_consecutive_have = 4      # Prune have chains ≥ 4
-# Trimmed probes: removed decide (30s on complex goals), simp/simp_all (10-20s on miniF2F)
-probe_tactics = []
+# Probes: keep same set as DS probes config
+probe_tactics = ["ring", "omega", "norm_num", "trivial", "rfl", "tauto", "linarith", "push_neg", "contradiction", "exfalso", "constructor", "left", "right", "ext"]
 # Hybrid whole-proof search (Goedel-adjusted for longer proofs)
-hybrid_num_proofs = 32
+hybrid_num_proofs = 16
 hybrid_min_proofs = 4
-hybrid_max_rounds = 30
+hybrid_max_rounds = 60
 # Goedel proofs are ~4x longer than DeepSeek (1836 avg chars)
 hybrid_max_tokens = 2048      # Increased from 1024 to accommodate Goedel's longer proofs
 hybrid_min_tokens = 512       # Increased from 256 (proportional scaling)
 hybrid_tokens_decay_depth = 8
 hybrid_budget = 1024          # Increased from 512 to accommodate longer Goedel proofs
 # Temperature ramping for hybrid search (Goedel-specific)
+temperature = 1.0             # Goedel sweet spot (vs DS 1.4)
 hybrid_max_temperature = 1.2  # Max temperature during ramping (Goedel sweet spot, vs DS 1.8)
 
 [lean_pool]
-num_workers = 4               # Matched to concurrency default
+num_workers = 8               # Matched to concurrency default
 max_requests_per_worker = 1000
 max_lifetime_secs = 1800      # 30 minutes
-tactic_timeout_secs = 540
+tactic_timeout_secs = 60

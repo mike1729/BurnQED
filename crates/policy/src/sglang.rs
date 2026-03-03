@@ -19,7 +19,7 @@ use reqwest::Client;
 use serde::Serialize;
 use url::Url;
 
-use crate::prompt::{extract_first_tactic, format_tactic_message};
+use crate::prompt::{extract_first_tactic, PromptFormat};
 use crate::types::{Embedding, GeneratedTactic};
 
 /// Server encode capability, probed once on first encode call.
@@ -40,6 +40,8 @@ pub struct SglangConfig {
     pub max_tactic_tokens: usize,
     /// Hidden size of the model (for embedding validation). 4096 for DeepSeek-Prover-V2-7B.
     pub hidden_size: usize,
+    /// Prompt format for this model. Default: DeepSeekProver.
+    pub prompt_format: PromptFormat,
 }
 
 /// Circuit breaker for SGLang transport-level failures.
@@ -279,7 +281,7 @@ impl SglangClient {
                     temperature: Some(self.config.temperature),
                     top_p: Some(self.config.top_p),
                     n: None,
-                    stop: Some(vec!["```".to_string(), "\n\n".to_string()]),
+                    stop: Some(self.config.prompt_format.candidate_stop_tokens()),
                 },
                 return_logprob: true,
                 return_hidden_states: false,
@@ -421,7 +423,7 @@ impl SglangClient {
                 temperature: Some(self.config.temperature),
                 top_p: Some(self.config.top_p),
                 n: None,
-                stop: Some(vec!["```".to_string(), "\n\n".to_string()]),
+                stop: Some(self.config.prompt_format.candidate_stop_tokens()),
             },
             return_logprob: true,
             return_hidden_states: false,
@@ -560,7 +562,7 @@ impl SglangClient {
                         temperature: Some(temperature),
                         top_p: Some(self.config.top_p),
                         n: None,
-                        stop: Some(vec!["```".to_string()]),
+                        stop: Some(self.config.prompt_format.whole_proof_stop_tokens()),
                     },
                     return_logprob: true,
                     return_hidden_states: false,
@@ -596,6 +598,23 @@ impl SglangClient {
                                     .sum::<f64>()
                             })
                             .unwrap_or(0.0);
+                        // Detect truncation: if token count equals max_tokens,
+                        // the proof was likely cut off before a stop token.
+                        let n_tokens = item
+                            .get("meta_info")
+                            .and_then(|m| m.get("output_token_logprobs"))
+                            .and_then(|lps| lps.as_array())
+                            .map(|lps| lps.len())
+                            .unwrap_or(0);
+                        if n_tokens >= max_tokens {
+                            tracing::warn!(
+                                candidate = chunk_start + i,
+                                tokens = n_tokens,
+                                max_tokens = max_tokens,
+                                "Whole-proof hit token limit — likely truncated. \
+                                 Consider increasing hybrid_max_tokens."
+                            );
+                        }
                         if text.trim().is_empty() {
                             tracing::debug!(candidate = chunk_start + i, "Empty whole-proof text, skipping");
                             continue;
@@ -947,20 +966,7 @@ impl SglangClient {
     /// the extractor takes the first tactic plus any deeper-indented body lines,
     /// stopping at sibling tactics at the same or lesser indent.
     fn format_prompt(&self, proof_state: &str) -> String {
-        let message = format_tactic_message(proof_state);
-        // DeepSeek-Prover-V2 chat template with assistant prefix:
-        // The assistant echoes the tactic state inside a code fence, then starts
-        // an `example := by` block. The model continues with just the tactic.
-        format!(
-            "<\u{ff5c}begin\u{2581}of\u{2581}sentence\u{ff5c}>\
-             <\u{ff5c}User\u{ff5c}>{message}\
-             <\u{ff5c}Assistant\u{ff5c}>\
-             ```lean4\n\
-             /- tactic state:\n\
-             {proof_state}\n\
-             -/\n\
-             example := by\n  "
-        )
+        self.config.prompt_format.format_prompt(proof_state)
     }
 
     /// POST with retry (up to 3 attempts with exponential backoff on 5xx).
@@ -1071,30 +1077,45 @@ impl SglangClient {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_format_prompt() {
-        // Construct a throwaway client just to test format_prompt
+    fn make_test_client(prompt_format: PromptFormat) -> SglangClient {
         let config = SglangConfig {
             server_url: "http://localhost:30000".to_string(),
             temperature: 0.6,
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 4096,
+            prompt_format,
         };
-        let client = SglangClient {
+        SglangClient {
             client: Client::new(),
             base_url: Url::parse("http://localhost:30000").unwrap(),
             config,
             encode_capability: std::sync::Arc::new(AtomicU8::new(ENCODE_UNKNOWN)),
             circuit: CircuitBreaker::default(),
-        };
+        }
+    }
 
+    #[test]
+    fn test_format_prompt_deepseek() {
+        let client = make_test_client(PromptFormat::DeepSeekProver);
         let prompt = client.format_prompt("n : Nat\n\u{22a2} n + 0 = n");
         assert!(prompt.contains("<\u{ff5c}begin\u{2581}of\u{2581}sentence\u{ff5c}>"));
         assert!(prompt.contains("<\u{ff5c}User\u{ff5c}>"));
         assert!(prompt.contains("<\u{ff5c}Assistant\u{ff5c}>"));
         assert!(prompt.contains("tactic state:"));
         assert!(prompt.contains("n + 0 = n"));
+    }
+
+    #[test]
+    fn test_format_prompt_goedel() {
+        let client = make_test_client(PromptFormat::GoedelV2);
+        let state = "theorem test : 1 + 1 = 2 := by sorry";
+        let prompt = client.format_prompt(state);
+        assert!(prompt.contains("<|im_start|>user"));
+        assert!(prompt.contains("<|im_end|>"));
+        assert!(prompt.contains("<|im_start|>assistant"));
+        assert!(prompt.contains("<think>\n\n</think>"));
+        assert!(prompt.contains(state));
     }
 
     #[test]
@@ -1179,6 +1200,7 @@ mod tests {
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 3,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient {
             client: Client::new(),
@@ -1211,6 +1233,7 @@ mod tests {
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 4096,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient {
             client: Client::new(),
@@ -1257,6 +1280,7 @@ mod tests {
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 3,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient {
             client: Client::new(),
@@ -1285,6 +1309,7 @@ mod tests {
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 4096,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient {
             client: Client::new(),
@@ -1310,6 +1335,7 @@ mod tests {
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 3,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient {
             client: Client::new(),
@@ -1375,6 +1401,7 @@ mod tests {
             top_p: 0.95,
             max_tactic_tokens: 128,
             hidden_size: 4096,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient {
             client: Client::new(),

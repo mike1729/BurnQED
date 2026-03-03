@@ -24,7 +24,7 @@ use ebm::{
 use lean_repl::LeanPool;
 #[cfg(feature = "burn-ebm")]
 use lean_repl::TacticResult;
-use policy::{InferenceHandle, SglangClient, SglangConfig};
+use policy::{InferenceHandle, PromptFormat, SglangClient, SglangConfig};
 use search::{
     InferencePolicyProvider,
     SearchConfig, SearchEngine,
@@ -61,6 +61,8 @@ pub struct CommonSearchArgs {
     pub max_theorems: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
+    /// Prompt format override: "deepseek-prover" or "goedel-v2".
+    pub prompt_format: Option<String>,
 }
 
 /// Arguments for the `search` subcommand.
@@ -191,6 +193,7 @@ async fn load_policy_and_ebm(
     imports: Option<&[String]>,
     concurrency: usize,
     batch_encode_size: Option<usize>,
+    prompt_format: Option<&str>,
 ) -> anyhow::Result<(SearchConfig, LoadedPolicy)> {
     // 1. Load config
     let toml = load_search_toml(config_path)?;
@@ -205,12 +208,17 @@ async fn load_policy_and_ebm(
 
     // 3. Connect to SGLang server
     tracing::info!(url = server_url, "Connecting to SGLang inference server");
+    let prompt_fmt = PromptFormat::from_str(
+        prompt_format.unwrap_or(&toml.search.prompt_format),
+    )?;
+    tracing::info!(prompt_format = ?prompt_fmt, "Using prompt format");
     let config = SglangConfig {
         server_url: server_url.to_string(),
         temperature: temperature.unwrap_or(toml.search.temperature),
         top_p: toml.search.top_p,
         max_tactic_tokens: max_tactic_tokens.unwrap_or(toml.search.max_tactic_tokens),
         hidden_size: 4096,
+        prompt_format: prompt_fmt,
     };
     let client = SglangClient::new(config).await?;
     let inference_handle = InferenceHandle::new(client);
@@ -232,6 +240,7 @@ async fn load_policy_and_ebm(
                 top_p: 1.0,
                 max_tactic_tokens: 1,
                 hidden_size: 4096,
+                prompt_format: prompt_fmt,
             };
             let encode_client = SglangClient::new(encode_config).await?;
             InferenceHandle::new(encode_client)
@@ -369,6 +378,7 @@ async fn setup_search(
         common.imports.as_deref(),
         concurrency,
         common.batch_encode_size,
+        common.prompt_format.as_deref(),
     )
     .await?;
 
@@ -2143,6 +2153,7 @@ pub async fn run_train_ebm(args: TrainEbmArgs) -> anyhow::Result<()> {
             top_p: 1.0,
             max_tactic_tokens: 1,
             hidden_size,
+            prompt_format: PromptFormat::DeepSeekProver,
         };
         let client = SglangClient::new(config).await?;
         let handle = InferenceHandle::new(client);
@@ -2995,6 +3006,7 @@ pub async fn run_generate_negatives(args: GenerateNegativesArgs) -> anyhow::Resu
         top_p: 0.95,
         max_tactic_tokens: 128,
         hidden_size: 4096,
+        prompt_format: PromptFormat::DeepSeekProver,
     };
     let client = SglangClient::new(sglang_config).await?;
     let inference = InferenceHandle::new(client);

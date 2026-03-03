@@ -69,6 +69,9 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
+        /// Prompt format: "deepseek-prover" or "goedel-v2". Overrides config TOML.
+        #[arg(long)]
+        prompt_format: Option<String>,
     },
     /// Print statistics from a trajectory Parquet file.
     Summary {
@@ -135,6 +138,9 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
+        /// Prompt format: "deepseek-prover" or "goedel-v2". Overrides config TOML.
+        #[arg(long)]
+        prompt_format: Option<String>,
     },
     /// Compare evaluation results across iterations.
     Compare {
@@ -316,6 +322,7 @@ async fn main() -> anyhow::Result<()> {
             concurrency,
             max_theorems,
             imports,
+            prompt_format,
         } => {
             pipeline::run_search(SearchArgs {
                 common: CommonSearchArgs {
@@ -330,6 +337,7 @@ async fn main() -> anyhow::Result<()> {
                     concurrency,
                     max_theorems,
                     imports,
+                    prompt_format,
                 },
                 output,
                 dry_run,
@@ -363,6 +371,7 @@ async fn main() -> anyhow::Result<()> {
             max_tactic_tokens,
             batch_encode_size,
             imports,
+            prompt_format,
         } => {
             pipeline::run_eval(EvalArgs {
                 common: CommonSearchArgs {
@@ -377,6 +386,7 @@ async fn main() -> anyhow::Result<()> {
                     concurrency,
                     max_theorems,
                     imports,
+                    prompt_format,
                 },
                 max_rounds,
                 pass_n,
