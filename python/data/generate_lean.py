@@ -39,13 +39,14 @@ def fix_statement(statement: str) -> str:
     # Fix: `𝓝` notation requires `open Topology`; use `nhds` instead.
     statement = statement.replace("𝓝", "nhds")
 
-    # Fix: nhds bracket notation `nhds[≠] x` → `nhdsWithin x {x}ᶜ` etc.
+    # Fix: nhds bracket notation `nhds[≠] x` → `nhdsWithin x ({x}ᶜ)` etc.
     # These are PutnamBench shorthand for punctured/one-sided neighborhoods.
-    statement = re.sub(r'nhds\[≠\]\s*(\S+)', r'nhdsWithin \1 ({\1}ᶜ)', statement)
-    statement = re.sub(r'nhds\[>\]\s*(\S+)', r'nhdsWithin \1 (Set.Ioi \1)', statement)
-    statement = re.sub(r'nhds\[<\]\s*(\S+)', r'nhdsWithin \1 (Set.Iio \1)', statement)
-    statement = re.sub(r'nhds\[≥\]\s*(\S+)', r'nhdsWithin \1 (Set.Ici \1)', statement)
-    statement = re.sub(r'nhds\[≤\]\s*(\S+)', r'nhdsWithin \1 (Set.Iic \1)', statement)
+    # Use \w+ (not \S+) to avoid capturing trailing `)` from enclosing parens.
+    statement = re.sub(r'nhds\[≠\]\s*(\w+)', r'nhdsWithin \1 ({\1}ᶜ)', statement)
+    statement = re.sub(r'nhds\[>\]\s*(\w+)', r'nhdsWithin \1 (Set.Ioi \1)', statement)
+    statement = re.sub(r'nhds\[<\]\s*(\w+)', r'nhdsWithin \1 (Set.Iio \1)', statement)
+    statement = re.sub(r'nhds\[≥\]\s*(\w+)', r'nhdsWithin \1 (Set.Ici \1)', statement)
+    statement = re.sub(r'nhds\[≤\]\s*(\w+)', r'nhdsWithin \1 (Set.Iic \1)', statement)
 
     # Fix: bare `cexp` → `Complex.exp` (removed from global namespace in Mathlib 4.27)
     statement = re.sub(r"(?<!\w)cexp\b", "Complex.exp", statement)
@@ -94,8 +95,11 @@ def fix_statement(statement: str) -> str:
     # works as an argument, e.g. `Nat.gcd (Nat.factorial 20) 200000`.
     # Handle `(expr)!` first (before simple patterns eat inner variables).
     statement = _fix_paren_factorials(statement)
-    statement = re.sub(r"\b(\d+)\s*!(?!\[|=|₂|\w)", r"(Nat.factorial \1)", statement)
-    statement = re.sub(r"\b([a-z]\w*)\s*!(?!\[|=|₂|\w)", r"(Nat.factorial \1)", statement)
+    statement = re.sub(r"\b(\d+)\s*!(?!\[|=|₂|\w|\()", r"(Nat.factorial \1)", statement)
+    # Single-letter var: n! or n ! → (Nat.factorial n)
+    statement = re.sub(r"\b([a-z])\s*!(?!\[|=|₂|\w|\()", r"(Nat.factorial \1)", statement)
+    # Multi-char var: require space before ! to avoid matching force-unwrap (getLast!)
+    statement = re.sub(r"\b([a-z]\w+)\s+!(?!\[|=|₂|\w|\()", r"(Nat.factorial \1)", statement)
 
     # Fix: `{x, ℝ | P}` → `{x : ℝ | P}` (malformed set-builder type annotation in v2c)
     statement = re.sub(r"\{(\w+), (ℤ|ℝ|ℕ|ℂ|ℚ) \|", r"{\1 : \2 |", statement)
@@ -128,6 +132,10 @@ def fix_statement(statement: str) -> str:
     # Also handle `letI` bindings that need `;` separators.
     statement = re.sub(r'(?<=[^\s,;])\s+(letI\s)', r'; \1', statement)
 
+    # Fix: `∀ :` with no binder variable → strip the `∀ :` prefix.
+    # Produced when signature_to_expression mistakes `:` in `:=` as a separator.
+    statement = re.sub(r'^∀\s*:\s+', '', statement)
+
     # Fix: bare `rexp` → `Real.exp` (PutnamBench shorthand)
     statement = re.sub(r"(?<!\w\.)(?<!\w)rexp\b", "Real.exp", statement)
 
@@ -144,7 +152,7 @@ def _fix_paren_factorials(s: str) -> str:
     """Replace `(expr)!` with `(Nat.factorial (expr))`, handling nested parens."""
     import re
     while True:
-        m = re.search(r'\)\s*!(?!\[|=|₂|\w)', s)
+        m = re.search(r'\)\s*!(?!\[|=|₂|\w|\()', s)
         if not m:
             break
         close_pos = m.start()  # position of `)`
@@ -187,7 +195,7 @@ def _colon_to_comma_outside_braces(s: str) -> str:
             i += 1
         elif s[i] == ')' and brace_depth == 0:
             # Check if this `)` is followed by ` : CONCLUSION`
-            m = re.match(r'\)\s*:\s+(?=[A-Z∃∀¬↑⟨])', s[i:])
+            m = re.match(r'\)\s*:\s+(?=\S)', s[i:])
             if m:
                 # Replace `) :` with `), `
                 result.append(')')

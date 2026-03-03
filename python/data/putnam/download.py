@@ -88,11 +88,12 @@ def qualify_statement(stmt: str) -> str:
     stmt = stmt.replace("𝓝", "nhds")
 
     # nhds bracket notation: nhds[≠] x → nhdsWithin x ({x}ᶜ) etc.
-    stmt = re.sub(r'nhds\[≠\]\s*(\S+)', r'nhdsWithin \1 ({\1}ᶜ)', stmt)
-    stmt = re.sub(r'nhds\[>\]\s*(\S+)', r'nhdsWithin \1 (Set.Ioi \1)', stmt)
-    stmt = re.sub(r'nhds\[<\]\s*(\S+)', r'nhdsWithin \1 (Set.Iio \1)', stmt)
-    stmt = re.sub(r'nhds\[≥\]\s*(\S+)', r'nhdsWithin \1 (Set.Ici \1)', stmt)
-    stmt = re.sub(r'nhds\[≤\]\s*(\S+)', r'nhdsWithin \1 (Set.Iic \1)', stmt)
+    # Use \w+ (not \S+) to avoid capturing trailing `)` from enclosing parens.
+    stmt = re.sub(r'nhds\[≠\]\s*(\w+)', r'nhdsWithin \1 ({\1}ᶜ)', stmt)
+    stmt = re.sub(r'nhds\[>\]\s*(\w+)', r'nhdsWithin \1 (Set.Ioi \1)', stmt)
+    stmt = re.sub(r'nhds\[<\]\s*(\w+)', r'nhdsWithin \1 (Set.Iio \1)', stmt)
+    stmt = re.sub(r'nhds\[≥\]\s*(\w+)', r'nhdsWithin \1 (Set.Ici \1)', stmt)
+    stmt = re.sub(r'nhds\[≤\]\s*(\w+)', r'nhdsWithin \1 (Set.Iic \1)', stmt)
 
     # Apply the main qualification map
     stmt = _QUALIFY_PATTERN.sub(lambda m: _QUALIFY_MAP[m.group(1)], stmt)

@@ -124,7 +124,8 @@ def signature_to_expression(signature: str) -> str:
             depth_brace -= 1
             saw_close_delim = depth_brace == 0
         elif ch == ':' and depth_paren == 0 and depth_bracket == 0 and depth_brace == 0:
-            if saw_close_delim:
+            # Skip `:=` (assignment) — not a param-goal separator
+            if saw_close_delim and (i + 1 >= len(signature) or signature[i + 1] != '='):
                 last_colon = i
             saw_close_delim = False
         elif ch in ' \t\n\r':
