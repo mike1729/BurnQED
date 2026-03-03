@@ -13,6 +13,7 @@ use ebm::inference::EBMValueFn;
 #[cfg(feature = "burn-ebm")]
 use crate::engine::ValueScorer;
 use crate::engine::{PolicyProvider, ProofEnvironment, SearchError, TacticRunner};
+use crate::tactic_rewrite;
 
 // ---------------------------------------------------------------------------
 // NullPolicyProvider — returns no candidates (probe-only search)
@@ -98,9 +99,34 @@ impl TacticRunner for ProofHandleOwned {
         goal_id: Option<u64>,
         tactic: &str,
     ) -> Result<TacticResult, SearchError> {
-        self.run_tactic(state_id, goal_id, tactic)
+        let rewritten = tactic_rewrite::rewrite_tactic(tactic);
+        if rewritten != tactic {
+            tracing::debug!(
+                original = tactic,
+                rewritten = rewritten.as_ref(),
+                "Tactic rewritten (v4.8→v4.27)"
+            );
+        }
+        let result = self
+            .run_tactic(state_id, goal_id, &rewritten)
             .await
-            .map_err(SearchError::Lean)
+            .map_err(SearchError::Lean)?;
+
+        // Log lemma names from failed tactics to build translation vocabulary.
+        // Grep logs for "lemma_vocab" to collect all identifiers that Lean rejected.
+        if let TacticResult::Failed { ref message } = result {
+            let lemmas = tactic_rewrite::extract_lemma_names(&rewritten);
+            if !lemmas.is_empty() {
+                tracing::debug!(
+                    tactic = rewritten.as_ref(),
+                    lemmas = lemmas.as_str(),
+                    error = message.as_str(),
+                    "lemma_vocab"
+                );
+            }
+        }
+
+        Ok(result)
     }
 
     async fn recycle(&mut self) -> Result<(), SearchError> {

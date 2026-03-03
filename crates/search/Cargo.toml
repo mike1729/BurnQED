@@ -16,6 +16,7 @@ serde = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 futures = { workspace = true }
+regex = { workspace = true }
 
 [features]
 default = []

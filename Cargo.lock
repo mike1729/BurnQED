@@ -4814,6 +4814,7 @@ dependencies = [
  "lean-repl",
  "ordered-float 4.6.0",
  "policy",
+ "regex",
  "serde",
  "thiserror 2.0.18",
  "tokio",

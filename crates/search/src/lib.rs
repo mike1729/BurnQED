@@ -19,6 +19,7 @@ pub mod config;
 pub mod engine;
 pub mod mocks;
 pub mod node;
+pub mod tactic_rewrite;
 pub mod trie;
 
 pub use adapters::{CachingEncoder, InferencePolicyProvider, NullPolicyProvider};
