@@ -8,13 +8,16 @@
 #   ./scripts/prepare_putnam.sh
 #
 # Usage:
-#   ./scripts/run_putnam_eval.sh                          # default settings
+#   ./scripts/run_putnam_eval.sh                          # default (DeepSeek)
+#   MODEL=goedel ./scripts/run_putnam_eval.sh             # use Goedel-Prover-V2-8B
 #   ITER=1 ./scripts/run_putnam_eval.sh                   # use iter_1 model + EBM
 #   TAG=ablation ./scripts/run_putnam_eval.sh             # custom output subdirectory
 #   MAX_THEOREMS=50 ./scripts/run_putnam_eval.sh          # cap theorems
 #   DRY_RUN=1 ./scripts/run_putnam_eval.sh                # print command without running
 #
 # Environment:
+#   MODEL           Model family: "deepseek" (default) or "goedel".
+#                   Selects HF model ID, config TOML, and prompt format.
 #   ITER            Iteration number (default: 0). Determines model + optional EBM.
 #   TAG             Output subdirectory tag (default: "putnam_eval")
 #   SGLANG_URL      SGLang inference server (default: http://localhost:30000)
@@ -22,7 +25,7 @@
 #   CONCURRENCY     Parallel theorem searches (default: 3)
 #   NUM_WORKERS     Lean REPL pool size (default: 4)
 #   MAX_THEOREMS    Cap theorems (default: unlimited)
-#   CONFIG          Search config TOML (default: configs/search_putnam.toml)
+#   CONFIG          Search config TOML (overrides MODEL-based default)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
 #   RESUME          Set to 1 to auto-resume from partial trajectories (default: 1)
 #   DRY_RUN         Set to 1 to print commands without executing (default: 0)
@@ -36,6 +39,7 @@ source "${REPO_ROOT}/scripts/_lib.sh"
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
+MODEL="${MODEL:-deepseek}"
 ITER="${ITER:-0}"
 TAG="${TAG:-putnam_eval}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
@@ -43,10 +47,31 @@ ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 CONCURRENCY="${CONCURRENCY:-3}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
-CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_putnam.toml}"
 NO_EBM="${NO_EBM:-0}"
 RESUME="${RESUME:-1}"
 DRY_RUN="${DRY_RUN:-0}"
+
+# ── Model-family defaults ────────────────────────────────────────────────
+# MODEL selects HF model ID and config TOML. CONFIG env var overrides.
+
+case "${MODEL,,}" in
+    deepseek|ds)
+        DEFAULT_LLM_BASE="deepseek-ai/DeepSeek-Prover-V2-7B"
+        DEFAULT_CONFIG="${REPO_ROOT}/configs/search_putnam.toml"
+        MODEL_LABEL="DeepSeek-Prover-V2-7B"
+        ;;
+    goedel|gv2)
+        DEFAULT_LLM_BASE="Goedel-LM/Goedel-Prover-V2-8B"
+        DEFAULT_CONFIG="${REPO_ROOT}/configs/search_putnam_goedel.toml"
+        MODEL_LABEL="Goedel-Prover-V2-8B"
+        ;;
+    *)
+        echo "ERROR: Unknown MODEL=${MODEL}. Expected 'deepseek' or 'goedel'."
+        exit 1
+        ;;
+esac
+
+CONFIG="${CONFIG:-${DEFAULT_CONFIG}}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
@@ -64,7 +89,7 @@ fi
 # ── Resolve model + EBM ──────────────────────────────────────────────────
 
 if [ "$ITER" -eq 0 ]; then
-    LLM_DIR="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
+    LLM_DIR="${LLM_BASE:-${DEFAULT_LLM_BASE}}"
 else
     LLM_DIR="${MERGED_MODEL_DIR}/iter_${ITER}"
     if [ ! -d "$LLM_DIR" ]; then
@@ -96,11 +121,12 @@ LOG_FILE="${LOG_DIR}/putnam_eval_iter${ITER}.log"
 # ── Print plan ────────────────────────────────────────────────────────────
 
 echo "================================================================"
-echo "  PutnamBench Evaluation — iter_${ITER}"
+echo "  PutnamBench Evaluation — ${MODEL_LABEL} iter_${ITER}"
 echo "================================================================"
+echo "  Model family: ${MODEL_LABEL}"
 echo "  Benchmark:    ${JSON_FILE}"
 echo "  Config:       ${CONFIG}"
-echo "  Model:        ${LLM_DIR}"
+echo "  Model path:   ${LLM_DIR}"
 if [ -n "$EBM_FLAG" ]; then
     echo "  EBM:          ${EBM_DIR}"
 else

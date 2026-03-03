@@ -10,13 +10,16 @@
 # ./scripts/prepare_data.sh or ./scripts/setup_runpod.sh.
 #
 # Usage:
-#   ./scripts/run_minif2f_eval.sh                          # all available versions
+#   ./scripts/run_minif2f_eval.sh                          # all available versions (DeepSeek)
+#   MODEL=goedel ./scripts/run_minif2f_eval.sh             # use Goedel-Prover-V2-8B
 #   VERSIONS="v2s_test v2c_test" ./scripts/run_minif2f_eval.sh   # specific versions
 #   ITER=1 ./scripts/run_minif2f_eval.sh                   # use iter_1 model + EBM
 #   TAG=ablation ./scripts/run_minif2f_eval.sh             # custom output subdirectory
 #   DRY_RUN=1 ./scripts/run_minif2f_eval.sh                # print commands without running
 #
 # Environment:
+#   MODEL           Model family: "deepseek" (default) or "goedel".
+#                   Selects HF model ID, config TOML, and prompt format.
 #   VERSIONS        Space-separated list from: test valid v2s_test v2s_valid v2c_test v2c_valid
 #                   Default: all versions whose benchmark JSON exists
 #   ITER            Iteration number (default: 0). Determines model + optional EBM.
@@ -26,7 +29,7 @@
 #   CONCURRENCY     Parallel theorem searches (default: 3)
 #   NUM_WORKERS     Lean REPL pool size (default: 4)
 #   MAX_THEOREMS    Cap theorems per version (default: unlimited)
-#   CONFIG          Search config TOML (default: configs/search_minif2f.toml)
+#   CONFIG          Search config TOML (overrides MODEL-based default)
 #   NO_EBM          Set to 1 to skip EBM even if available (default: 0)
 #   RESUME          Set to 1 to auto-resume from partial trajectories (default: 1)
 #   DRY_RUN         Set to 1 to print commands without executing (default: 0)
@@ -40,6 +43,7 @@ source "${REPO_ROOT}/scripts/_lib.sh"
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
+MODEL="${MODEL:-deepseek}"
 ITER="${ITER:-0}"
 TAG="${TAG:-minif2f_eval}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
@@ -47,10 +51,31 @@ ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
 CONCURRENCY="${CONCURRENCY:-3}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 MAX_THEOREMS="${MAX_THEOREMS:-}"
-CONFIG="${CONFIG:-${REPO_ROOT}/configs/search_minif2f.toml}"
 NO_EBM="${NO_EBM:-0}"
 RESUME="${RESUME:-1}"
 DRY_RUN="${DRY_RUN:-0}"
+
+# ── Model-family defaults ────────────────────────────────────────────────
+# MODEL selects HF model ID and config TOML. CONFIG env var overrides.
+
+case "${MODEL,,}" in
+    deepseek|ds)
+        DEFAULT_LLM_BASE="deepseek-ai/DeepSeek-Prover-V2-7B"
+        DEFAULT_CONFIG="${REPO_ROOT}/configs/search_minif2f.toml"
+        MODEL_LABEL="DeepSeek-Prover-V2-7B"
+        ;;
+    goedel|gv2)
+        DEFAULT_LLM_BASE="Goedel-LM/Goedel-Prover-V2-8B"
+        DEFAULT_CONFIG="${REPO_ROOT}/configs/search_minif2f_goedel.toml"
+        MODEL_LABEL="Goedel-Prover-V2-8B"
+        ;;
+    *)
+        echo "ERROR: Unknown MODEL=${MODEL}. Expected 'deepseek' or 'goedel'."
+        exit 1
+        ;;
+esac
+
+CONFIG="${CONFIG:-${DEFAULT_CONFIG}}"
 
 PROVER="cargo run --release -p prover-core $CARGO_FEATURES --"
 
@@ -103,7 +128,7 @@ fi
 # ── Resolve model + EBM ──────────────────────────────────────────────────
 
 if [ "$ITER" -eq 0 ]; then
-    LLM_DIR="${LLM_BASE:-deepseek-ai/DeepSeek-Prover-V2-7B}"
+    LLM_DIR="${LLM_BASE:-${DEFAULT_LLM_BASE}}"
 else
     LLM_DIR="${MERGED_MODEL_DIR}/iter_${ITER}"
     if [ ! -d "$LLM_DIR" ]; then
@@ -131,11 +156,12 @@ mkdir -p "$OUT_DIR" "$LOG_DIR"
 # ── Print plan ────────────────────────────────────────────────────────────
 
 echo "================================================================"
-echo "  miniF2F Evaluation — iter_${ITER}"
+echo "  miniF2F Evaluation — ${MODEL_LABEL} iter_${ITER}"
 echo "================================================================"
+echo "  Model family: ${MODEL_LABEL}"
 echo "  Versions:     ${VERSIONS}"
 echo "  Config:       ${CONFIG}"
-echo "  Model:        ${LLM_DIR}"
+echo "  Model path:   ${LLM_DIR}"
 if [ -n "$EBM_FLAG" ]; then
     echo "  EBM:          ${EBM_DIR}"
 else
