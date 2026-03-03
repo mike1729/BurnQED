@@ -585,6 +585,22 @@ impl SearchEngine {
                                 max_depth_reached = child_depth;
                             }
 
+                            // Depth cap: stop replaying this completion if it
+                            // exceeds max_depth. Without this check, long hybrid
+                            // completions (e.g. have→rw→simp spirals) bypass the
+                            // depth limit and can reach depth 40+.
+                            if child_depth >= self.config.max_depth {
+                                stats.depth_capped += 1;
+                                tracing::debug!(
+                                    parent = current_idx,
+                                    child_depth,
+                                    max_depth = self.config.max_depth,
+                                    tactic = tactic.as_str(),
+                                    "Hybrid replay depth cap reached, stopping"
+                                );
+                                break;
+                            }
+
                             let child_idx = arena.len();
                             let state_preview = truncate_str(&state_pp, 100);
                             tracing::debug!(
@@ -916,6 +932,7 @@ impl SearchEngine {
             context_stuffing = stats.context_stuffing_blocked,
             have_goal_increase = stats.have_goal_increase_pruned,
             have_chain = stats.have_chain_pruned,
+            depth_capped = stats.depth_capped,
             loops = stats.loops_detected,
             time_ms = wall_time_ms,
             "Hybrid search exhausted without proof"

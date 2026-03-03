@@ -104,6 +104,8 @@ pub struct SearchStats {
     pub have_goal_increase_pruned: u32,
     /// Number of tactics pruned for exceeding consecutive-have chain limit.
     pub have_chain_pruned: u32,
+    /// Number of hybrid replay completions stopped by depth cap.
+    pub depth_capped: u32,
 
     // --- Timing breakdown (added for profiling) ---
 
