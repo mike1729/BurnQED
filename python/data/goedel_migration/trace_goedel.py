@@ -15,8 +15,12 @@ Usage:
     # Initialize the main repo (one-time setup):
     python python/data/goedel_migration/trace_goedel.py --init-repo
 
-    # Test run with 5 proofs:
-    python python/data/goedel_migration/trace_goedel.py --test 5
+    # Test run with 5 proofs (local FS for speed):
+    python python/data/goedel_migration/trace_goedel.py --test 5 \
+        --local-dir /root/goedel_trace/repo \
+        --cache-dir /root/goedel_trace/cache \
+        --tmp-dir /root/goedel_trace/tmp \
+        --no-build-deps --workers 32
 
     # Full trace (after test validation):
     python python/data/goedel_migration/trace_goedel.py --full
@@ -35,6 +39,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 logging.basicConfig(
@@ -48,13 +53,8 @@ ELAN_BIN = Path.home() / ".elan" / "bin"
 if ELAN_BIN.is_dir() and str(ELAN_BIN) not in os.environ.get("PATH", ""):
     os.environ["PATH"] = f"{ELAN_BIN}:{os.environ.get('PATH', '')}"
 
-# Point LeanDojo cache and temp dir to /workspace to avoid filling overlay fs
-WORKSPACE_CACHE = Path("/workspace/.cache/lean_dojo")
-WORKSPACE_CACHE.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("CACHE_DIR", str(WORKSPACE_CACHE))
-WORKSPACE_TMP = Path("/workspace/.cache/lean_dojo_tmp")
-WORKSPACE_TMP.mkdir(parents=True, exist_ok=True)
-os.environ.setdefault("TMP_DIR", str(WORKSPACE_TMP))
+# NOTE: CACHE_DIR / TMP_DIR env vars are set in configure_env() after arg
+# parsing so that --cache-dir / --tmp-dir can override. Do NOT set them here.
 
 ROOT = Path(__file__).resolve().parents[3]
 GOEDEL_DIR = ROOT / "data/lean/goedel_migration"
@@ -67,14 +67,44 @@ OUTPUT_DIR = ROOT / "data/traced"
 BANNED_RE = re.compile(r"\b(?:sorry|admit|cheat|sorryAx)\b")
 
 
-def get_passing_seqs() -> dict:
-    """Load compile results and return {seq: info} for passing proofs."""
+def configure_env(args):
+    """Set LeanDojo env vars based on CLI args.
+
+    Must be called BEFORE importing lean_dojo (which reads env at import time).
+    """
+    if args.cache_dir:
+        cache_dir = Path(args.cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["CACHE_DIR"] = str(cache_dir)
+        logger.info("CACHE_DIR = %s", cache_dir)
+
+    if args.tmp_dir:
+        tmp_dir = Path(args.tmp_dir)
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["TMP_DIR"] = str(tmp_dir)
+        logger.info("TMP_DIR = %s", tmp_dir)
+
+    if args.workers:
+        os.environ["NUM_PROCS"] = str(args.workers)
+        logger.info("NUM_PROCS = %s", args.workers)
+
+
+def get_passing_seqs(strict: bool = False) -> dict:
+    """Load compile results and return {seq: info} for passing proofs.
+
+    Args:
+        strict: If True, only include proofs with status "ok" (no warnings).
+                If False, include "ok" and "warn". Use strict=True for test
+                repos where isolated compilation may fail on "warn" proofs
+                that depend on GoedelMigration-specific context.
+    """
     with open(COMPILE_RESULTS) as f:
         data = json.load(f)
+    allowed = ("ok",) if strict else ("ok", "warn")
     return {
         seq: info
         for seq, info in data["completed"].items()
-        if info["status"] in ("ok", "warn")
+        if info["status"] in allowed
     }
 
 
@@ -143,11 +173,22 @@ def init_goedel_repo():
     return commit
 
 
-def create_test_repo(n_proofs: int, passing_seqs: dict) -> tuple:
+def create_test_repo(n_proofs: int, passing_seqs: dict,
+                     goedel_dir: Path = None, tmp_base: Path = None) -> tuple:
     """Create a minimal Lean project with N proof files for test tracing.
 
-    Returns (tmpdir_path, commit_hash).
+    Args:
+        n_proofs: Number of proofs to include.
+        passing_seqs: {seq_str: info_dict} from compile results.
+        goedel_dir: Path to the goedel_migration directory (source of proofs).
+        tmp_base: Base directory for the temp repo. If None, uses system temp.
+
+    Returns (proj_dir, commit_hash, selected_seqs).
     """
+    if goedel_dir is None:
+        goedel_dir = GOEDEL_DIR
+    proof_dir = goedel_dir / "GoedelMigration"
+
     # Pick N passing proofs, spread across the range
     sorted_seqs = sorted(passing_seqs.keys(), key=int)
     step = max(1, len(sorted_seqs) // n_proofs)
@@ -156,22 +197,23 @@ def create_test_repo(n_proofs: int, passing_seqs: dict) -> tuple:
     logger.info("Selected %d proofs for test: seqs %s", len(selected),
                 [int(s) for s in selected[:10]])
 
-    tmpdir = tempfile.mkdtemp(prefix="goedel_trace_test_")
+    tmpdir = tempfile.mkdtemp(prefix="goedel_trace_test_", dir=tmp_base)
     tmpdir = Path(tmpdir)
     proj_dir = tmpdir / "GoedelTest"
     src_dir = proj_dir / "GoedelTest"
     src_dir.mkdir(parents=True)
 
     # Copy lean-toolchain
-    shutil.copy(GOEDEL_DIR / "lean-toolchain", proj_dir / "lean-toolchain")
+    shutil.copy(goedel_dir / "lean-toolchain", proj_dir / "lean-toolchain")
 
     # Write lakefile.lean
+    # NOTE: Lean 4.27 Lake requires `.ofNat` wrapper for numeric leanOptions
     (proj_dir / "lakefile.lean").write_text(
         'import Lake\nopen Lake DSL\n\n'
         'package goedelTest where\n'
         '  leanOptions := #[\n'
         '    ⟨`autoImplicit, false⟩,\n'
-        '    ⟨`maxHeartbeats, 800000⟩\n'
+        '    ⟨`maxHeartbeats, .ofNat 800000⟩\n'
         '  ]\n\n'
         '@[default_target]\n'
         'lean_lib GoedelTest where\n'
@@ -188,21 +230,20 @@ def create_test_repo(n_proofs: int, passing_seqs: dict) -> tuple:
         new_module = old_module.replace("GoedelMigration", "GoedelTest")
         imports.append(f"import {new_module}")
 
-        # Copy proof file, fixing the module reference if needed
+        # Copy proof file
         src_name = old_module.split(".")[-1] + ".lean"
-        src_file = PROOF_DIR / src_name
+        src_file = proof_dir / src_name
         dst_file = src_dir / src_name
         shutil.copy(src_file, dst_file)
 
     (proj_dir / "GoedelTest.lean").write_text("\n".join(imports) + "\n")
 
-    # Build dependencies (reuse lake-packages from main project if possible)
-    logger.info("Building test project dependencies...")
-    lake_packages = GOEDEL_DIR / ".lake"
-    if lake_packages.exists():
-        # Symlink .lake to avoid re-downloading Mathlib
-        os.symlink(lake_packages, proj_dir / ".lake")
-        logger.info("Symlinked .lake from main project")
+    # NOTE: We intentionally do NOT symlink .lake from the main project.
+    # LeanDojo's _trace() calls clone_and_checkout() which creates a fresh
+    # working copy, then runs `lake exe cache get` (when build_deps=False)
+    # to download pre-built Mathlib oleans. Symlinking .lake would point
+    # to network FS (defeating local-FS purpose) and confuse LeanDojo's
+    # build step.
 
     # Init git repo
     subprocess.run(["git", "init"], cwd=proj_dir, check=True,
@@ -230,8 +271,16 @@ def create_test_repo(n_proofs: int, passing_seqs: dict) -> tuple:
     return proj_dir, commit, selected
 
 
-def trace_repo(repo_path: Path, commit: str, dst_dir: Path = None):
+def trace_repo(repo_path: Path, commit: str, dst_dir: Path = None,
+               build_deps: bool = False):
     """Run LeanDojo trace on a local Lean git repo.
+
+    Args:
+        repo_path: Path to the git repo.
+        commit: Git commit hash to trace.
+        dst_dir: Optional directory to save traced output.
+        build_deps: If False (default), use `lake exe cache get` to download
+            pre-built Mathlib oleans instead of rebuilding from source.
 
     Returns a TracedRepo object.
     """
@@ -242,9 +291,11 @@ def trace_repo(repo_path: Path, commit: str, dst_dir: Path = None):
     repo = LeanGitRepo(repo_path_str, commit)
     logger.info("Lean version: %s", repo.lean_version)
 
-    logger.info("Starting trace (this may take a while)...")
-    traced_repo = trace(repo, dst_dir=dst_dir)
-    logger.info("Trace complete!")
+    logger.info("Starting trace (build_deps=%s)...", build_deps)
+    t0 = time.monotonic()
+    traced_repo = trace(repo, dst_dir=dst_dir, build_deps=build_deps)
+    elapsed = time.monotonic() - t0
+    logger.info("Trace complete in %.1fs", elapsed)
     return traced_repo
 
 
@@ -259,7 +310,13 @@ def extract_pairs(traced_repo, manifest_map: dict, source_label: str = "goedel_w
     theorems_seen = set()
 
     for traced_file in traced_repo.traced_files:
-        for thm in traced_file.traced_theorems:
+        # LeanDojo 4.20.0 uses get_traced_theorems() method
+        try:
+            traced_theorems = traced_file.get_traced_theorems()
+        except AttributeError:
+            traced_theorems = traced_file.traced_theorems
+
+        for thm in traced_theorems:
             if not thm.has_tactic_proof:
                 continue
 
@@ -380,24 +437,73 @@ def main():
         "--output", type=str, default=None,
         help="Output JSONL path (default: auto-generated)",
     )
+    parser.add_argument(
+        "--local-dir", type=str, default=None,
+        help="Override goedel_migration source directory (e.g. local NVMe copy)",
+    )
+    parser.add_argument(
+        "--cache-dir", type=str, default=None,
+        help="LeanDojo cache directory (sets CACHE_DIR env var)",
+    )
+    parser.add_argument(
+        "--tmp-dir", type=str, default=None,
+        help="LeanDojo temp directory (sets TMP_DIR env var)",
+    )
+    parser.add_argument(
+        "--build-deps", action="store_true", default=False,
+        help="Build and trace Mathlib dependencies (slow, usually not wanted)",
+    )
+    parser.add_argument(
+        "--no-build-deps", action="store_true", default=False,
+        help="Use `lake exe cache get` for pre-built Mathlib oleans (default)",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="Number of LeanDojo worker threads (sets NUM_PROCS env var)",
+    )
     args = parser.parse_args()
+
+    # Resolve build_deps: --no-build-deps is the default, --build-deps overrides
+    build_deps = args.build_deps and not args.no_build_deps
+
+    # Set env vars BEFORE importing lean_dojo (it reads them at import time)
+    configure_env(args)
 
     if args.init_repo:
         commit = init_goedel_repo()
         print(f"Repo initialized. Commit: {commit}")
         return
 
-    passing_seqs = get_passing_seqs()
+    # Resolve source directory
+    goedel_dir = Path(args.local_dir) if args.local_dir else GOEDEL_DIR
+    proof_dir = goedel_dir / "GoedelMigration"
+    if not proof_dir.is_dir():
+        logger.error("Proof directory not found: %s", proof_dir)
+        sys.exit(1)
+    logger.info("Using goedel source: %s", goedel_dir)
+
+    # Use strict mode for test repos (only "ok" proofs) since "warn" proofs
+    # may fail when compiled in isolation outside the GoedelMigration context.
+    strict = bool(args.test)
+    passing_seqs = get_passing_seqs(strict=strict)
     manifest_map = get_manifest_map()
-    logger.info("Loaded %d passing proofs", len(passing_seqs))
+    logger.info("Loaded %d passing proofs (strict=%s)", len(passing_seqs), strict)
+
+    # Determine tmp_base for test repos (use same FS as cache if set)
+    tmp_base = Path(args.tmp_dir) if args.tmp_dir else None
 
     if args.test:
         n = args.test
-        proj_dir, commit, selected_seqs = create_test_repo(n, passing_seqs)
+        proj_dir, commit, selected_seqs = create_test_repo(
+            n, passing_seqs, goedel_dir=goedel_dir, tmp_base=tmp_base,
+        )
         output_path = Path(args.output) if args.output else OUTPUT_DIR / "goedel_427_test_pairs.jsonl"
 
         try:
-            traced_repo = trace_repo(proj_dir, commit, dst_dir=args.dst_dir)
+            traced_repo = trace_repo(
+                proj_dir, commit, dst_dir=args.dst_dir,
+                build_deps=build_deps,
+            )
             pairs = extract_pairs(traced_repo, manifest_map)
             write_pairs(pairs, output_path)
             print_summary(pairs)
@@ -407,22 +513,25 @@ def main():
             shutil.rmtree(proj_dir.parent, ignore_errors=True)
 
     elif args.full:
-        # Ensure goedel_migration is a git repo
-        git_dir = GOEDEL_DIR / ".git"
+        # Ensure goedel dir is a git repo
+        git_dir = goedel_dir / ".git"
         if not git_dir.exists():
             logger.error(
-                "goedel_migration is not a git repo. Run --init-repo first."
+                "%s is not a git repo. Run --init-repo first.", goedel_dir,
             )
             sys.exit(1)
 
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=GOEDEL_DIR, capture_output=True, text=True, check=True,
+            cwd=goedel_dir, capture_output=True, text=True, check=True,
         )
         commit = result.stdout.strip()
         output_path = Path(args.output) if args.output else OUTPUT_DIR / "goedel_427_pairs.jsonl"
 
-        traced_repo = trace_repo(GOEDEL_DIR, commit, dst_dir=args.dst_dir)
+        traced_repo = trace_repo(
+            goedel_dir, commit, dst_dir=args.dst_dir,
+            build_deps=build_deps,
+        )
         pairs = extract_pairs(traced_repo, manifest_map)
         write_pairs(pairs, output_path)
         print_summary(pairs)
