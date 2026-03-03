@@ -111,7 +111,7 @@ fi
 
 # ── Output directory ──────────────────────────────────────────────────────
 
-OUT_DIR="${EVAL_DIR}/${TAG}/iter_${ITER}"
+OUT_DIR="${EVAL_DIR}/${TAG}/${MODEL,,}/iter_${ITER}"
 mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 TRAJECTORY_FILE="${OUT_DIR}/putnam.parquet"
