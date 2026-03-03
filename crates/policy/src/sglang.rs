@@ -582,6 +582,7 @@ impl SglangClient {
                         )
                     })?;
                     let mut chunk_tactics = Vec::with_capacity(items.len());
+                    let mut truncated_count = 0u32;
                     for (i, item) in items.iter().enumerate() {
                         let text = item
                             .get("text")
@@ -607,13 +608,7 @@ impl SglangClient {
                             .map(|lps| lps.len())
                             .unwrap_or(0);
                         if n_tokens >= max_tokens {
-                            tracing::warn!(
-                                candidate = chunk_start + i,
-                                tokens = n_tokens,
-                                max_tokens = max_tokens,
-                                "Whole-proof hit token limit — likely truncated. \
-                                 Consider increasing hybrid_max_tokens."
-                            );
+                            truncated_count += 1;
                         }
                         if text.trim().is_empty() {
                             tracing::debug!(candidate = chunk_start + i, "Empty whole-proof text, skipping");
@@ -625,6 +620,15 @@ impl SglangClient {
                             log_prob,
                             tokens: Vec::new(),
                         });
+                    }
+                    if truncated_count > 0 {
+                        tracing::warn!(
+                            truncated = truncated_count,
+                            total = items.len(),
+                            max_tokens = max_tokens,
+                            "Whole-proof truncation: {}/{} hit token limit (partial tactics still replayed)",
+                            truncated_count, items.len(),
+                        );
                     }
                     Ok::<_, anyhow::Error>(chunk_tactics)
                 }
