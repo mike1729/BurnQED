@@ -151,9 +151,8 @@ def fix_statement(statement: str) -> str:
     # Fix: bare `rexp` → `Real.exp` (PutnamBench shorthand)
     statement = re.sub(r"(?<!\w\.)(?<!\w)rexp\b", "Real.exp", statement)
 
-    # Fix: `∆` (U+2206, INCREMENT) → `Δ` (U+0394, GREEK CAPITAL LETTER DELTA)
-    # Lean 4 Mathlib defines `Δ` (U+0394) as infix notation for symmDiff.
-    statement = statement.replace("\u2206", "\u0394")
+    # Note: `∆` (U+2206, INCREMENT) is the correct char for symmDiff notation
+    # in Mathlib (with `open symmDiff`). Do NOT convert to U+0394 (Greek Delta).
 
     # Fix: bare `Simplex` → `Affine.Simplex` (lives in Affine namespace in Mathlib)
     statement = re.sub(r"(?<!\w\.)(?<!\w)Simplex\b", "Affine.Simplex", statement)

@@ -108,8 +108,10 @@ def qualify_statement(stmt: str) -> str:
         stmt = re.sub(r"(?<!\w)(?<!\.)aeval\b", "MvPolynomial.aeval", stmt)
         stmt = re.sub(r"(?<!\w)(?<!\.)coeff(?!\w)", "MvPolynomial.coeff", stmt)
     elif "Polynomial" in stmt:
-        # Don't qualify X in binder position: `(X :` means X is a variable name
-        stmt = re.sub(r"(?<!\w)(?<!\.)(?<!\()X(?!\w)(?!\s*:)", "Polynomial.X", stmt)
+        # Don't qualify X at all if `(X :` binder exists — X is a variable name
+        has_X_binder = bool(re.search(r'\(X\s*:', stmt))
+        if not has_X_binder:
+            stmt = re.sub(r"(?<!\w)(?<!\.)(?<!\()X(?!\w)(?!\s*:)", "Polynomial.X", stmt)
         stmt = re.sub(r"(?<!\w)(?<!\.)C(?=\s+[\w(])", "Polynomial.C", stmt)
         stmt = re.sub(r"(?<!\w)(?<!\.)coeff(?!\w)", "Polynomial.coeff", stmt)
 
