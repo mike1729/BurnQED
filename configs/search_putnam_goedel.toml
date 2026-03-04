@@ -7,7 +7,7 @@ llm_temperature = 40.4        # Scale LLM log-probs: score / temperature (~90% E
 ebm_temperature = 1.0         # Scale EBM scores: score / temperature
 timeout_per_theorem = 600     # seconds (9x baseline for deep retry)
 # Goedel temperature sweet spot: 0.6-1.2 (vs DeepSeek 1.4-1.8)
-temperature = 0.6             # Goedel sweet spot (vs DS 1.4)
+temperature = 0.9             # Goedel sweet spot (vs DS 1.4)
 top_p = 0.95                  # Nucleus sampling parameter
 max_tactic_tokens = 96        # Goedel generates longer tactics with <;> chains (vs DS 48)
 batch_encode_size = 4         # Max states per encode HTTP request (matched to server max-batch-size)
@@ -20,7 +20,7 @@ hybrid_num_proofs = 16
 hybrid_min_proofs = 2         # Was 4; keep root fanout high (from DS Putnam config)
 hybrid_max_rounds = 100
 # Goedel proofs are ~4x longer than DeepSeek (1836 avg chars)
-hybrid_max_tokens = 5000      # Increased from 1024 to accommodate Goedel's longer proofs
+hybrid_max_tokens = 2048      # Increased from 1024 to accommodate Goedel's longer proofs
 hybrid_min_tokens = 512       # Increased from 256 (proportional scaling)
 hybrid_tokens_decay_depth = 8
 hybrid_budget = 1024          # Increased from 512 to accommodate longer Goedel proofs

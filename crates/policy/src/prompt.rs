@@ -107,6 +107,33 @@ impl PromptFormat {
         }
     }
 
+    /// Format a prompt with an assistant-side proof prefix for continuation.
+    ///
+    /// `sorry_statement`: full theorem with sorry (for user message)
+    /// `proof_prefix`: theorem header + tactics applied so far (for assistant prefix)
+    ///
+    /// Only meaningful for GoedelV2WholeProof. Other formats ignore `proof_prefix`
+    /// and fall back to `format_prompt(sorry_statement)`.
+    pub fn format_prompt_with_prefix(&self, sorry_statement: &str, proof_prefix: &str) -> String {
+        match self {
+            Self::GoedelV2WholeProof => {
+                format!(
+                    "<|im_start|>user\n\
+                     ```lean4\n\
+                     {sorry_statement}\n\
+                     ```<|im_end|>\n\
+                     <|im_start|>assistant\n\
+                     <think>\n\n\
+                     </think>\n\n\
+                     ```lean4\n\
+                     {proof_prefix}\n"
+                )
+            }
+            // Other formats don't use proof prefixes — delegate to standard format
+            _ => self.format_prompt(sorry_statement),
+        }
+    }
+
     /// Whether this format uses whole-proof generation from a theorem header
     /// (requiring the engine to construct the full statement at depth 0).
     pub fn needs_theorem_header(&self) -> bool {

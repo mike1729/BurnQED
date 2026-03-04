@@ -33,6 +33,7 @@ impl PolicyProvider for NullPolicyProvider {
         _n: usize,
         _max_tokens: usize,
         _temperature: f64,
+        _assistant_prefix: Option<&str>,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
         Ok(vec![])
     }
@@ -163,9 +164,10 @@ impl PolicyProvider for InferencePolicyProvider {
         n: usize,
         max_tokens: usize,
         temperature: f64,
+        assistant_prefix: Option<&str>,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
         self.handle
-            .generate_whole_proofs(proof_state, n, max_tokens, temperature)
+            .generate_whole_proofs(proof_state, n, max_tokens, temperature, assistant_prefix)
             .await
             .map_err(SearchError::Policy)
     }

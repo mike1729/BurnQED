@@ -81,6 +81,7 @@ impl PolicyProvider for MockPolicy {
         _n: usize,
         _max_tokens: usize,
         _temperature: f64,
+        _assistant_prefix: Option<&str>,
     ) -> Result<Vec<GeneratedTactic>, SearchError> {
         // 1. Exact match
         if let Some(tactics) = self.responses.get(proof_state) {
@@ -203,7 +204,7 @@ mod tests {
             "⊢ True",
             vec![make_tactic("trivial", -0.1)],
         );
-        let result = policy.generate_whole_proofs("⊢ True", 32, 1024, 0.8).await.unwrap();
+        let result = policy.generate_whole_proofs("⊢ True", 32, 1024, 0.8, None).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "trivial");
     }
@@ -211,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_policy_default_fallback() {
         let policy = MockPolicy::with_default(vec![make_tactic("sorry", -5.0)]);
-        let result = policy.generate_whole_proofs("anything", 32, 1024, 0.8).await.unwrap();
+        let result = policy.generate_whole_proofs("anything", 32, 1024, 0.8, None).await.unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].text, "sorry");
     }
@@ -219,7 +220,7 @@ mod tests {
     #[tokio::test]
     async fn test_mock_policy_empty() {
         let policy = MockPolicy::new();
-        let result = policy.generate_whole_proofs("⊢ True", 32, 1024, 0.8).await.unwrap();
+        let result = policy.generate_whole_proofs("⊢ True", 32, 1024, 0.8, None).await.unwrap();
         assert!(result.is_empty());
     }
 
@@ -229,7 +230,7 @@ mod tests {
         policy.add_contains_response("n = n", vec![make_tactic("rfl", -0.1)]);
         // Should match because "n : Nat\n⊢ n = n" contains "n = n"
         let result = policy
-            .generate_whole_proofs("n : Nat\n⊢ n = n", 32, 1024, 0.8)
+            .generate_whole_proofs("n : Nat\n⊢ n = n", 32, 1024, 0.8, None)
             .await
             .unwrap();
         assert_eq!(result.len(), 1);
@@ -242,7 +243,7 @@ mod tests {
         policy.add_response("⊢ True", vec![make_tactic("trivial", -0.1)]);
         policy.add_contains_response("True", vec![make_tactic("decide", -0.5)]);
         // Exact match should take priority over contains
-        let result = policy.generate_whole_proofs("⊢ True", 32, 1024, 0.8).await.unwrap();
+        let result = policy.generate_whole_proofs("⊢ True", 32, 1024, 0.8, None).await.unwrap();
         assert_eq!(result[0].text, "trivial");
     }
 

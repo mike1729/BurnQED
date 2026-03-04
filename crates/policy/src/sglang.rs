@@ -543,8 +543,12 @@ impl SglangClient {
         n: usize,
         max_tokens: usize,
         temperature: f64,
+        assistant_prefix: Option<&str>,
     ) -> anyhow::Result<Vec<GeneratedTactic>> {
-        let prompt = self.format_prompt(proof_state);
+        let prompt = match assistant_prefix {
+            Some(prefix) => self.config.prompt_format.format_prompt_with_prefix(proof_state, prefix),
+            None => self.format_prompt(proof_state),
+        };
         let url = self.base_url.join("/generate")?;
 
         // Sub-batch into chunks, fire all chunks concurrently.

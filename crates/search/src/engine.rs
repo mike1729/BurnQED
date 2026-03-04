@@ -182,12 +182,16 @@ pub trait PolicyProvider: Send + Sync {
     ///
     /// `temperature` overrides the default sampling temperature for this call,
     /// enabling depth-dependent temperature ramp.
+    ///
+    /// `assistant_prefix` provides an optional proof-so-far string for
+    /// continuation-style generation (GoedelV2WholeProof at depth > 0).
     async fn generate_whole_proofs(
         &self,
         proof_state: &str,
         n: usize,
         max_tokens: usize,
         temperature: f64,
+        assistant_prefix: Option<&str>,
     ) -> Result<Vec<GeneratedTactic>, SearchError>;
 }
 
@@ -455,21 +459,38 @@ impl SearchEngine {
                 });
             }
 
-            // For GoedelV2WholeProof at depth 0, construct a full theorem header
-            // so the model generates only the proof body (no re-emission of imports).
-            // At deeper depths, fall back to tactic state presentation.
+            // For GoedelV2WholeProof: always pass the sorry theorem as proof_state,
+            // and at depth > 0 also pass the proof prefix (header + prior tactics)
+            // so the model continues the proof from where it left off.
             let prompt_format = PromptFormat::from_str(&self.config.prompt_format).ok();
-            let leaf_state = if arena[leaf_idx].depth == 0
-                && prompt_format.map_or(false, |pf| pf.needs_theorem_header())
-            {
-                format!(
+            let needs_prefix = prompt_format.map_or(false, |pf| pf.needs_theorem_header());
+
+            let (leaf_state, assistant_prefix) = if needs_prefix {
+                let sorry_theorem = format!(
                     "import Mathlib\nimport Aesop\nset_option maxHeartbeats 0\n\
                      open BigOperators Real Nat Topology Rat\n\n\
                      theorem {} : {} := by\n  sorry",
                     theorem_name, statement
-                )
+                );
+                if arena[leaf_idx].depth == 0 {
+                    (sorry_theorem, None)
+                } else {
+                    // Walk parent chain to reconstruct proof prefix
+                    let tactics = extract_tactic_sequence(&arena, leaf_idx);
+                    let tactics_str = tactics.iter()
+                        .map(|t| format!("  {}", t))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let proof_prefix = format!(
+                        "import Mathlib\nimport Aesop\nset_option maxHeartbeats 0\n\
+                         open BigOperators Real Nat Topology Rat\n\n\
+                         theorem {} : {} := by\n{}",
+                        theorem_name, statement, tactics_str
+                    );
+                    (sorry_theorem, Some(proof_prefix))
+                }
             } else {
-                arena[leaf_idx].goals_as_text()
+                (arena[leaf_idx].goals_as_text(), None)
             };
 
             // Generate whole proofs from this leaf (count decays with depth)
@@ -504,9 +525,22 @@ impl SearchEngine {
                 (base_n, base_max_tokens)
             };
 
+            // When using proof-prefix continuation, the model generates the
+            // remaining proof (not a full proof from scratch). SGLang reuses
+            // the KV cache for the shared prefix, so each sample is cheaper.
+            // Double n for diversity; keep max_tokens as-is (depth decay handles it).
+            let n = if assistant_prefix.is_some() {
+                (n * 2).min(32)
+            } else {
+                n
+            };
+
             let gen_start = Instant::now();
             let raw_proofs = policy
-                .generate_whole_proofs(&leaf_state, n, max_tokens, temp)
+                .generate_whole_proofs(
+                    &leaf_state, n, max_tokens, temp,
+                    assistant_prefix.as_deref(),
+                )
                 .await?;
             let gen_us = gen_start.elapsed().as_micros() as u64;
             stats.total_generate_time_ms += gen_us / 1000;
