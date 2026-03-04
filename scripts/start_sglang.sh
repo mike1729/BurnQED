@@ -4,13 +4,11 @@
 # Usage:
 #   ./scripts/start_sglang.sh                  # default: deepseek
 #   ./scripts/start_sglang.sh deepseek
-#   ./scripts/start_sglang.sh goedel
 #   ./scripts/start_sglang.sh /path/to/model
-#   CUDA_DEVICE=0 MEM_FRACTION=0.90 ./scripts/start_sglang.sh goedel
+#   CUDA_DEVICE=0 MEM_FRACTION=0.90 ./scripts/start_sglang.sh deepseek
 #
 # Model shortcuts:
 #   deepseek  →  data/models/base/deepseek-prover-v2-7b  (fp8 quantization)
-#   goedel    →  data/models/base/goedel-prover-v2-8b    (bfloat16, no quantization)
 #
 # Environment overrides:
 #   MODEL_PATH, PORT, TP, MEM_FRACTION, MAX_RUNNING, QUANTIZATION,
@@ -38,12 +36,6 @@ case "$MODEL_ARG" in
     deepseek|deepseek-prover|deepseek-prover-v2-7b)
         MODEL_PATH="${REPO_ROOT}/data/models/base/deepseek-prover-v2-7b"
         # fp8 gives ~25% faster decode with no measurable quality loss
-        QUANTIZATION="${QUANTIZATION-fp8}"
-        DTYPE="${DTYPE-auto}"
-        ;;
-    goedel|goedel-v2|goedel-prover-v2-8b)
-        MODEL_PATH="${REPO_ROOT}/data/models/base/goedel-prover-v2-8b"
-        # Qwen3-8B: SGLang supports dynamic fp8 (no calibration needed)
         QUANTIZATION="${QUANTIZATION-fp8}"
         DTYPE="${DTYPE-auto}"
         ;;

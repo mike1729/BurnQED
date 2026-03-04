@@ -69,7 +69,7 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
-        /// Prompt format: "deepseek-prover" or "goedel-v2". Overrides config TOML.
+        /// Prompt format: "deepseek-prover". Overrides config TOML.
         #[arg(long)]
         prompt_format: Option<String>,
     },
@@ -138,7 +138,7 @@ enum Command {
         /// Lean modules to import (e.g., "Init", "Mathlib"). Default: Init.
         #[arg(long, value_delimiter = ',')]
         imports: Option<Vec<String>>,
-        /// Prompt format: "deepseek-prover" or "goedel-v2". Overrides config TOML.
+        /// Prompt format: "deepseek-prover". Overrides config TOML.
         #[arg(long)]
         prompt_format: Option<String>,
     },

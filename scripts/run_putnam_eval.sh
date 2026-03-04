@@ -9,14 +9,13 @@
 #
 # Usage:
 #   ./scripts/run_putnam_eval.sh                          # default (DeepSeek)
-#   MODEL=goedel ./scripts/run_putnam_eval.sh             # use Goedel-Prover-V2-8B
 #   ITER=1 ./scripts/run_putnam_eval.sh                   # use iter_1 model + EBM
 #   TAG=ablation ./scripts/run_putnam_eval.sh             # custom output subdirectory
 #   MAX_THEOREMS=50 ./scripts/run_putnam_eval.sh          # cap theorems
 #   DRY_RUN=1 ./scripts/run_putnam_eval.sh                # print command without running
 #
 # Environment:
-#   MODEL           Model family: "deepseek" (default) or "goedel".
+#   MODEL           Model family: "deepseek" (default).
 #                   Selects HF model ID, config TOML, and prompt format.
 #   ITER            Iteration number (default: 0). Determines model + optional EBM.
 #   TAG             Output subdirectory tag (default: "putnam_eval")
@@ -60,13 +59,8 @@ case "${MODEL,,}" in
         DEFAULT_CONFIG="${REPO_ROOT}/configs/search_putnam.toml"
         MODEL_LABEL="DeepSeek-Prover-V2-7B"
         ;;
-    goedel|gv2)
-        DEFAULT_LLM_BASE="Goedel-LM/Goedel-Prover-V2-8B"
-        DEFAULT_CONFIG="${REPO_ROOT}/configs/search_putnam_goedel.toml"
-        MODEL_LABEL="Goedel-Prover-V2-8B"
-        ;;
     *)
-        echo "ERROR: Unknown MODEL=${MODEL}. Expected 'deepseek' or 'goedel'."
+        echo "ERROR: Unknown MODEL=${MODEL}. Expected 'deepseek'."
         exit 1
         ;;
 esac

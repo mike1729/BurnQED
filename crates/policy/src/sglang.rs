@@ -1115,18 +1115,6 @@ mod tests {
     }
 
     #[test]
-    fn test_format_prompt_goedel() {
-        let client = make_test_client(PromptFormat::GoedelV2);
-        let state = "theorem test : 1 + 1 = 2 := by sorry";
-        let prompt = client.format_prompt(state);
-        assert!(prompt.contains("<|im_start|>user"));
-        assert!(prompt.contains("<|im_end|>"));
-        assert!(prompt.contains("<|im_start|>assistant"));
-        assert!(prompt.contains("<think>\n\n</think>"));
-        assert!(prompt.contains(state));
-    }
-
-    #[test]
     fn test_sampling_params_serialization() {
         let params = SamplingParams {
             max_new_tokens: 128,

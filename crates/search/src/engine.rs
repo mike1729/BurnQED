@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use ordered_float::OrderedFloat;
 
 use lean_repl::{Goal, ProofState, TacticResult};
-use policy::{extract_all_tactics_structured, GeneratedTactic, PromptFormat};
+use policy::{extract_all_tactics_structured, GeneratedTactic};
 use trajectory::{SearchResult, SearchStats, TrajectoryLabel, TrajectoryRecord};
 
 use crate::config::SearchConfig;
@@ -455,22 +455,7 @@ impl SearchEngine {
                 });
             }
 
-            // For GoedelV2WholeProof at depth 0, construct a full theorem header
-            // so the model generates only the proof body (no re-emission of imports).
-            // At deeper depths, fall back to tactic state presentation.
-            let prompt_format = PromptFormat::from_str(&self.config.prompt_format).ok();
-            let leaf_state = if arena[leaf_idx].depth == 0
-                && prompt_format.map_or(false, |pf| pf.needs_theorem_header())
-            {
-                format!(
-                    "import Mathlib\nimport Aesop\nset_option maxHeartbeats 0\n\
-                     open BigOperators Real Nat Topology Rat\n\n\
-                     theorem {} : {} := by\n  sorry",
-                    theorem_name, statement
-                )
-            } else {
-                arena[leaf_idx].goals_as_text()
-            };
+            let leaf_state = arena[leaf_idx].goals_as_text();
 
             // Generate whole proofs from this leaf (count decays with depth)
             let leaf_depth = arena[leaf_idx].depth;

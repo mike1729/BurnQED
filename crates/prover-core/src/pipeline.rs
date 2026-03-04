@@ -61,7 +61,7 @@ pub struct CommonSearchArgs {
     pub max_theorems: Option<usize>,
     /// Lean modules to import (e.g., `["Init", "Mathlib"]`).
     pub imports: Option<Vec<String>>,
-    /// Prompt format override: "deepseek-prover" or "goedel-v2".
+    /// Prompt format override: "deepseek-prover".
     pub prompt_format: Option<String>,
 }
 

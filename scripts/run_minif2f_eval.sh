@@ -11,14 +11,13 @@
 #
 # Usage:
 #   ./scripts/run_minif2f_eval.sh                          # all available versions (DeepSeek)
-#   MODEL=goedel ./scripts/run_minif2f_eval.sh             # use Goedel-Prover-V2-8B
 #   VERSIONS="v2s_test v2c_test" ./scripts/run_minif2f_eval.sh   # specific versions
 #   ITER=1 ./scripts/run_minif2f_eval.sh                   # use iter_1 model + EBM
 #   TAG=ablation ./scripts/run_minif2f_eval.sh             # custom output subdirectory
 #   DRY_RUN=1 ./scripts/run_minif2f_eval.sh                # print commands without running
 #
 # Environment:
-#   MODEL           Model family: "deepseek" (default) or "goedel".
+#   MODEL           Model family: "deepseek" (default).
 #                   Selects HF model ID, config TOML, and prompt format.
 #   VERSIONS        Space-separated list from: test valid v2s_test v2s_valid v2c_test v2c_valid
 #                   Default: all versions whose benchmark JSON exists
@@ -64,13 +63,8 @@ case "${MODEL,,}" in
         DEFAULT_CONFIG="${REPO_ROOT}/configs/search_minif2f.toml"
         MODEL_LABEL="DeepSeek-Prover-V2-7B"
         ;;
-    goedel|gv2)
-        DEFAULT_LLM_BASE="Goedel-LM/Goedel-Prover-V2-8B"
-        DEFAULT_CONFIG="${REPO_ROOT}/configs/search_minif2f_goedel.toml"
-        MODEL_LABEL="Goedel-Prover-V2-8B"
-        ;;
     *)
-        echo "ERROR: Unknown MODEL=${MODEL}. Expected 'deepseek' or 'goedel'."
+        echo "ERROR: Unknown MODEL=${MODEL}. Expected 'deepseek'."
         exit 1
         ;;
 esac

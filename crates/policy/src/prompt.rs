@@ -9,27 +9,17 @@
 pub enum PromptFormat {
     /// DeepSeek-Prover-V2: custom tokens + assistant priming with `example := by`.
     DeepSeekProver,
-    /// Goedel-Prover-V2 (Qwen3-8B): ChatML template + no-think prefix + code fence.
-    /// Expects a tactic state or full statement with sorry as input.
-    GoedelV2,
-    /// Goedel-Prover-V2 whole-proof format: model generates only the proof body.
-    /// At depth 0 the engine passes a full Lean header (imports + theorem ... := by).
-    /// The model continues from `:= by` without re-emitting header → saves tokens.
-    /// At depth > 0 falls back to tactic-state presentation.
-    GoedelV2WholeProof,
 }
 
 impl PromptFormat {
     /// Parse a prompt format from a string identifier.
     ///
-    /// Accepts `"deepseek-prover"` and `"goedel-v2"` (case-insensitive).
+    /// Accepts `"deepseek-prover"` (case-insensitive).
     pub fn from_str(s: &str) -> anyhow::Result<Self> {
         match s.to_lowercase().as_str() {
             "deepseek-prover" => Ok(Self::DeepSeekProver),
-            "goedel-v2" => Ok(Self::GoedelV2),
-            "goedel-v2-wp" | "goedel-v2-whole-proof" => Ok(Self::GoedelV2WholeProof),
             other => anyhow::bail!(
-                "Unknown prompt format {:?}. Expected \"deepseek-prover\", \"goedel-v2\", or \"goedel-v2-wp\"",
+                "Unknown prompt format {:?}. Expected \"deepseek-prover\"",
                 other
             ),
         }
@@ -38,8 +28,6 @@ impl PromptFormat {
     /// Format a proof state into a full prompt string for the model.
     ///
     /// - **DeepSeekProver**: chat template with tactic state echo and `example := by` priming.
-    /// - **GoedelV2**: ChatML direct-sorry whole-proof format with `<think>\n\n</think>` to skip CoT.
-    ///   The `proof_state` should be the full theorem statement with `sorry`.
     pub fn format_prompt(&self, proof_state: &str) -> String {
         match self {
             Self::DeepSeekProver => {
@@ -55,35 +43,6 @@ impl PromptFormat {
                      example := by\n  "
                 )
             }
-            Self::GoedelV2 => {
-                format!(
-                    "<|im_start|>user\n\
-                     ```lean4\n\
-                     {proof_state}\n\
-                     ```<|im_end|>\n\
-                     <|im_start|>assistant\n\
-                     <think>\n\n\
-                     </think>\n\n\
-                     ```lean4\n"
-                )
-            }
-            Self::GoedelV2WholeProof => {
-                // Same ChatML template. The difference is what the engine passes:
-                // - depth 0: full header "import Mathlib\n...\ntheorem foo : ... := by\n"
-                //   → model generates only the proof body (no header re-emission)
-                // - depth > 0: tactic state "⊢ target"
-                //   → model generates tactics from state
-                format!(
-                    "<|im_start|>user\n\
-                     ```lean4\n\
-                     {proof_state}\n\
-                     ```<|im_end|>\n\
-                     <|im_start|>assistant\n\
-                     <think>\n\n\
-                     </think>\n\n\
-                     ```lean4\n"
-                )
-            }
         }
     }
 
@@ -91,9 +50,6 @@ impl PromptFormat {
     pub fn candidate_stop_tokens(&self) -> Vec<String> {
         match self {
             Self::DeepSeekProver => vec!["```".to_string(), "\n\n".to_string()],
-            Self::GoedelV2 | Self::GoedelV2WholeProof => {
-                vec!["```".to_string(), "<|im_end|>".to_string()]
-            }
         }
     }
 
@@ -101,16 +57,13 @@ impl PromptFormat {
     pub fn whole_proof_stop_tokens(&self) -> Vec<String> {
         match self {
             Self::DeepSeekProver => vec!["```".to_string()],
-            Self::GoedelV2 | Self::GoedelV2WholeProof => {
-                vec!["```".to_string(), "<|im_end|>".to_string()]
-            }
         }
     }
 
     /// Whether this format uses whole-proof generation from a theorem header
     /// (requiring the engine to construct the full statement at depth 0).
     pub fn needs_theorem_header(&self) -> bool {
-        matches!(self, Self::GoedelV2WholeProof)
+        false
     }
 }
 
@@ -1898,9 +1851,7 @@ mod tests {
     #[test]
     fn test_prompt_format_from_str() {
         assert_eq!(PromptFormat::from_str("deepseek-prover").unwrap(), PromptFormat::DeepSeekProver);
-        assert_eq!(PromptFormat::from_str("goedel-v2").unwrap(), PromptFormat::GoedelV2);
         assert_eq!(PromptFormat::from_str("DEEPSEEK-PROVER").unwrap(), PromptFormat::DeepSeekProver);
-        assert_eq!(PromptFormat::from_str("Goedel-V2").unwrap(), PromptFormat::GoedelV2);
         assert!(PromptFormat::from_str("unknown").is_err());
     }
 
@@ -1917,59 +1868,14 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_format_goedel() {
-        let state = "theorem test : 1 + 1 = 2 := by sorry";
-        let prompt = PromptFormat::GoedelV2.format_prompt(state);
-        assert!(prompt.contains("<|im_start|>user"));
-        assert!(prompt.contains("<|im_end|>"));
-        assert!(prompt.contains("<|im_start|>assistant"));
-        assert!(prompt.contains("<think>\n\n</think>"));
-        assert!(prompt.contains(state));
-        assert!(prompt.ends_with("```lean4\n"));
-    }
-
-    #[test]
     fn test_prompt_format_stop_tokens() {
         let ds = PromptFormat::DeepSeekProver;
         assert_eq!(ds.candidate_stop_tokens(), vec!["```", "\n\n"]);
         assert_eq!(ds.whole_proof_stop_tokens(), vec!["```"]);
-
-        let gv = PromptFormat::GoedelV2;
-        assert_eq!(gv.candidate_stop_tokens(), vec!["```", "<|im_end|>"]);
-        assert_eq!(gv.whole_proof_stop_tokens(), vec!["```", "<|im_end|>"]);
-    }
-
-    #[test]
-    fn test_prompt_format_goedel_wp_from_str() {
-        assert_eq!(PromptFormat::from_str("goedel-v2-wp").unwrap(), PromptFormat::GoedelV2WholeProof);
-        assert_eq!(PromptFormat::from_str("goedel-v2-whole-proof").unwrap(), PromptFormat::GoedelV2WholeProof);
-        assert_eq!(PromptFormat::from_str("GOEDEL-V2-WP").unwrap(), PromptFormat::GoedelV2WholeProof);
-    }
-
-    #[test]
-    fn test_prompt_format_goedel_wp_format() {
-        // GoedelV2WholeProof uses same ChatML template as GoedelV2
-        let header = "import Mathlib\ntheorem foo : True := by\n  sorry";
-        let prompt = PromptFormat::GoedelV2WholeProof.format_prompt(header);
-        assert!(prompt.contains("<|im_start|>user"));
-        assert!(prompt.contains("<|im_end|>"));
-        assert!(prompt.contains("<|im_start|>assistant"));
-        assert!(prompt.contains("<think>\n\n</think>"));
-        assert!(prompt.contains(header));
-        assert!(prompt.ends_with("```lean4\n"));
-    }
-
-    #[test]
-    fn test_prompt_format_goedel_wp_stop_tokens() {
-        let wp = PromptFormat::GoedelV2WholeProof;
-        assert_eq!(wp.candidate_stop_tokens(), vec!["```", "<|im_end|>"]);
-        assert_eq!(wp.whole_proof_stop_tokens(), vec!["```", "<|im_end|>"]);
     }
 
     #[test]
     fn test_needs_theorem_header() {
         assert!(!PromptFormat::DeepSeekProver.needs_theorem_header());
-        assert!(!PromptFormat::GoedelV2.needs_theorem_header());
-        assert!(PromptFormat::GoedelV2WholeProof.needs_theorem_header());
     }
 }
