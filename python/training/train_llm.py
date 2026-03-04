@@ -8,21 +8,21 @@ Training data uses DeepSeek-native prompt format (see docs/data_format_spec.md):
   "Complete the following Lean 4 code:\n\n```lean4\n/- tactic state:\n{state}\n-/\n```\n{tactic}"
 
 Usage:
-    # Iteration 0: train on competition tactic pairs
-    accelerate launch python/training/train_llm.py \
-        --model-name deepseek-ai/DeepSeek-Prover-V2-7B \
+    # Iteration 0: train on competition tactic pairs (v2 defaults)
+    python python/training/train_llm.py \
+        --model-name data/models/base/deepseek-prover-v2-7b \
         --data data/sft/train.jsonl \
         --val-data data/sft/val.jsonl \
         --output data/checkpoints/lora/iter_0
 
     # Iteration N>0: add trajectory data from previous iterations
-    accelerate launch python/training/train_llm.py \
-        --model-name deepseek-ai/DeepSeek-Prover-V2-7B \
+    python python/training/train_llm.py \
+        --model-name data/models/base/deepseek-prover-v2-7b \
         --data data/sft/train.jsonl \
         --extra-data data/trajectories/iter_*.parquet \
         --base data/checkpoints/lora/iter_0 \
         --output data/checkpoints/lora/iter_1 \
-        --epochs 1 --lr 1e-4
+        --lr 1e-4
 """
 
 import argparse
@@ -128,11 +128,19 @@ def load_trajectory_data(parquet_globs: list) -> list:
     return records
 
 
-def build_dataset(records: list, tokenizer, max_seq_len: int):
-    """Build a HuggingFace Dataset from formatted text records."""
+def build_dataset(records: list, tokenizer, max_seq_len: int, response_template_ids: list[int] | None = None):
+    """Build a HuggingFace Dataset from formatted text records.
+
+    If response_template_ids is provided, applies completion-only loss masking:
+    labels before the end of the response template are set to -100 so the model
+    only trains on tactic completion tokens (Gotcha 13).
+    """
     from datasets import Dataset
 
     texts = [r["text"] for r in records]
+
+    # Stats for completion-only masking
+    mask_stats = {"masked": 0, "not_found": 0, "total_prompt_tokens": 0, "total_completion_tokens": 0}
 
     def tokenize_fn(examples):
         tokenized = tokenizer(
@@ -141,8 +149,32 @@ def build_dataset(records: list, tokenizer, max_seq_len: int):
             max_length=max_seq_len,
             padding=False,
         )
-        # For causal LM, labels = input_ids
-        tokenized["labels"] = tokenized["input_ids"].copy()
+        if response_template_ids is not None:
+            template_len = len(response_template_ids)
+            new_labels = []
+            for ids in tokenized["input_ids"]:
+                labels = list(ids)
+                # Find the response template in the token sequence
+                found = False
+                for i in range(len(ids) - template_len + 1):
+                    if ids[i : i + template_len] == response_template_ids:
+                        # Mask everything up to and including the template
+                        mask_end = i + template_len
+                        for j in range(mask_end):
+                            labels[j] = -100
+                        mask_stats["masked"] += 1
+                        mask_stats["total_prompt_tokens"] += mask_end
+                        mask_stats["total_completion_tokens"] += len(ids) - mask_end
+                        found = True
+                        break
+                if not found:
+                    # Fallback: train on full sequence, log warning later
+                    mask_stats["not_found"] += 1
+                    mask_stats["total_prompt_tokens"] += len(ids)
+                new_labels.append(labels)
+            tokenized["labels"] = new_labels
+        else:
+            tokenized["labels"] = tokenized["input_ids"].copy()
         return tokenized
 
     dataset = Dataset.from_dict({"text": texts})
@@ -152,6 +184,21 @@ def build_dataset(records: list, tokenizer, max_seq_len: int):
         remove_columns=["text"],
         desc="Tokenizing",
     )
+
+    if response_template_ids is not None:
+        total = mask_stats["masked"] + mask_stats["not_found"]
+        if mask_stats["not_found"] > 0:
+            logger.warning(
+                "Response template not found in %d / %d examples (training on full sequence for those)",
+                mask_stats["not_found"], total,
+            )
+        avg_prompt = mask_stats["total_prompt_tokens"] / max(total, 1)
+        avg_completion = mask_stats["total_completion_tokens"] / max(mask_stats["masked"], 1)
+        logger.info(
+            "Completion-only masking: %d / %d examples masked, avg %.0f prompt / %.0f completion tokens",
+            mask_stats["masked"], total, avg_prompt, avg_completion,
+        )
+
     logger.info("Built dataset with %d examples", len(dataset))
     return dataset
 
@@ -159,23 +206,27 @@ def build_dataset(records: list, tokenizer, max_seq_len: int):
 def pack_sequences(dataset, eos_token_id: int, max_seq_len: int):
     """Pack tokenized sequences into fixed-length chunks for efficient training.
 
-    Concatenates all input_ids with EOS separators, then chunks into
-    fixed max_seq_len pieces. Each chunk becomes one training example
-    with labels = input_ids (standard causal LM training).
+    Concatenates all input_ids and labels with EOS separators, then chunks into
+    fixed max_seq_len pieces. Label masking (-100) from completion-only masking
+    is preserved through packing. EOS separators between sequences get -100 labels.
     """
     from datasets import Dataset as HFDataset
 
     # Concatenate all sequences with EOS between them
     all_ids = []
-    for ids in dataset["input_ids"]:
+    all_labels = []
+    for ids, labels in zip(dataset["input_ids"], dataset["labels"]):
         all_ids.extend(ids)
         all_ids.append(eos_token_id)
+        all_labels.extend(labels)
+        all_labels.append(-100)  # Don't train on inter-sequence EOS
 
     # Chunk into fixed-length sequences
     packed_input_ids = []
+    packed_labels = []
     for i in range(0, len(all_ids) - max_seq_len + 1, max_seq_len):
-        chunk = all_ids[i : i + max_seq_len]
-        packed_input_ids.append(chunk)
+        packed_input_ids.append(all_ids[i : i + max_seq_len])
+        packed_labels.append(all_labels[i : i + max_seq_len])
 
     # Drop remainder (< max_seq_len tokens)
     original_count = len(dataset)
@@ -191,9 +242,19 @@ def pack_sequences(dataset, eos_token_id: int, max_seq_len: int):
         total_tokens - packed_count * max_seq_len,
     )
 
+    # Log masking stats for packed data
+    total_label_tokens = sum(sum(1 for t in lab if t != -100) for lab in packed_labels)
+    total_masked_tokens = packed_count * max_seq_len - total_label_tokens
+    logger.info(
+        "Packed labels: %d trainable tokens / %d total (%.1f%% masked)",
+        total_label_tokens,
+        packed_count * max_seq_len,
+        100.0 * total_masked_tokens / max(packed_count * max_seq_len, 1),
+    )
+
     packed_dataset = HFDataset.from_dict({
         "input_ids": packed_input_ids,
-        "labels": packed_input_ids,  # causal LM: labels = input_ids
+        "labels": packed_labels,
         "attention_mask": [[1] * max_seq_len for _ in range(packed_count)],
     })
     return packed_dataset
@@ -383,6 +444,17 @@ def train(args):
         100.0 * trainable_params / total_params,
     )
 
+    # Tokenize response template for completion-only masking (Gotcha 13)
+    response_template_ids = None
+    if args.response_template:
+        response_template_ids = tokenizer.encode(args.response_template, add_special_tokens=False)
+        logger.info(
+            "Response template %r → token IDs %s (completion-only loss masking enabled)",
+            args.response_template, response_template_ids,
+        )
+    else:
+        logger.info("Completion-only masking DISABLED (no response template)")
+
     # Load training data (optionally subsampled)
     import random
     train_records = load_base_data(args.data)
@@ -415,7 +487,7 @@ def train(args):
                 len(traj_train_records),
             )
 
-    train_dataset = build_dataset(train_records, tokenizer, args.max_seq_len)
+    train_dataset = build_dataset(train_records, tokenizer, args.max_seq_len, response_template_ids)
 
     # Pack training sequences for efficiency (unless --no-pack)
     if args.pack:
@@ -426,7 +498,7 @@ def train(args):
     full_eval_dataset = None
     if args.val_data:
         val_records = load_base_data(args.val_data)
-        full_eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len)
+        full_eval_dataset = build_dataset(val_records, tokenizer, args.max_seq_len, response_template_ids)
         if args.pack:
             full_eval_dataset = pack_sequences(full_eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
         # Quick subset for frequent eval (every 100 steps)
@@ -435,7 +507,7 @@ def train(args):
             import random as _rng
             _rng.seed(args.seed)
             eval_subset_records = _rng.sample(val_records, eval_subset_size)
-            eval_dataset = build_dataset(eval_subset_records, tokenizer, args.max_seq_len)
+            eval_dataset = build_dataset(eval_subset_records, tokenizer, args.max_seq_len, response_template_ids)
             if args.pack:
                 eval_dataset = pack_sequences(eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
             logger.info("Eval subset: %d / %d examples (quick eval every 500 steps, full eval every 2000)",
@@ -446,7 +518,7 @@ def train(args):
     # Trajectory eval dataset (from held-out 10% of trajectory data)
     traj_eval_dataset = None
     if traj_val_records:
-        traj_eval_dataset = build_dataset(traj_val_records, tokenizer, args.max_seq_len)
+        traj_eval_dataset = build_dataset(traj_val_records, tokenizer, args.max_seq_len, response_template_ids)
         if args.pack:
             traj_eval_dataset = pack_sequences(traj_eval_dataset, tokenizer.eos_token_id, args.max_seq_len)
 
@@ -490,7 +562,7 @@ def train(args):
         gradient_accumulation_steps=args.gradient_accumulation,
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
-        warmup_steps=100,
+        warmup_ratio=args.warmup_ratio,
         weight_decay=0.01,
         fp16=not use_bf16,
         bf16=use_bf16,
@@ -599,6 +671,11 @@ def train(args):
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
         "lora_mlp": args.lora_mlp,
+        "response_template": args.response_template,
+        "max_seq_len": args.max_seq_len,
+        "warmup_ratio": args.warmup_ratio,
+        "gradient_accumulation": args.gradient_accumulation,
+        "batch_size": args.batch_size,
         "probe_data": args.probe_data,
         "train_examples": len(train_records),
         "trainable_params": trainable_params,
@@ -650,7 +727,7 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=3,
+        default=1,
         help="Number of training epochs (default: %(default)s)",
     )
     parser.add_argument(
@@ -662,39 +739,40 @@ def main():
     parser.add_argument(
         "--lr",
         type=float,
-        default=2e-4,
+        default=2e-5,
         help="Learning rate (default: %(default)s)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=8,
+        default=2,
         help="Per-device batch size (default: %(default)s)",
     )
     parser.add_argument(
         "--gradient-accumulation",
         type=int,
-        default=4,
-        help="Gradient accumulation steps (default: %(default)s, effective batch = 32)",
+        default=8,
+        help="Gradient accumulation steps (default: %(default)s, effective batch = 16)",
     )
     parser.add_argument(
         "--lora-r",
         type=int,
-        default=16,
+        default=32,
         help="LoRA rank (default: %(default)s)",
     )
     parser.add_argument(
         "--lora-alpha",
         type=int,
-        default=32,
+        default=64,
         help="LoRA alpha (default: %(default)s)",
     )
     parser.add_argument(
         "--lora-mlp",
-        action="store_true",
-        default=False,
-        help="Also apply LoRA to MLP layers (gate/up/down_proj). "
-        "Recommended for EBM training — MLP LoRA creates L2 norm separation.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply LoRA to MLP layers (gate/up/down_proj) in addition to attention. "
+        "Recommended for EBM training — MLP LoRA creates L2 norm separation. "
+        "Use --no-lora-mlp to disable.",
     )
     parser.add_argument(
         "--base-subsample",
@@ -705,8 +783,21 @@ def main():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=1024,
+        default=2048,
         help="Maximum sequence length (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--response-template",
+        default="```\n",
+        help="Token sequence marking start of completion (default: closing code fence). "
+        "Everything before this template is masked in labels (Gotcha 13). "
+        "Set to empty string to disable completion-only masking.",
+    )
+    parser.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.05,
+        help="Warmup ratio of total training steps (default: %(default)s)",
     )
     parser.add_argument(
         "--seed",
