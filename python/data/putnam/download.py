@@ -177,20 +177,21 @@ def parse_putnam_file(lean_file: Path) -> tuple[list[dict], list[str]]:
     # Extract custom helper definitions: `[noncomputable] def name ...` that are NOT
     # solution abbrevs. These define problem-specific functions (dist_to_int, tetration,
     # etc.) that theorems reference. We include them in the preamble so theorems compile.
+    # Captures everything from `def name` until the next top-level declaration.
+    # Handles both `:= body` and pattern-matching `| pat => body` styles.
     def_pattern = re.compile(
-        r"((?:noncomputable\s+)?def\s+[\w'.]+\b[^:=]*(?::(?!=)[^:=]*)?):=(.*?)(?=\n(?:theorem|noncomputable\s+def|def\s|abbrev|end\b|#)\s|\Z)",
-        re.DOTALL,
+        r"^((?:noncomputable\s+)?def\s+[\w'.]+\b.*?)(?=^(?:theorem|abbrev|noncomputable|def\s|/-|#)|\Z)",
+        re.DOTALL | re.MULTILINE,
     )
     for match in def_pattern.finditer(content_clean):
-        full_sig = match.group(1).strip()
-        body = match.group(2).strip()
+        full_def = match.group(1).strip()
         # Skip solution defs (already extracted as abbrevs)
-        if "_solution" in full_sig:
+        if "_solution" in full_def:
             continue
-        # Normalize whitespace in signature
-        full_sig = re.sub(r'\s+', ' ', full_sig)
-        body = re.sub(r'\s+', ' ', body)
-        solution_abbrevs.append(f"{full_sig} := {body}")
+        # Skip empty matches
+        if not full_def:
+            continue
+        solution_abbrevs.append(full_def)
 
     # Extract theorems
     theorem_pattern = re.compile(
