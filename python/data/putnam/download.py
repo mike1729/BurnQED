@@ -72,8 +72,8 @@ _QUALIFY_MAP: dict[str, str] = {
     "sqrt": "Real.sqrt",
     # Function (open Function)
     "Injective": "Function.Injective",
-    # Polynomial (opened in .lean but not in goal.start)
-    "coeff": "Polynomial.coeff",
+    # Note: `coeff` removed from global map — handled context-aware below
+    # (Polynomial.coeff vs MvPolynomial.coeff).
 }
 
 # Build a single regex: match bare identifiers not preceded by a dot or word char.
@@ -88,26 +88,30 @@ def qualify_statement(stmt: str) -> str:
     stmt = stmt.replace("𝓝", "nhds")
 
     # nhds bracket notation: nhds[≠] x → nhdsWithin x ({x}ᶜ) etc.
-    # Use \w+ (not \S+) to avoid capturing trailing `)` from enclosing parens.
-    stmt = re.sub(r'nhds\[≠\]\s*(\w+)', r'nhdsWithin \1 ({\1}ᶜ)', stmt)
-    stmt = re.sub(r'nhds\[>\]\s*(\w+)', r'nhdsWithin \1 (Set.Ioi \1)', stmt)
-    stmt = re.sub(r'nhds\[<\]\s*(\w+)', r'nhdsWithin \1 (Set.Iio \1)', stmt)
-    stmt = re.sub(r'nhds\[≥\]\s*(\w+)', r'nhdsWithin \1 (Set.Ici \1)', stmt)
-    stmt = re.sub(r'nhds\[≤\]\s*(\w+)', r'nhdsWithin \1 (Set.Iic \1)', stmt)
+    # Uses _fix_nhds_brackets from generate_lean.py which handles both simple
+    # and parenthesized arguments like `nhds[>] (ts k.1)`.
+    from data.generate_lean import _fix_nhds_brackets
+    stmt = _fix_nhds_brackets(stmt)
 
     # Apply the main qualification map
     stmt = _QUALIFY_PATTERN.sub(lambda m: _QUALIFY_MAP[m.group(1)], stmt)
 
-    # Context-aware Polynomial/MvPolynomial qualification: bare X and C are
-    # ambiguous globally, but unambiguous when the statement mentions a specific type.
+    # Context-aware Polynomial/MvPolynomial qualification: bare X, C, coeff, eval
+    # are ambiguous globally, but unambiguous when the statement mentions a specific type.
     # Check MvPolynomial FIRST since "MvPolynomial" also contains "Polynomial".
     if "MvPolynomial" in stmt:
-        stmt = re.sub(r"(?<!\w)(?<!\.)X(?=\s+\d)", "MvPolynomial.X", stmt)
-        stmt = re.sub(r"(?<!\w)(?<!\.)C(?= \()", "MvPolynomial.C", stmt)
-        stmt = re.sub(r"(?<!\w)(?<!\.)eval(?= !\[)", "MvPolynomial.eval", stmt)
+        # Qualify X used as function: `X c`, `X 0`, `X (expr)`
+        stmt = re.sub(r"(?<!\w)(?<!\.)X(?=\s+[\w\d(])", "MvPolynomial.X", stmt)
+        # Qualify C used as function: `C a`, `C (expr)`
+        stmt = re.sub(r"(?<!\w)(?<!\.)C(?=\s+[\w(])", "MvPolynomial.C", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)eval(?=\s*[\(!\[])", "MvPolynomial.eval", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)aeval\b", "MvPolynomial.aeval", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)coeff(?!\w)", "MvPolynomial.coeff", stmt)
     elif "Polynomial" in stmt:
-        stmt = re.sub(r"(?<!\w)(?<!\.)X(?!\w)", "Polynomial.X", stmt)
-        stmt = re.sub(r"(?<!\w)(?<!\.)C(?= \()", "Polynomial.C", stmt)
+        # Don't qualify X in binder position: `(X :` means X is a variable name
+        stmt = re.sub(r"(?<!\w)(?<!\.)(?<!\()X(?!\w)(?!\s*:)", "Polynomial.X", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)C(?=\s+[\w(])", "Polynomial.C", stmt)
+        stmt = re.sub(r"(?<!\w)(?<!\.)coeff(?!\w)", "Polynomial.coeff", stmt)
 
     # Complex analysis context: when statement mentions ℂ and has bare I in
     # multiplicative context (I *, * I), qualify I → Complex.I and switch

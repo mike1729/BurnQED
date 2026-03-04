@@ -41,12 +41,8 @@ def fix_statement(statement: str) -> str:
 
     # Fix: nhds bracket notation `nhds[≠] x` → `nhdsWithin x ({x}ᶜ)` etc.
     # These are PutnamBench shorthand for punctured/one-sided neighborhoods.
-    # Use \w+ (not \S+) to avoid capturing trailing `)` from enclosing parens.
-    statement = re.sub(r'nhds\[≠\]\s*(\w+)', r'nhdsWithin \1 ({\1}ᶜ)', statement)
-    statement = re.sub(r'nhds\[>\]\s*(\w+)', r'nhdsWithin \1 (Set.Ioi \1)', statement)
-    statement = re.sub(r'nhds\[<\]\s*(\w+)', r'nhdsWithin \1 (Set.Iio \1)', statement)
-    statement = re.sub(r'nhds\[≥\]\s*(\w+)', r'nhdsWithin \1 (Set.Ici \1)', statement)
-    statement = re.sub(r'nhds\[≤\]\s*(\w+)', r'nhdsWithin \1 (Set.Iic \1)', statement)
+    # Handle both simple args (\w+) and parenthesized args like (ts k.1).
+    statement = _fix_nhds_brackets(statement)
 
     # Fix: bare `cexp` → `Complex.exp` (removed from global namespace in Mathlib 4.27)
     statement = re.sub(r"(?<!\w)cexp\b", "Complex.exp", statement)
@@ -91,8 +87,9 @@ def fix_statement(statement: str) -> str:
     statement = re.sub(r"(?<!\.)(?<!\w)choose\b", "Nat.choose", statement)
 
     # Fix: `id` is ambiguous when `open RingHom` is active (RingHom.id vs _root_.id).
-    # Qualify as `_root_.id` to resolve.
-    statement = re.sub(r"(?<!\.)(?<!\w)id(?!\w)", "_root_.id", statement)
+    # Qualify as `_root_.id` to resolve. But skip `(id X)` pattern used in RatFunc.eval
+    # where it means a RingHom identity, not _root_.id.
+    statement = re.sub(r"(?<!\.)(?<!\w)id(?!\w)(?!\s+[ℝℂℕℤℚ])", "_root_.id", statement)
 
     # Fix: `lcm` is ambiguous between Nat.lcm and GCDMonoid.lcm.
     statement = re.sub(r"(?<!\.)(?<!\w)lcm\b", "Nat.lcm", statement)
@@ -137,7 +134,15 @@ def fix_statement(statement: str) -> str:
     statement = re.sub(r'(?<=[^\s,])\s+(let\s+\w+\s*:=)', r'; \1', statement)
 
     # Also handle `letI` bindings that need `;` separators.
-    statement = re.sub(r'(?<=[^\s,;])\s+(letI\s)', r'; \1', statement)
+    # Exclude `:` and logical operators (∧∨→↔) — `letI` after these is part of
+    # an expression (type annotation or logical chain), not a separate binding.
+    statement = re.sub(r'(?<=[^\s,:;∧∨→↔])\s+(letI\s)', r'; \1', statement)
+
+    # Fix: `letI x := expr ∃` needs `;` between the binding body and a following
+    # quantifier (∃/∀) that starts the continuation expression.
+    # Only applies when there's a preceding `letI ... :=` (to avoid false positives).
+    if 'letI' in statement:
+        statement = re.sub(r'(?<=\))\s+(∃\s)', r'; \1', statement)
 
     # Fix: `∀ :` with no binder variable → strip the `∀ :` prefix.
     # Produced when signature_to_expression mistakes `:` in `:=` as a separator.
@@ -150,10 +155,158 @@ def fix_statement(statement: str) -> str:
     # Lean 4 Mathlib defines `Δ` (U+0394) as infix notation for symmDiff.
     statement = statement.replace("\u2206", "\u0394")
 
-    # Fix: bare `Simplex` → `Geometry.Simplex` (needs qualification)
-    statement = re.sub(r"(?<!\w\.)(?<!\w)Simplex\b", "Geometry.Simplex", statement)
+    # Fix: bare `Simplex` → `Affine.Simplex` (lives in Affine namespace in Mathlib)
+    statement = re.sub(r"(?<!\w\.)(?<!\w)Simplex\b", "Affine.Simplex", statement)
+
+    # Fix: `Prime` is ambiguous when `open Nat` is active (_root_.Prime vs Nat.Prime).
+    # Use `_root_.Prime` which works for both ℕ and ℤ (Nat.Prime only works for ℕ).
+    statement = re.sub(r"(?<!\.)(?<!\w)Prime\b", "_root_.Prime", statement)
+
+    # Fix: `φ` (U+03C6) is not a valid identifier in Lean 4.
+    # Replace with `ϕ` (U+03D5, GREEK PHI SYMBOL) which IS valid.
+    statement = statement.replace("\u03C6", "\u03D5")
+
+    # Fix: `(Polynomial.X :` — dotted name in binder position is invalid.
+    # Rename to `(X_var :` and update all references.
+    if "(Polynomial.X :" in statement:
+        statement = statement.replace("(Polynomial.X :", "(X_var :")
+        statement = re.sub(r"(?<!\w)Polynomial\.X(?!\w)(?!\s*:)", "X_var", statement)
+
+    # Fix: `Polynomial.coeff` in MvPolynomial context → `MvPolynomial.coeff`
+    # Use regex with negative lookbehind to avoid double-qualifying `MvPolynomial.coeff`.
+    if "MvPolynomial" in statement:
+        statement = re.sub(r"(?<!Mv)Polynomial\.coeff", "MvPolynomial.coeff", statement)
+
+    # Fix: bare `eval` in MvPolynomial context → `MvPolynomial.eval`
+    # Match `eval (` (not just `eval ![`). Use negative lookbehind to skip `.eval`.
+    if "MvPolynomial" in statement:
+        statement = re.sub(r"(?<!\w)(?<!\.)eval(?=\s*[\(!\[])", "MvPolynomial.eval", statement)
+
+    # Fix: bare `Perm` → `Equiv.Perm` (lives in Equiv namespace)
+    statement = re.sub(r"(?<!\.)(?<!\w)Perm\b", "Equiv.Perm", statement)
+
+    # Fix: bare `dist` is ambiguous between Nat.dist and Dist.dist when `open Nat`.
+    # Qualify as `Dist.dist` for geometric contexts. Skip method syntax `.dist`.
+    statement = re.sub(r"(?<!\.)(?<!\w)dist\b", "Dist.dist", statement)
+
+    # Fix: bare `esymm` → `Multiset.esymm` (not opened in our context)
+    statement = re.sub(r"(?<!\.)(?<!\w)esymm\b", "Multiset.esymm", statement)
+
+    # Fix: bare `card` in Multiset context → `Multiset.card`
+    # (open Finset makes bare `card` resolve to Finset.card)
+    if "Multiset" in statement:
+        statement = re.sub(r"(?<!\.)(?<!\w)card\b", "Multiset.card", statement)
+
+    # Fix: `]]` (double close bracket) — Lean 4 tokenizes as single token.
+    # Insert space: `] ]` so each bracket is parsed separately.
+    statement = statement.replace("]]", "] ]")
+
+    # Fix: `ℝ≥0∞` (ENNReal) is scoped notation requiring `open scoped ENNReal`.
+    # Replace with the unscoped type name `ENNReal`.
+    statement = statement.replace("ℝ≥0∞", "ENNReal")
+
+    # Fix: bare `X` and `C` in MvPolynomial context → `MvPolynomial.X`, `MvPolynomial.C`
+    # These are shadowed by `open Polynomial` which brings in Polynomial.X and Polynomial.C.
+    if "MvPolynomial" in statement:
+        # Qualify bare X used as function: `X c`, `X 0` (followed by word char or digit)
+        # Skip X in binder position: `(X :` and already-qualified `MvPolynomial.X`
+        statement = re.sub(r"(?<!\w)(?<!\.)X(?=\s+[\w\d(])", "MvPolynomial.X", statement)
+        # Qualify bare C used as function: `C a`, `C (expr)`
+        statement = re.sub(r"(?<!\w)(?<!\.)C(?=\s+[\w(])", "MvPolynomial.C", statement)
+        # Qualify bare aeval
+        statement = re.sub(r"(?<!\w)(?<!\.)aeval\b", "MvPolynomial.aeval", statement)
+
+    # Fix: variable named `X` collides with `Polynomial.X` from `open Polynomial`.
+    # Only trigger when `(X : Set ...)` — i.e., X is bound as a Set variable.
+    # Avoids corrupting `(X : ℚ[X])` type casts.
+    if re.search(r'\(X\s*:\s*Set\b', statement) and 'MvPolynomial' not in statement:
+        statement = re.sub(r'\(X\s*:', '(X_set :', statement)
+        # Also rename references: `∈ X`, `|X]`, bare `X ↔` etc.
+        # Use word boundary to avoid renaming Polynomial.X
+        statement = re.sub(r'(?<!\.)(?<!\w)X(?!\w)(?!\s*:)', 'X_set', statement)
 
     return statement
+
+
+def _extract_nhds_arg(s: str, start: int) -> tuple[str, int]:
+    """Extract the argument after nhds[X] starting at position `start`.
+
+    Handles simple args (`x`), parenthesized args (`(ts k.1)`),
+    and angle-bracket args (`⟨1,1⟩`).
+    Returns (arg_text, end_position).
+    """
+    # Skip whitespace
+    i = start
+    while i < len(s) and s[i] in ' \t\n\r':
+        i += 1
+    if i >= len(s):
+        return '', start
+    if s[i] == '(':
+        # Parenthesized argument — find matching close paren
+        depth = 1
+        j = i + 1
+        while j < len(s) and depth > 0:
+            if s[j] == '(':
+                depth += 1
+            elif s[j] == ')':
+                depth -= 1
+            j += 1
+        return s[i:j], j
+    elif s[i] == '⟨':
+        # Angle-bracket argument — find matching ⟩
+        depth = 1
+        j = i + 1
+        while j < len(s) and depth > 0:
+            if s[j] == '⟨':
+                depth += 1
+            elif s[j] == '⟩':
+                depth -= 1
+            j += 1
+        return s[i:j], j
+    else:
+        # Simple word argument
+        j = i
+        while j < len(s) and (s[j].isalnum() or s[j] in "_."):
+            j += 1
+        return s[i:j], j
+
+
+def _fix_nhds_brackets(statement: str) -> str:
+    """Rewrite nhds bracket notation to nhdsWithin calls.
+
+    Handles both `nhds[>] x` and `nhds[>] (expr)` forms.
+    Also handles `nhds[S] x` where S is a set variable (uppercase letter).
+    """
+    import re
+    # Comparison operators: nhds[>] x → nhdsWithin x (Set.Ioi x)
+    _nhds_cmp_map = {
+        '≠': lambda arg: f'nhdsWithin {arg} ({{{arg}}}ᶜ)',
+        '>': lambda arg: f'nhdsWithin {arg} (Set.Ioi {arg})',
+        '<': lambda arg: f'nhdsWithin {arg} (Set.Iio {arg})',
+        '≥': lambda arg: f'nhdsWithin {arg} (Set.Ici {arg})',
+        '≤': lambda arg: f'nhdsWithin {arg} (Set.Iic {arg})',
+    }
+    result = []
+    i = 0
+    while i < len(statement):
+        m = re.match(r'nhds\[(.)\]', statement[i:])
+        if m:
+            bracket_char = m.group(1)
+            arg, end_pos = _extract_nhds_arg(statement, i + m.end())
+            if arg:
+                if bracket_char in _nhds_cmp_map:
+                    # Comparison operator: point = arg, set = f(arg)
+                    result.append(_nhds_cmp_map[bracket_char](arg))
+                    i = end_pos
+                    continue
+                elif bracket_char.isupper():
+                    # Set variable: nhds[S] point → nhdsWithin point S
+                    result.append(f'nhdsWithin {arg} {bracket_char}')
+                    i = end_pos
+                    continue
+        result.append(statement[i])
+        i += 1
+    return ''.join(result)
 
 
 def _fix_paren_factorials(s: str) -> str:
