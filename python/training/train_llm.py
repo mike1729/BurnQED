@@ -379,26 +379,25 @@ def train(args):
                 logger.info("New best centroid L2: %.4f — saving to %s", centroid_l2, save_dir)
                 model.save_pretrained(save_dir)
 
-    # Quantization config for QLoRA
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
-
     # Load base model
-    logger.info("Loading base model: %s", args.model_name)
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        quantization_config=bnb_config,
+    logger.info("Loading base model: %s (qlora=%s)", args.model_name, args.qlora)
+    load_kwargs = dict(
         device_map={"": 0},
         trust_remote_code=True,
-        dtype=torch.bfloat16,
+        torch_dtype=torch.bfloat16,
         attn_implementation="sdpa",
     )
-    model.config.use_cache = False  # Required for gradient checkpointing
-    model.enable_input_require_grads()  # Required for QLoRA + gradient checkpointing
+    if args.qlora:
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, **load_kwargs)
+    model.config.use_cache = False  # Disable KV cache for training
+    if args.qlora or not args.no_grad_ckpt:
+        model.enable_input_require_grads()  # Required for QLoRA and/or gradient checkpointing
 
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
@@ -552,7 +551,7 @@ def train(args):
     elif args.max_steps >= 10000:
         save_steps = 2000
     else:
-        save_steps = 500
+        save_steps = 600
     training_args = TrainingArguments(
         output_dir=str(output_dir),
         num_train_epochs=args.epochs,
@@ -572,9 +571,9 @@ def train(args):
         save_steps=save_steps,
         save_total_limit=3,
         eval_strategy="steps" if eval_dataset else "no",
-        eval_steps=500 if eval_dataset else None,
-        gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        eval_steps=600 if eval_dataset else None,
+        gradient_checkpointing=not args.no_grad_ckpt,
+        gradient_checkpointing_kwargs={"use_reentrant": False} if not args.no_grad_ckpt else {},
         report_to="none",
         seed=args.seed,
         dataloader_num_workers=4,
@@ -591,12 +590,12 @@ def train(args):
         data_collator=data_collator,
     )
 
-    # Full eval callback every 500 steps (quick subset runs every 100 via eval_steps)
+    # Full eval callback every 1800 steps (quick subset runs every 600 via eval_steps)
     has_periodic_eval = (full_eval_dataset is not None and full_eval_dataset is not eval_dataset) or traj_eval_dataset is not None
     if has_periodic_eval:
         class FullEvalCallback(TrainerCallback):
             def on_step_end(self, args, state, control, **kwargs):
-                if state.global_step > 0 and state.global_step % 2000 == 0:
+                if state.global_step > 0 and state.global_step % 1800 == 0:
                     if full_eval_dataset is not None and full_eval_dataset is not eval_dataset:
                         metrics = trainer.evaluate(
                             eval_dataset=full_eval_dataset,
@@ -670,6 +669,7 @@ def train(args):
         "lr": args.lr,
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
+        "qlora": args.qlora,
         "lora_mlp": args.lora_mlp,
         "response_template": args.response_template,
         "max_seq_len": args.max_seq_len,
@@ -775,6 +775,20 @@ def main():
         "Use --no-lora-mlp to disable.",
     )
     parser.add_argument(
+        "--qlora",
+        action="store_true",
+        default=False,
+        help="Use QLoRA (nf4 quantization). Default is bf16 full-precision base — "
+        "avoids quantization noise in frozen weights.",
+    )
+    parser.add_argument(
+        "--no-grad-ckpt",
+        action="store_true",
+        default=False,
+        help="Disable gradient checkpointing (~30%% faster backward but more VRAM). "
+        "Only feasible with QLoRA or very small batch sizes.",
+    )
+    parser.add_argument(
         "--base-subsample",
         type=int,
         default=None,
@@ -831,7 +845,7 @@ def main():
         "--save-steps",
         type=int,
         default=None,
-        help="Override save_steps (default: 2000 if max_steps>=10000, else 500)",
+        help="Override save_steps (default: 2000 if max_steps>=10000, else 600)",
     )
     args = parser.parse_args()
     args.pack = not args.no_pack
