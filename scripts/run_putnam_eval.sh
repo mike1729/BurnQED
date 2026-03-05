@@ -18,7 +18,7 @@
 # Environment:
 #   MODEL           Model family: "deepseek" (default) or "goedel".
 #                   Selects HF model ID, config TOML, and prompt format.
-#   ITER            Iteration number (default: 0). Determines model + optional EBM.
+#   ITER            Iteration number (unset = base model, 0+ = merged model).
 #   TAG             Output subdirectory tag (default: "putnam_eval")
 #   SGLANG_URL      SGLang inference server (default: http://localhost:30000)
 #   ENCODE_URL      Encode server for EBM (default: http://localhost:30001)
@@ -40,7 +40,7 @@ source "${REPO_ROOT}/scripts/_lib.sh"
 # ── Configuration ─────────────────────────────────────────────────────────
 
 MODEL="${MODEL:-deepseek}"
-ITER="${ITER:-0}"
+ITER="${ITER:-}"
 TAG="${TAG:-putnam_eval}"
 SGLANG_URL="${SGLANG_URL:-http://localhost:30000}"
 ENCODE_URL="${ENCODE_URL:-http://localhost:30001}"
@@ -88,13 +88,15 @@ fi
 
 # ── Resolve model + EBM ──────────────────────────────────────────────────
 
-if [ "$ITER" -eq 0 ]; then
+if [ -z "$ITER" ]; then
     LLM_DIR="${LLM_BASE:-${DEFAULT_LLM_BASE}}"
+    ITER_LABEL="base"
 else
-    LLM_DIR="${MERGED_MODEL_DIR}/iter_${ITER}"
+    LLM_DIR="${LLM_BASE:-${MERGED_MODEL_DIR}/iter_${ITER}}"
+    ITER_LABEL="iter_${ITER}"
     if [ ! -d "$LLM_DIR" ]; then
         echo "ERROR: Merged model not found at ${LLM_DIR}"
-        echo "  Run ./scripts/run_iteration_train.sh ${ITER} first."
+        echo "  Run: python python/training/export_llm.py --checkpoint data/checkpoints/lora/iter_${ITER} --output ${LLM_DIR}"
         exit 1
     fi
 fi
@@ -102,8 +104,8 @@ fi
 EBM_FLAG=""
 ENCODE_FLAG=""
 TEMP_FLAG=""
-EBM_DIR="${EBM_CKPT_DIR}/iter_${ITER}"
-if [ "$NO_EBM" -eq 0 ] && [ "$ITER" -gt 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final/model.mpk" ]; then
+EBM_DIR="${EBM_CKPT_DIR}/iter_${ITER:-base}"
+if [ -n "$ITER" ] && [ "$NO_EBM" -eq 0 ] && [ -d "$EBM_DIR" ] && [ -f "${EBM_DIR}/final/model.mpk" ]; then
     EBM_FLAG="--ebm-path ${EBM_DIR}"
     ENCODE_FLAG="--encode-url ${ENCODE_URL}"
     TEMP_FLAG="--temperature 1.4"
@@ -111,17 +113,17 @@ fi
 
 # ── Output directory ──────────────────────────────────────────────────────
 
-OUT_DIR="${EVAL_DIR}/${TAG}/${MODEL,,}/iter_${ITER}"
+OUT_DIR="${EVAL_DIR}/${TAG}/${MODEL,,}/${ITER_LABEL}"
 mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 TRAJECTORY_FILE="${OUT_DIR}/putnam.parquet"
 OUTPUT_FILE="${OUT_DIR}/putnam.json"
-LOG_FILE="${LOG_DIR}/putnam_eval_iter${ITER}.log"
+LOG_FILE="${LOG_DIR}/putnam_eval_${ITER_LABEL}.log"
 
 # ── Print plan ────────────────────────────────────────────────────────────
 
 echo "================================================================"
-echo "  PutnamBench Evaluation — ${MODEL_LABEL} iter_${ITER}"
+echo "  PutnamBench Evaluation — ${MODEL_LABEL} ${ITER_LABEL}"
 echo "================================================================"
 echo "  Model family: ${MODEL_LABEL}"
 echo "  Benchmark:    ${JSON_FILE}"
@@ -275,7 +277,7 @@ for d in proof_depths:
 depth_distribution = {int(k): v for k, v in sorted(depth_dist.items())}
 
 result = {
-    'iteration': $ITER if $ITER > 0 else None,
+    'iteration': ${ITER:-None},
     'timestamp': datetime.now(timezone.utc).isoformat(),
     'llm_path': '$LLM_DIR',
     'ebm_path': '${EBM_DIR}' if '$EBM_FLAG' else None,
@@ -317,7 +319,7 @@ print(f'    Written to: $OUTPUT_FILE')
 
 echo ""
 echo "================================================================"
-echo "  Results — iter_${ITER}"
+echo "  Results — ${ITER_LABEL}"
 echo "================================================================"
 echo ""
 

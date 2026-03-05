@@ -11,6 +11,9 @@ use pipeline::{CommonSearchArgs, CompareArgs, EvalArgs, ExportProofPathsArgs, Pr
 #[cfg(feature = "burn-ebm")]
 use pipeline::{GenerateNegativesArgs, TrainEbmArgs};
 
+pub const GIT_COMMIT: &str = env!("BQE_GIT_COMMIT");
+pub const BUILD_TIME: &str = env!("BQE_BUILD_TIME");
+
 /// burn-qed: Lean 4 theorem prover with LLM policy and EBM value function.
 #[derive(Parser)]
 #[command(name = "burn-qed", version, about)]
@@ -302,6 +305,12 @@ async fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    tracing::info!(
+        git_commit = GIT_COMMIT,
+        build_time = BUILD_TIME,
+        "burn-qed starting"
+    );
 
     let cli = Cli::parse();
 
