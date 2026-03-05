@@ -180,8 +180,8 @@ impl SglangClient {
             .map_err(|e| anyhow::anyhow!("Invalid server URL '{}': {e}", config.server_url))?;
 
         let client = Client::builder()
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(15))
+            .timeout(Duration::from_secs(90))
             .build()?;
 
         let this = Self {
@@ -202,7 +202,7 @@ impl SglangClient {
         let resp = self
             .client
             .get(url.clone())
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("SGLang server unreachable at {}: {e}", self.config.server_url))?;
@@ -414,8 +414,8 @@ impl SglangClient {
             }
         }
 
-        // Scale timeout with batch size: ~0.5s per prompt, clamped to [15, 120]s
-        let timeout_secs = ((flat_prompts.len() as u64) / 2).clamp(15, 120);
+        // Scale timeout with batch size: ~1.5s per prompt, clamped to [45, 360]s
+        let timeout_secs = ((flat_prompts.len() as u64) * 3 / 2).clamp(45, 360);
 
         let request = BatchGenerateRequest {
             text: flat_prompts,
@@ -556,7 +556,7 @@ impl SglangClient {
             .map(|chunk_start| {
                 let chunk_n = CHUNK_SIZE.min(n - chunk_start);
                 let flat_prompts: Vec<String> = vec![prompt.clone(); chunk_n];
-                let timeout_secs = (chunk_n as u64 * 3 + 30).clamp(60, 300);
+                let timeout_secs = (chunk_n as u64 * 9 + 90).clamp(180, 900);
                 let request = BatchGenerateRequest {
                     text: flat_prompts,
                     sampling_params: SamplingParams {
@@ -766,8 +766,8 @@ impl SglangClient {
         });
 
         let url = self.base_url.join("/encode")?;
-        // Scale timeout with batch size, cap at 30s
-        let timeout_secs = (5 * texts.len() as u64).clamp(10, 30);
+        // Scale timeout with batch size, cap at 90s
+        let timeout_secs = (15 * texts.len() as u64).clamp(30, 90);
         let resp = self.post_once(&url, &request, Some(Duration::from_secs(timeout_secs))).await?;
         let body: serde_json::Value = resp.json().await
             .map_err(|e| anyhow::anyhow!("Failed to decode /encode batch response: {e}"))?;

@@ -1903,6 +1903,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
     let result = IterationResult {
         iteration: None,
         timestamp: chrono::Utc::now().to_rfc3339(),
+        git_commit: Some(crate::GIT_COMMIT.to_string()),
         llm_path: inference_label.clone(),
         ebm_path: args.common.ebm_path.map(|p| p.display().to_string()),
         benchmark: args.common.theorems.display().to_string(),

@@ -9,6 +9,9 @@ pub struct IterationResult {
     pub iteration: Option<u32>,
     /// ISO 8601 timestamp of when the evaluation was run.
     pub timestamp: String,
+    /// Git commit hash of the binary that produced these results.
+    #[serde(default)]
+    pub git_commit: Option<String>,
     /// Path to the LLM model used.
     pub llm_path: String,
     /// Path to the EBM checkpoint (if any).
@@ -93,6 +96,7 @@ mod tests {
         let result = IterationResult {
             iteration: Some(1),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
+            git_commit: Some("abc1234".to_string()),
             llm_path: "models/test".to_string(),
             ebm_path: Some("checkpoints/ebm".to_string()),
             benchmark: "data/test.json".to_string(),
