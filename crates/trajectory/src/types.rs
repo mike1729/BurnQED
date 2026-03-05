@@ -137,11 +137,6 @@ pub struct SearchStats {
     pub hybrid_rounds: u32,
     /// Total number of whole proofs generated across all rounds.
     pub hybrid_proofs_generated: u32,
-    /// Number of whole proofs that hit the token limit (truncated).
-    pub hybrid_proofs_truncated: u32,
-    /// Number of rounds where adaptive token scaling was applied.
-    pub adaptive_scale_ups: u32,
-
     // --- Per-call latency vectors (microseconds, transient — not serialized) ---
 
     /// Per apply_tactic call latency in microseconds.

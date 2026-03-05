@@ -626,7 +626,7 @@ impl SglangClient {
                         });
                     }
                     if truncated_count > 0 {
-                        tracing::warn!(
+                        tracing::debug!(
                             truncated = truncated_count,
                             total = items.len(),
                             max_tokens = max_tokens,
