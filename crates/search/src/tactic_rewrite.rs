@@ -108,9 +108,9 @@ const WORD_RENAMES: &[(&str, &str)] = &[
 /// Regex-based pattern replacements (for notation changes).
 static PATTERN_RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
-        // BigOperator notation: ∑ x in S → ∑ x ∈ S
-        (Regex::new(r"(∑\s+\w+)\s+in\s+").unwrap(), "${1} ∈ "),
-        (Regex::new(r"(∏\s+\w+)\s+in\s+").unwrap(), "${1} ∈ "),
+        // BigOperator notation: ∑ x in S → ∑ x ∈ S (use \S+ to match Unicode identifiers)
+        (Regex::new(r"(∑\s+\S+)\s+in\s+").unwrap(), "${1} ∈ "),
+        (Regex::new(r"(∏\s+\S+)\s+in\s+").unwrap(), "${1} ∈ "),
     ]
 });
 

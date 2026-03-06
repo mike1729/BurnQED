@@ -370,8 +370,9 @@ async fn setup_search(
 ) -> anyhow::Result<SearchSetup> {
     let concurrency = common.concurrency.max(1);
 
-    // Default num_workers to concurrency when unset (each concurrent theorem needs a Lean worker)
-    let num_workers = common.num_workers.or(Some(concurrency));
+    // Only pass CLI num_workers through; TOML and concurrency-based defaults are
+    // handled by build_lean_pool_config so that TOML values aren't silently overridden.
+    let num_workers = common.num_workers;
 
     let (search_config, loaded) = load_policy_and_ebm(
         &common.config,
@@ -1868,15 +1869,16 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
                 }
             }
 
+            let best = best.unwrap_or_else(|| TheoremResult {
+                name: name.clone(),
+                proved: false,
+                nodes_used: 0,
+                time_secs: 0.0,
+                failure_reason: "error".to_string(),
+            });
             EvalOutcome {
                 name,
-                best: best.unwrap_or_else(|| TheoremResult {
-                    name: String::new(),
-                    proved: false,
-                    nodes_used: 0,
-                    time_secs: 0.0,
-                    failure_reason: "error".to_string(),
-                }),
+                best,
                 times,
                 total_nodes,
             }

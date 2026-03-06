@@ -101,7 +101,7 @@ pub struct SearchConfig {
 
     // --- LLM generation parameters ---
 
-    /// Sampling temperature for tactic generation. Default: 0.6.
+    /// Sampling temperature for tactic generation. Default: 0.8.
     /// CLI `--temperature` overrides this.
     #[serde(default = "default_temperature")]
     pub temperature: f64,

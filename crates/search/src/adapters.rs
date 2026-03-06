@@ -64,7 +64,7 @@ impl ProofEnvironment for Arc<LeanPool> {
         // Fallback: start proof from expression.
         // If the statement contains context (hypotheses before ⊢), extract just the goal type.
         // Full proof states like "x : Nat\n⊢ x = x" can't be parsed as expressions.
-        let expr = if let Some(pos) = statement.find('⊢') {
+        let expr = if let Some(pos) = statement.rfind('⊢') {
             statement[pos + '⊢'.len_utf8()..].trim()
         } else {
             statement.trim()

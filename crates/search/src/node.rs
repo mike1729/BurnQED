@@ -34,7 +34,9 @@ impl SearchNode {
     /// Temperatures normalize the two signals to comparable scales before
     /// weighting by alpha/beta.
     pub fn combined_score(&self, alpha: f64, beta: f64, llm_temp: f64, ebm_temp: f64) -> f64 {
-        alpha * (self.llm_log_prob / llm_temp) + beta * (self.ebm_score / ebm_temp)
+        let lt = if llm_temp.abs() < 1e-12 { 1.0 } else { llm_temp };
+        let et = if ebm_temp.abs() < 1e-12 { 1.0 } else { ebm_temp };
+        alpha * (self.llm_log_prob / lt) + beta * (self.ebm_score / et)
     }
 
     /// Concatenate all goal raw strings with `"\n\n"` separators.

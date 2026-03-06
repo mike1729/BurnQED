@@ -63,13 +63,24 @@ impl LeanPool {
                 .ok_or_else(|| LeanError::Protocol("No workers available despite permit".into()))?
         };
 
-        // Recycle if the worker has exceeded its limits
+        // Recycle if the worker has exceeded its limits.
+        // On failure, try spawning a fresh worker so we don't permanently lose a pool slot.
         if worker.needs_recycling() {
             tracing::debug!(
                 requests = worker.requests_handled(),
                 "Recycling worker on checkout"
             );
-            worker.recycle().await?;
+            if let Err(e) = worker.recycle().await {
+                tracing::warn!(error = %e, "Recycle failed, spawning fresh worker");
+                match LeanWorker::spawn(&self.config).await {
+                    Ok(fresh) => worker = fresh,
+                    Err(spawn_err) => {
+                        // Return broken worker to pool so the slot isn't permanently lost
+                        self.workers.lock().unwrap().push(worker);
+                        return Err(spawn_err);
+                    }
+                }
+            }
         }
 
         Ok((worker, permit))
@@ -98,7 +109,16 @@ impl LeanPool {
                 requests = worker.requests_handled(),
                 "Recycling worker on checkout (owned)"
             );
-            worker.recycle().await?;
+            if let Err(e) = worker.recycle().await {
+                tracing::warn!(error = %e, "Recycle failed (owned), spawning fresh worker");
+                match LeanWorker::spawn(&self.config).await {
+                    Ok(fresh) => worker = fresh,
+                    Err(spawn_err) => {
+                        self.workers.lock().unwrap().push(worker);
+                        return Err(spawn_err);
+                    }
+                }
+            }
         }
 
         Ok((worker, permit))

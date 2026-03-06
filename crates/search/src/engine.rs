@@ -85,7 +85,7 @@ fn count_goal_unchanged_ancestors(arena: &[SearchNode], idx: usize) -> u32 {
 /// Uses word-boundary detection so that identifiers like `sorry_lemma` or
 /// `admits_value` don't trigger false positives.
 fn contains_sorry(tactic: &str) -> bool {
-    for keyword in &["sorry", "admit"] {
+    for keyword in &["sorry", "admit", "cheat"] {
         let kw_bytes = keyword.as_bytes();
         let t_bytes = tactic.as_bytes();
         let kw_len = kw_bytes.len();
@@ -580,7 +580,6 @@ impl SearchEngine {
                                 );
                                 break;
                             }
-                            visited_states.insert(state_pp.clone());
 
                             if child_depth > max_depth_reached {
                                 max_depth_reached = child_depth;
@@ -590,6 +589,9 @@ impl SearchEngine {
                             // exceeds max_depth. Without this check, long hybrid
                             // completions (e.g. have→rw→simp spirals) bypass the
                             // depth limit and can reach depth 40+.
+                            // Note: visited_states.insert is deferred until after
+                            // this check so depth-capped states don't poison the
+                            // set and block alternative paths.
                             if child_depth >= self.config.max_depth {
                                 stats.depth_capped += 1;
                                 tracing::debug!(
@@ -601,6 +603,8 @@ impl SearchEngine {
                                 );
                                 break;
                             }
+
+                            visited_states.insert(state_pp.clone());
 
                             let child_idx = arena.len();
                             let state_preview = truncate_str(&state_pp, 100);
