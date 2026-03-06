@@ -1,0 +1,29 @@
+# pass@128 with 8K tokens — 4x official sample count
+# Purpose: check if more samples recover the gap vs hybrid BFS
+[search]
+max_depth = 25
+alpha = 0.5
+beta = 0.5
+llm_temperature = 40.4
+ebm_temperature = 1.0
+timeout_per_theorem = 1200    # 20 min per theorem (4 rounds of 32)
+temperature = 1.0
+top_p = 0.95
+max_tactic_tokens = 48
+batch_encode_size = 4
+ebm_ramp_depth = 4
+ebm_min_depth = 2
+max_consecutive_have = 4
+probe_tactics = []
+# 4 rounds of 32 independent full proofs at 8K tokens
+hybrid_num_proofs = 32
+hybrid_min_proofs = 32
+hybrid_max_rounds = 4
+hybrid_max_tokens = 8192
+hybrid_budget = 128
+
+[lean_pool]
+num_workers = 4
+max_requests_per_worker = 1000
+max_lifetime_secs = 1800
+tactic_timeout_secs = 540
