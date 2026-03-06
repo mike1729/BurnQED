@@ -305,7 +305,9 @@ fn load_ebm_scorer(
     // CachingEncoder: handles embedding cache + HTTP encode calls + sub-batching
     let caching_encoder = Arc::new(CachingEncoder::new(inference_handle.clone(), hidden_size, encode_batch_limit));
 
-    // Bridge sync → async via tokio::spawn + oneshot (safe from block_in_place)
+    // Bridge sync → async via tokio::spawn + oneshot.
+    // Uses block_in_place to yield the runtime thread while waiting,
+    // preventing deadlock under high concurrency.
     let enc = caching_encoder.clone();
     let batch_encode_fn: Box<dyn Fn(&[&str]) -> anyhow::Result<Vec<Vec<f32>>> + Send + Sync> =
         Box::new(move |states: &[&str]| {
@@ -313,7 +315,9 @@ fn load_ebm_scorer(
             let encoder = enc.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
             tokio::spawn(async move { let _ = tx.send(encoder.encode_batch(&owned).await); });
-            rx.blocking_recv().map_err(|_| anyhow::anyhow!("encode task dropped"))?
+            tokio::task::block_in_place(|| {
+                rx.blocking_recv().map_err(|_| anyhow::anyhow!("encode task dropped"))?
+            })
         });
 
     let enc2 = caching_encoder.clone();
@@ -323,8 +327,10 @@ fn load_ebm_scorer(
             let e = enc2.clone();
             let (tx, rx) = tokio::sync::oneshot::channel();
             tokio::spawn(async move { let _ = tx.send(e.encode_batch(&[owned]).await); });
-            rx.blocking_recv().map_err(|_| anyhow::anyhow!("encode task dropped"))??
-                .into_iter().next().ok_or_else(|| anyhow::anyhow!("empty result"))
+            tokio::task::block_in_place(|| {
+                rx.blocking_recv().map_err(|_| anyhow::anyhow!("encode task dropped"))??
+                    .into_iter().next().ok_or_else(|| anyhow::anyhow!("empty result"))
+            })
         });
 
     // Load EBM scorer from checkpoint (new layout: final/model.mpk, old: final.mpk)
@@ -746,7 +752,7 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         let names = TrajectoryReader::read_theorem_names(resume_path)?;
         tracing::info!(
             done = names.len(),
-            remaining = setup.index.len() - names.len(),
+            remaining = setup.index.len().saturating_sub(names.len()),
             "Resuming from partial trajectory"
         );
         names
@@ -908,8 +914,9 @@ pub async fn run_search(args: SearchArgs) -> anyhow::Result<()> {
         collect_search(outcome, &mut agg, &mut writer, &pb, total);
         let is_interrupted = interrupted.load(Ordering::Relaxed);
         const AUTOSAVE_INTERVAL: u32 = 10;
+        let done_total = agg.searched_count + agg.error_count;
         let should_flush = is_interrupted
-            || (agg.searched_count % AUTOSAVE_INTERVAL == 0 && agg.searched_count > 0);
+            || (done_total % AUTOSAVE_INTERVAL == 0 && done_total > 0);
         if should_flush {
             if let Err(e) = writer.flush_partial() {
                 flush_err = Some(e.into());
@@ -1777,7 +1784,7 @@ pub async fn run_eval(args: EvalArgs) -> anyhow::Result<()> {
         pb.inc(1);
         let done = pb.position() as u32;
         let elapsed = eval_start.elapsed().as_secs_f64();
-        let fail = done - *solved - *errors - *timeouts;
+        let fail = done.saturating_sub(*solved).saturating_sub(*errors).saturating_sub(*timeouts);
         let rate_pct = if done > 0 { *solved as f64 / done as f64 * 100.0 } else { 0.0 };
         let thm_per_min = if elapsed > 0.0 { done as f64 / elapsed * 60.0 } else { 0.0 };
         let avg_nodes = if done > 0 { *total_nodes_sum / done as f64 } else { 0.0 };

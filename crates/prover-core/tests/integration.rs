@@ -724,11 +724,14 @@ async fn test_eval_mock_budgets() {
     struct IterationResult {
         iteration: Option<u32>,
         timestamp: String,
+        #[serde(default)]
+        git_commit: Option<String>,
         llm_path: String,
         ebm_path: Option<String>,
         benchmark: String,
         total_theorems: u32,
-        hybrid_max_rounds: u32,
+        #[serde(default)]
+        max_rounds: Option<u32>,
         solved: u32,
         total: u32,
         rate: f64,
@@ -743,6 +746,8 @@ async fn test_eval_mock_budgets() {
         proved: bool,
         nodes_used: u32,
         time_secs: f64,
+        #[serde(default)]
+        failure_reason: String,
     }
 
     let mut env = MockEnvironment::new();
@@ -785,6 +790,7 @@ async fn test_eval_mock_budgets() {
             proved: result.proved,
             nodes_used: result.nodes_expanded,
             time_secs,
+            failure_reason: result.failure_reason.clone(),
         });
     }
 
@@ -794,11 +800,12 @@ async fn test_eval_mock_budgets() {
     let iter_result = IterationResult {
         iteration: None,
         timestamp: "2026-01-01T00:00:00Z".to_string(),
+        git_commit: None,
         llm_path: "test".to_string(),
         ebm_path: None,
         benchmark: "test".to_string(),
         total_theorems: total,
-        hybrid_max_rounds: 5,
+        max_rounds: Some(5),
         solved,
         total,
         rate,
@@ -812,7 +819,7 @@ async fn test_eval_mock_budgets() {
     let json = serde_json::to_string_pretty(&iter_result).unwrap();
     let loaded: IterationResult = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(loaded.hybrid_max_rounds, 5);
+    assert_eq!(loaded.max_rounds, Some(5));
     assert_eq!(loaded.total, 2);
     assert_eq!(loaded.solved, 1); // only True is provable
     assert!(loaded.per_theorem.iter().any(|t| t.name == "true_trivial" && t.proved));
@@ -831,11 +838,14 @@ fn test_compare_two_results() {
     struct IterationResult {
         iteration: Option<u32>,
         timestamp: String,
+        #[serde(default)]
+        git_commit: Option<String>,
         llm_path: String,
         ebm_path: Option<String>,
         benchmark: String,
         total_theorems: u32,
-        hybrid_max_rounds: u32,
+        #[serde(default)]
+        max_rounds: Option<u32>,
         solved: u32,
         total: u32,
         rate: f64,
@@ -850,19 +860,22 @@ fn test_compare_two_results() {
         proved: bool,
         nodes_used: u32,
         time_secs: f64,
+        #[serde(default)]
+        failure_reason: String,
     }
 
     let tmp = tempfile::TempDir::new().unwrap();
 
-    let make_result = |iteration: u32, hybrid_max_rounds: u32, rate: f64| -> IterationResult {
+    let make_result = |iteration: u32, max_rounds: u32, rate: f64| -> IterationResult {
         IterationResult {
             iteration: Some(iteration),
             timestamp: format!("2026-01-0{}T00:00:00Z", iteration + 1),
+            git_commit: None,
             llm_path: "models/test".to_string(),
             ebm_path: None,
             benchmark: "data/test.json".to_string(),
             total_theorems: 10,
-            hybrid_max_rounds,
+            max_rounds: Some(max_rounds),
             solved: (rate * 10.0) as u32,
             total: 10,
             rate,

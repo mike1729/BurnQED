@@ -212,7 +212,7 @@ impl LeanWorker {
                     timeout_secs = self.config.tactic_timeout_secs,
                     "Lean tactic timed out, recycling worker"
                 );
-                self.recycle().await?;
+                let _ = self.recycle().await; // best-effort recycle
                 Err(LeanError::Timeout(self.config.tactic_timeout_secs))
             }
         }

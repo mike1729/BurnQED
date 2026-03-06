@@ -943,6 +943,16 @@ impl SglangClient {
             );
         }
 
+        // Validate all token vectors have the same length
+        for (t, vec) in token_states.iter().enumerate() {
+            if vec.len() != hidden_size {
+                anyhow::bail!(
+                    "Token {t} has hidden size {} but expected {hidden_size}",
+                    vec.len()
+                );
+            }
+        }
+
         // Mean-pool across tokens
         let mut embedding = vec![0.0f32; hidden_size];
         for token_vec in &token_states {
@@ -1054,6 +1064,7 @@ impl SglangClient {
                 }
             }
         }
+        self.circuit.record_failure();
         Err(last_err.unwrap_or_else(|| anyhow::anyhow!("SGLang request failed after retries")))
     }
 

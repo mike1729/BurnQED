@@ -107,10 +107,13 @@ impl TrajectoryWriter {
 
         let batch = build_record_batch(&all)?;
         let schema = Arc::new(trajectory_schema());
-        let file = std::fs::File::create(&self.output_path)?;
+        // Write to temp file then atomically rename to avoid data loss on crash
+        let tmp_path = self.output_path.with_extension("parquet.tmp");
+        let file = std::fs::File::create(&tmp_path)?;
         let mut writer = ArrowWriter::try_new(file, schema, None)?;
         writer.write(&batch)?;
         writer.close()?;
+        std::fs::rename(&tmp_path, &self.output_path)?;
 
         tracing::debug!(
             records = self.flushed_count,

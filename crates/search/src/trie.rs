@@ -187,10 +187,9 @@ impl ReplayTrie {
     /// separately when first discovered. Pre-existing nodes need re-scoring
     /// because their visit/success counts changed during replay.
     pub fn drain_updated_indices_below(&mut self, max_idx: usize) -> Vec<usize> {
-        self.updated_indices
-            .drain()
-            .filter(|&idx| idx < max_idx)
-            .collect()
+        let below: Vec<usize> = self.updated_indices.iter().copied().filter(|&idx| idx < max_idx).collect();
+        self.updated_indices.retain(|&idx| idx >= max_idx);
+        below
     }
 
     /// Total number of cached entries.

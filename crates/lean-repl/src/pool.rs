@@ -216,12 +216,20 @@ impl LeanPool {
     }
 
     /// Shut down the pool, killing all worker processes.
+    ///
+    /// Closes the semaphore so new `acquire()` calls fail immediately,
+    /// then drains workers from the free list and shuts each down.
+    /// Note: workers currently checked out are not killed here — they
+    /// will be cleaned up when their guards are dropped (kill_on_drop).
     pub async fn shutdown(&self) {
-        let mut workers = self.workers.lock().unwrap();
-        for worker in workers.iter_mut() {
+        self.semaphore.close();
+        let drained: Vec<LeanWorker> = {
+            let mut workers = self.workers.lock().unwrap();
+            std::mem::take(&mut *workers)
+        };
+        for mut worker in drained {
             worker.shutdown().await;
         }
-        workers.clear();
         tracing::info!("Lean pool shut down");
     }
 }

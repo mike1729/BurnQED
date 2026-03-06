@@ -477,10 +477,10 @@ impl SearchEngine {
                 "Hybrid round: generated whole proofs"
             );
 
-            // Track first proof found during this round (continue replaying for trie coverage)
+            // Track first proof found during this round (stop early to avoid wasted work)
             let mut first_proof_terminal: Option<usize> = None;
 
-            // Replay each proof through the trie (stop early once a proof is found)
+            // Replay each proof through the trie (stop once a proof is found)
             for proof in &raw_proofs {
                 if first_proof_terminal.is_some() {
                     break;
@@ -523,7 +523,6 @@ impl SearchEngine {
                     if let Some(entry) = cached {
                         match entry {
                             TrieEntry::Success(child_idx) => {
-                                stats.trie_cache_hits += 1;
                                 trie.cache_hits += 1;
                                 tracing::trace!(
                                     parent = current_idx,
@@ -977,6 +976,24 @@ async fn try_probes_at_node(
     let node_depth = arena[node_idx].depth;
 
     for probe in &config.probe_tactics {
+        // Skip probes already cached in the trie (avoids redundant Lean calls
+        // for nodes visited during both replay and frontier expansion).
+        if let Some(entry) = trie.lookup(node_idx, probe).cloned() {
+            match entry {
+                TrieEntry::Success(child_idx) => {
+                    trie.cache_hits += 1;
+                    if arena[child_idx].is_terminal {
+                        return Ok(Some(child_idx));
+                    }
+                    continue;
+                }
+                TrieEntry::Failed => {
+                    trie.cache_hits += 1;
+                    continue;
+                }
+            }
+        }
+
         stats.probe_attempts += 1;
         stats.total_tactic_attempts += 1;
 
