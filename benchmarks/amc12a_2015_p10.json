@@ -1,0 +1,8 @@
+{
+  "theorems": [
+    {
+      "name": "amc12a_2015_p10",
+      "statement": "\u2200 (x y : \u2124) (h\u2080 : 0 < y) (h\u2081 : y < x) (h\u2082 : x + y + x * y = 80), x = 26"
+    }
+  ]
+}

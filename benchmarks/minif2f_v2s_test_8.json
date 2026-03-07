@@ -1,0 +1,36 @@
+{
+  "theorems": [
+    {
+      "name": "amc12a_2019_p21",
+      "statement": "\u2200 (z : \u2102) (h\u2080 : z = (1 + Complex.I) / Real.sqrt 2), ((\u2211 k \u2208 Finset.Icc (1:\u2124) 12, z ^ k ^ 2) * (\u2211 k \u2208 Finset.Icc (1:\u2124) 12, 1 / z ^ k ^ 2)) = 36"
+    },
+    {
+      "name": "amc12a_2015_p10",
+      "statement": "\u2200 (x y : \u2124) (h\u2080 : 0 < y) (h\u2081 : y < x) (h\u2082 : x + y + x * y = 80), x = 26"
+    },
+    {
+      "name": "amc12a_2008_p8",
+      "statement": "\u2200 (x y : \u211d) (h\u2080 : 0 < x \u2227 0 < y) (h\u2081 : y ^ 3 = 1) (h\u2082 : 6 * x ^ 2 = 2 * (6 * y ^ 2)), x ^ 3 = 2 * Real.sqrt 2"
+    },
+    {
+      "name": "mathd_algebra_182",
+      "statement": "\u2200 (y : \u2102), 7 * (3 * y + 2) = 21 * y + 14"
+    },
+    {
+      "name": "aime_1984_p5",
+      "statement": "\u2200 (a b : \u211d) (ha : 0 \u2264 a) (hb : 0 \u2264 b) (h\u2080 : Real.logb 8 a + Real.logb 4 (b ^ 2) = 5) (h\u2081 : Real.logb 8 b + Real.logb 4 (a ^ 2) = 7), a * b = 512"
+    },
+    {
+      "name": "mathd_numbertheory_780",
+      "statement": "\u2200 (m : \u2115) (h\u2080 : 10 \u2264 m \u2227 m \u2264 99) (h\u2082 : \u2203 (x:ZMod m), (x = 6\u207b\u00b9)) (h\u2083: x \u2261 (6)^2 [MOD m]), m = 43"
+    },
+    {
+      "name": "mathd_algebra_116",
+      "statement": "\u2200 (k x : \u211d) (h\u2080 : x = (13 - Real.sqrt 131) / 4) (h\u2081 : 2 * x ^ 2 - 13 * x + k = 0), k = 19 / 4"
+    },
+    {
+      "name": "mathd_numbertheory_13",
+      "statement": "\u2200 (u v : \u2115) (S : Set \u2115) (h\u2080 : \u2200 n : \u2115, n \u2208 S \u2194 0 < n \u2227 14 * n \u2261 46 [MOD 100]) (h\u2081 : IsLeast S u) (h\u2082 : IsLeast (S \\ {u}) v), (u + v : \u211a) / 2 = 64"
+    }
+  ]
+}

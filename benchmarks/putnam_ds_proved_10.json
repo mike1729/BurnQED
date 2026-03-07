@@ -1,0 +1,44 @@
+{
+  "theorems": [
+    {
+      "name": "putnam_1962_b2",
+      "statement": "\u2203 f : \u211d \u2192 Set \u2115+, \u2200 a b : \u211d, a < b \u2192 f a \u2282 f b"
+    },
+    {
+      "name": "putnam_1962_b3",
+      "statement": "\u2200 (S : Set (EuclideanSpace \u211d (Fin 2))) (hS : Convex \u211d S \u2227 0 \u2208 S) (htopo : (0 \u2208 interior S) \u2228 IsClosed S) (hray : \u2200 P : EuclideanSpace \u211d (Fin 2), P \u2260 0 \u2192 \u2203 Q : EuclideanSpace \u211d (Fin 2), SameRay \u211d P Q \u2227 Q \u2209 S), Bornology.IsBounded S"
+    },
+    {
+      "name": "putnam_1963_b2",
+      "statement": "\u2200 (S : Set \u211d) (hS : S = {2 ^ m * 3 ^ n | (m : \u2124) (n : \u2124)}), closure S \u2287 Set.Ioi (0 : \u211d) \u2194 putnam_1963_b2_solution"
+    },
+    {
+      "name": "putnam_1965_b4",
+      "statement": "\u2200 (f u v : \u2115 \u2192 \u211d \u2192 \u211d) (hu : \u2200 n > 0, \u2200 x, u n x = \u2211 i \u2208 Finset.Icc 0 (n / 2), (n.choose (2 * i)) * x ^ i) (hv : \u2200 n > 0, \u2200 x, v n x = \u2211 i \u2208 Finset.Icc 0 ((n - 1) / 2), (n.choose (2 * i + 1)) * x ^ i) (hf : \u2200 n > 0, \u2200 x, f n x = u n x / v n x) (n : \u2115) (hn : 0 < n), let \u27e8\u27e8p, q\u27e9, \u27e8s, g\u27e9\u27e9 := putnam_1965_b4_solution\n (\u2200 x, v n x \u2260 0 \u2192 v (n + 1) x \u2260 0 \u2192 q (f n) x \u2260 0 \u2192 f (n + 1) x = p (f n) x / q (f n) x) \u2227\n s = {x | \u2203 l, Filter.Tendsto (fun n \u21a6 f n x) Filter.atTop (nhds l)} \u2227\n \u2200 x \u2208 s, Filter.Tendsto (fun n \u21a6 f n x) Filter.atTop (nhds (g x))"
+    },
+    {
+      "name": "putnam_1966_b1",
+      "statement": "\u2200 (n : \u2115) (hn : n \u2265 3) (L : ZMod n \u2192 (EuclideanSpace \u211d (Fin 2))) (hsq : \u2200 i : ZMod n, L i 0 \u2208 Set.Icc 0 1 \u2227 L i 1 \u2208 Set.Icc 0 1) (hnoncol : \u2200 i j k : ZMod n, i \u2260 j \u2227 j \u2260 k \u2227 k \u2260 i \u2192 \u00acCollinear \u211d {L i, L j, L k}) (hconvex : \u2200 i : ZMod n, segment \u211d (L i) (L (i + 1)) \u2229 interior (convexHull \u211d {L j | j : ZMod n}) = \u2205), \u2211 i : Fin n, (dist (L i) (L (i + 1)))^2 \u2264 4"
+    },
+    {
+      "name": "putnam_1967_a5",
+      "statement": "\u2200 (R : Set (EuclideanSpace \u211d (Fin 2))) (hR : Convex \u211d R \u2227 (MeasureTheory.volume R).toReal > Real.pi / 4), \u2203 P \u2208 R, \u2203 Q \u2208 R, dist P Q = 1"
+    },
+    {
+      "name": "putnam_1967_b3",
+      "statement": "\u2200 (f g : \u211d \u2192 \u211d) (fgcont : Continuous f \u2227 Continuous g) (fgperiod : Function.Periodic f 1 \u2227 Function.Periodic g 1), Filter.Tendsto (fun n : \u2124 => \u222b x in Set.Ioo 0 1, f x * g (n * x)) Filter.atTop (nhds ((\u222b x in Set.Ioo 0 1, f x) * (\u222b x in Set.Ioo 0 1, g x)))"
+    },
+    {
+      "name": "putnam_1968_a1",
+      "statement": "22/7 - Real.pi = \u222b x in (0)..1, x^4 * (1 - x)^4 / (1 + x^2)"
+    },
+    {
+      "name": "putnam_1968_a2",
+      "statement": "\u2200 (a b c d e f : \u2124) (\u03b5 : \u211d) (hne : a * d \u2260 b * c) (h\u03b5 : \u03b5 > 0), \u2203 r s : \u211a, (|r * a + s * b - e| : \u211d) \u2208 Set.Ioo 0 \u03b5 \u2227 (|r * c + s * d - f| : \u211d) \u2208 Set.Ioo 0 \u03b5"
+    },
+    {
+      "name": "putnam_1968_b1",
+      "statement": "\u2200 {\u03a9 : Type*} [MeasureSpace \u03a9] [IsProbabilityMeasure (\u2119 : Measure \u03a9)] (X Y : \u03a9 \u2192 \u2124) (hX : Measurable X) (hY : Measurable Y) (hX' : Set.Finite (X '' Set.univ)) (hY' : Set.Finite (Y '' Set.univ)) (k : \u2124), (\u2119 {\u03c9 : \u03a9 | min (X \u03c9) (Y \u03c9) = k}).toReal =\n putnam_1968_b1_solution (\u2119 (X\u207b\u00b9' {k})).toReal (\u2119 (Y\u207b\u00b9' {k})).toReal\n (\u2119 {\u03c9 : \u03a9 | max (X \u03c9) (Y \u03c9) = k}).toReal"
+    }
+  ]
+}
