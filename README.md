@@ -9,29 +9,38 @@
 
 **Lean 4 theorem prover combining LLM policy with Energy-Based Model value function, trained via expert iteration.**
 
-A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic generation (policy) and mean-pooled state embeddings (value), AlphaZero-style. A small EBM head (~11M params) is the only component trained in Rust. LLM fine-tuning runs in Python with LoRA/PEFT.
+A single DeepSeek-Prover-V2-7B backbone serves both autoregressive tactic generation (policy) and mean-pooled state embeddings (value), AlphaZero-style. A GoalConditionedEnergyHead (~25M params, PyTorch) scores proof states. LLM fine-tuning runs in Python with LoRA/PEFT.
 
 ## Results
 
-### miniF2F v1 (budget=600, 244 theorems)
+### Tree Search vs pass@N Token Efficiency (miniF2F v2s_test, DeepSeek-Prover-V2-7B base)
 
-| Iteration | LLM + EBM | LLM only | EBM lift |
-|-----------|-----------|----------|----------|
-| iter 0 (base) | -- | 76/244 (31.1%) | -- |
-| iter 2 | 90/244 (36.9%) | 72/244 (29.5%) | +7.4pp |
-| iter 4 | **235/244 (96.3%)** | 83/244 (34.0%) | **+62.3pp** |
+| Method | Proofs | Rate | Token Budget / Theorem | Tokens / Proof |
+|--------|--------|------|------------------------|----------------|
+| pass@32 | 132/243 | 54.3% | 262K | 483K |
+| pass@128 | 151/244 | 61.9% | 1,049K | 1,695K |
+| **Hybrid BFS** | **161/242** | **66.5%** | **~524K** | **~788K** |
 
-**Iter 4 node distribution** (proved theorems, budget=600):
+Token budget = samples x max_tokens (pass@N) or search_budget x tokens_per_round (BFS). Tokens/proof = budget / proof_rate.
 
-| Nodes | With EBM | Without EBM |
-|-------|----------|-------------|
-| Probe (0) | 49 (21%) | 49 (59%) |
-| 1 node | 12 (5%) | 16 (19%) |
-| 2-5 | 170 (72%) | 9 (11%) |
-| 6-50 | 4 (2%) | 9 (11%) |
-| **Total proved** | **235** | **83** |
+**Key findings:**
+- Hybrid BFS beats pass@128 by **+4.6pp while using 2x fewer tokens**
+- pass@128 uses 4x more tokens than pass@32 for only +7.6pp gain
+- Tree search is **2.1x more token-efficient** than pass@128 (788K vs 1,695K tokens per proof)
+- Median nodes to first proof: **8** — most proofs found early via directed search
 
-EBM guides search to proofs in 2-5 node expansions (72% of proved theorems). Mean 2.7 nodes, 9.4s per theorem.
+**Why tree search wins — branching factor collapse:**
+
+| Depth | Branching Factor |
+|-------|-----------------|
+| 0 → 1 | 5.0 |
+| 1 → 2 | 1.7 |
+| 2 → 3 | 1.5 |
+| 3 → 4 | 1.3 |
+| 4 → 5 | 1.0 |
+| 5+ | < 1.0 |
+
+Best-first search rapidly prunes the space — by depth 5, most branches are dead. Blind pass@N sampling cannot exploit this structure and wastes tokens exploring equally in all directions.
 
 ### Benchmarks
 
